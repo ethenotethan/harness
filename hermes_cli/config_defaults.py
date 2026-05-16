@@ -2125,6 +2125,13 @@ DEFAULT_CONFIG = {
         # compose restarts under ~/deploys". Inspired by ChatGPT Work's
         # customizable auto-review guardian policy.
         "smart_policy": "",
+        # Optional markdown policy loaded from disk and appended to the
+        # smart-approval guardian's trusted SYSTEM prompt.  Relative shell
+        # conveniences such as ``~`` are expanded by the approval runtime.
+        "policy_file": "",
+        # Optional model override for policy/approval review. Empty uses the
+        # configured auxiliary ``approval`` task routing.
+        "policy_model": "",
         # Consecutive-denial circuit breaker for smart approvals: after this
         # many guardian DENY verdicts in a row within one session, the deny
         # message returned to the model escalates to a hard-stop instruction
