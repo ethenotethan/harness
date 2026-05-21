@@ -4,59 +4,87 @@ Provides filesystem-level wiki introspection for native clients that
 render graph views or page detail. Supports a wiki name (e.g. "d-inference")
 that resolves to a path via ~/.hermes/wikis.yaml, falling back to
 $WIKI_PATH or ~/wiki.
+
+Multi-wiki support via ~/.hermes/wikis.yaml registry.
 """
 import os
 import re
 from pathlib import Path
-
 from typing import Optional
 import yaml
 
 
-_registry: Optional[dict] = None
-
-
-def _load_registry() -> dict:
-    """Load the wiki registry from ~/.hermes/wikis.yaml."""
-    global _registry
-    if _registry is not None:
-        return _registry
+def _load_wiki_registry() -> dict:
+    """Load ~/.hermes/wikis.yaml, returning {name: path} dict.
+    Returns empty dict if file doesn't exist or is unparseable.
+    """
+    registry_path = Path(os.path.expanduser("~/.hermes/wikis.yaml"))
+    if not registry_path.exists():
+        return {}
     try:
-        path = os.path.expanduser("~/.hermes/wikis.yaml")
-        if os.path.exists(path):
-            with open(path) as f:
-                _registry = yaml.safe_load(f) or {}
-        else:
-            _registry = {}
+        with open(registry_path) as f:
+            data = yaml.safe_load(f) or {}
     except Exception:
-        _registry = {}
-    return _registry
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    wikis = data.get("wikis", {})
+    if not isinstance(wikis, dict):
+        return {}
+    resolved = {}
+    for name, path in wikis.items():
+        if isinstance(path, str):
+            resolved[str(name)] = os.path.expanduser(path)
+    return resolved
 
 
-def resolve_wiki(name: Optional[str]) -> str:
-    """Resolve a wiki name (e.g. 'd-inference') to a directory path.
+def resolve_wiki(name: Optional[str] = None) -> str:
+    """Resolve a wiki name to a filesystem path.
 
     Resolution order:
-    1. If name is a valid entry in ~/.hermes/wikis.yaml, return its path.
-    2. If name looks like a path starting with ~ or /, return it as-is.
-    3. If name is provided but matches no registry entry, fall back to default.
-    4. Otherwise use the registry's default wiki.
+    1. If name matches a key in ~/.hermes/wikis.yaml -> use that path
+    2. If name looks like a path (~ or / prefix) -> expand and use directly
+    3. If name is None/empty -> use registry's 'default' key
+    4. Fall back to $WIKI_PATH env var
+    5. Final fallback: ~/wiki
     """
-    if name and (name.startswith("~") or name.startswith("/")):
-        return os.path.expanduser(name)
+    registry = _load_wiki_registry()
 
-    registry = _load_registry()
-    if name and name in registry.get("wikis", {}):
-        return os.path.expanduser(registry["wikis"][name])
+    if name:
+        # Try registry name match
+        if name in registry:
+            return registry[name]
+        # Try raw path
+        if name.startswith("~") or name.startswith("/"):
+            return os.path.expanduser(name)
 
-    # fallback: registry default or env var or ~/wiki
-    default_name = registry.get("default", "") if registry else ""
-    if default_name and default_name in registry.get("wikis", {}):
-        return os.path.expanduser(registry["wikis"][default_name])
+    # No name or name not found - use default
+    if registry:
+        # Read raw YAML to get the default key
+        registry_path = Path(os.path.expanduser("~/.hermes/wikis.yaml"))
+        try:
+            with open(registry_path) as f:
+                data = yaml.safe_load(f) or {}
+            default_name = data.get("default")
+            if default_name and default_name in registry:
+                return registry[default_name]
+        except Exception:
+            pass
+
+    # Fallbacks
     env = os.environ.get("WIKI_PATH", "")
     if env:
-        return os.path.expanduser(env)
+        return env
     return os.path.expanduser("~/wiki")
+
+
+def wiki_list() -> dict:
+    """Return list of available wikis from ~/.hermes/wikis.yaml."""
+    registry = _load_wiki_registry()
+    wikis = []
+    for name, path in registry.items():
+        wikis.append({"name": name, "path": path})
+    return {"wikis": wikis}
 
 
 def _default_wiki_path() -> str:
