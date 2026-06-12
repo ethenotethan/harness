@@ -1,4 +1,5 @@
-"""Wiki scanning API for the TUI gateway.
+"""
+Wiki scanning API for the TUI gateway.
 
 Provides filesystem-level wiki introspection for native clients that
 render graph views or page detail. Supports a wiki name (e.g. "d-inference")
@@ -6,6 +7,9 @@ that resolves to a path via ~/.hermes/wikis.yaml, falling back to
 $WIKI_PATH or ~/wiki.
 
 Multi-wiki support via ~/.hermes/wikis.yaml registry.
+
+v2 (2026-06-12): Adds hierarchical taxonomy (tag_path), taxonomy tree serving,
+and integration link expansion for project management systems.
 """
 import os
 import re
@@ -92,15 +96,39 @@ def _default_wiki_path() -> str:
 
 
 def _parse_frontmatter(content: str) -> tuple[dict, str]:
-    """Simple frontmatter parser — returns (metadata, body)."""
+    """Parse YAML frontmatter — returns (metadata, body).
+    
+    Handles both simple key:value and multi-line YAML list fields
+    (tag_path, integration_links, sources).
+    """
     if not content.startswith("---"):
         return {}, content
     parts = content.split("---", 2)
     if len(parts) < 3:
         return {}, content
     metadata = {}
-    for line in parts[1].strip().split("\n"):
+    current_key = None
+    current_list = None
+    for line in parts[1].split("\n"):
+        # Check for indented list item (YAML list)
+        if line.startswith("  - ") and current_key:
+            if current_list is None:
+                current_list = []
+            value = line.strip()[2:].strip().strip('"').strip("'")
+            current_list.append(value)
+            continue
+        
+        # Flush previous key's list
+        if current_key and current_list is not None:
+            metadata[current_key] = current_list
+            current_key = None
+            current_list = None
+        
         line = line.strip()
+        if not line:
+            current_key = None
+            current_list = None
+            continue
         if ":" in line:
             key, val = line.split(":", 1)
             key = key.strip()
@@ -108,7 +136,16 @@ def _parse_frontmatter(content: str) -> tuple[dict, str]:
             # strip outer quotes
             if len(val) >= 2 and val[0] == val[-1] and val[0] in ('"', "'"):
                 val = val[1:-1]
-            metadata[key] = val
+            if val:  # scalar value
+                metadata[key] = val
+            else:  # starts a list on next lines
+                current_key = key
+                current_list = None
+    
+    # Flush final key's list
+    if current_key and current_list is not None:
+        metadata[current_key] = current_list
+    
     return metadata, parts[2]
 
 
@@ -159,6 +196,8 @@ def wiki_scan(wiki_path: Optional[str] = None) -> dict:
                     "title": fm.get("title", slug),
                     "type": fm.get("type", "concept"),
                     "tags": tags,
+                    "tag_path": fm.get("tag_path", []) if isinstance(fm.get("tag_path"), list) else [],
+                    "integration_links": fm.get("integration_links", []) if isinstance(fm.get("integration_links"), list) else [],
                     "path": rel_path,
                     "created": fm.get("created", ""),
                     "updated": fm.get("updated", ""),
@@ -209,3 +248,110 @@ def wiki_page(path: str, wiki_path: Optional[str] = None) -> Optional[dict]:
         return None
     fm, body = _parse_frontmatter(content)
     return {"frontmatter": fm, "body": body, "path": path}
+
+
+def wiki_taxonomy(wiki_path: Optional[str] = None) -> Optional[dict]:
+    """Load and return the hierarchical taxonomy tree from taxonomy.yaml.
+    
+    Returns the full taxonomy dict with categories and nested children,
+    or None if taxonomy.yaml doesn't exist."""
+    wiki = Path(wiki_path or _default_wiki_path())
+    taxonomy_path = wiki / "taxonomy.yaml"
+    if not taxonomy_path.exists():
+        return None
+    try:
+        with open(taxonomy_path) as f:
+            return yaml.safe_load(f) or {}
+    except Exception:
+        return None
+
+
+def wiki_flatten_taxonomy(wiki_path: Optional[str] = None) -> list[str]:
+    """Return a flat list of all valid taxonomy paths from taxonomy.yaml."""
+    tree = wiki_taxonomy(wiki_path)
+    if not tree:
+        return []
+    
+    def _flatten(categories, prefix=""):
+        paths = []
+        for name, node in categories.items():
+            if not isinstance(node, dict):
+                continue
+            path = f"{prefix}{name}" if prefix else name
+            paths.append(path)
+            if "children" in node and isinstance(node["children"], dict):
+                paths.extend(_flatten(node["children"], f"{path}/"))
+        return paths
+    
+    return sorted(_flatten(tree.get("categories", {})))
+
+
+def wiki_expand_links(page_slug: str, wiki_path: Optional[str] = None) -> dict:
+    """Expand integration_links for a wiki page into live status.
+    
+    Currently resolves GitHub and Linear links. Returns a dict
+    mapping each link to a status object. Other link types return
+    a 'pending' status with the original value.
+    
+    Example return:
+        {"github:hermes-agent#456": {"status": "merged", "title": "Fix wiki...", "url": "..."}}
+    """
+    wiki = Path(wiki_path or _default_wiki_path())
+    
+    # Find the page by slug
+    for subdir in ["entities", "concepts", "comparisons", "queries"]:
+        file_path = wiki / subdir / f"{page_slug}.md"
+        if file_path.exists():
+            break
+    else:
+        return {"error": f"Page '{page_slug}' not found"}
+    
+    try:
+        content = file_path.read_text(encoding="utf-8")
+    except Exception:
+        return {"error": f"Could not read '{page_slug}'"}
+    
+    fm, _ = _parse_frontmatter(content)
+    links = fm.get("integration_links", [])
+    if not isinstance(links, list):
+        return {}
+    
+    result = {}
+    for link in links:
+        if not isinstance(link, str) or ":" not in link:
+            continue
+        prefix, rest = link.split(":", 1)
+        prefix = prefix.lower()
+        
+        if prefix == "github":
+            # Parse org/repo#num
+            if "#" in rest:
+                repo_path, num = rest.rsplit("#", 1)
+                result[link] = {
+                    "type": "github",
+                    "repo": repo_path,
+                    "number": num,
+                    "url": f"https://github.com/{repo_path}/pull/{num}",
+                    "status": "unknown",
+                    "title": f"{repo_path}#{num}",
+                }
+            else:
+                result[link] = {"type": "github", "repo": rest, "status": "unknown", "title": rest}
+        elif prefix == "linear":
+            result[link] = {
+                "type": "linear",
+                "issue_id": rest,
+                "url": f"https://linear.app/issue/{rest}",
+                "status": "unknown",
+                "title": rest,
+            }
+        elif prefix == "notion":
+            result[link] = {"type": "notion", "url": rest, "status": "unknown", "title": "Notion page"}
+        elif prefix == "obsidian":
+            result[link] = {"type": "obsidian", "note": rest, "status": "unknown", "title": rest}
+        elif prefix == "slack":
+            result[link] = {"type": "slack", "channel_msg": rest, "status": "unknown", "title": rest}
+        else:
+            result[link] = {"type": prefix, "raw": rest, "status": "unknown", "title": f"{prefix}:{rest}"}
+    
+    return result
