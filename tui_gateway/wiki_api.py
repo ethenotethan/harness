@@ -165,7 +165,8 @@ def wiki_scan(wiki_path: Optional[str] = None) -> dict:
     pages: list[dict] = []
     page_ids: set[str] = set()
     links: list[dict] = []
-    subdirs = ["entities", "concepts", "comparisons", "queries", "raw"]
+    subdirs = ["entities", "concepts", "comparisons", "queries", "raw",
+               "projects", "goals", "life", "issues"]
 
     # First pass: collect all pages
     for subdir in subdirs:
@@ -299,7 +300,8 @@ def wiki_expand_links(page_slug: str, wiki_path: Optional[str] = None) -> dict:
     wiki = Path(wiki_path or _default_wiki_path())
     
     # Find the page by slug
-    for subdir in ["entities", "concepts", "comparisons", "queries"]:
+    for subdir in ["entities", "concepts", "comparisons", "queries",
+                       "projects", "goals", "life", "issues"]:
         file_path = wiki / subdir / f"{page_slug}.md"
         if file_path.exists():
             break
