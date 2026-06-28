@@ -287,6 +287,51 @@ def wiki_flatten_taxonomy(wiki_path: Optional[str] = None) -> list[str]:
     return sorted(_flatten(tree.get("categories", {})))
 
 
+def wiki_changesets(
+    wiki_path: Optional[str] = None,
+    page: Optional[str] = None,
+    action: Optional[str] = None,
+    trigger: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+) -> dict:
+    """Query wiki changesets (timeline view).
+
+    Args:
+        wiki_path: Wiki root path override
+        page: Filter by page path
+        action: Filter by action ('create', 'update', 'archive', 'delete')
+        trigger: Filter by trigger ('ingest', 'query', 'lint', 'process-inbox')
+        limit: Max results (default 50)
+        offset: Pagination offset
+        since: ISO timestamp filter (after)
+        until: ISO timestamp filter (before)
+
+    Returns:
+        {"changesets": [...], "total": N, "limit": L, "offset": O}
+    """
+    import sys
+    # Try repo-relative first (bundled with hermes-agent), fall back to user scripts
+    import os as _os
+    _repo_scripts = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "scripts")
+    for _d in (_repo_scripts, _os.path.join(_os.path.expanduser("~"), ".hermes", "scripts")):
+        if _d not in sys.path:
+            sys.path.insert(0, _d)
+    from wiki_changeset import wiki_query_changesets
+    return wiki_query_changesets(
+        wiki_path=wiki_path,
+        page=page,
+        action=action,
+        trigger=trigger,
+        limit=limit,
+        offset=offset,
+        since=since,
+        until=until,
+    )
+
+
 def wiki_expand_links(page_slug: str, wiki_path: Optional[str] = None) -> dict:
     """Expand integration_links for a wiki page into live status.
     
