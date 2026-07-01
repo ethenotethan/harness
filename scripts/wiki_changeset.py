@@ -55,7 +55,7 @@ def _load_index(wiki_path: Optional[str] = None) -> list:
     if not ip.exists():
         return []
     try:
-        with open(ip) as f:
+        with open(ip, encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, list) else []
     except (json.JSONDecodeError, OSError):
@@ -66,7 +66,7 @@ def _save_index(index: list, wiki_path: Optional[str] = None):
     """Save the changeset index atomically."""
     ip = _index_path(wiki_path)
     tmp = ip.with_suffix(".tmp")
-    with open(tmp, "w") as f:
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(index, f, indent=2, sort_keys=True)
     os.replace(tmp, ip)
 
@@ -285,7 +285,7 @@ def wiki_capture_changeset(
 
     # Write changeset file
     cs_file = _changesets_dir(wiki_path) / f"{csid}.json"
-    with open(cs_file, "w") as f:
+    with open(cs_file, "w", encoding="utf-8") as f:
         json.dump(changeset, f, indent=2)
 
     # Update index (prepend — newest first)
@@ -346,7 +346,7 @@ def wiki_query_changesets(
             cs_file = _changesets_dir(wiki_path) / f"{entry['id']}.json"
             if cs_file.exists():
                 try:
-                    with open(cs_file) as f:
+                    with open(cs_file, encoding="utf-8") as f:
                         cs = json.load(f)
                     if cs.get("trigger") != trigger:
                         continue
@@ -369,7 +369,7 @@ def wiki_query_changesets(
         cs_file = _changesets_dir(wiki_path) / f"{entry['id']}.json"
         if cs_file.exists():
             try:
-                with open(cs_file) as f:
+                with open(cs_file, encoding="utf-8") as f:
                     enriched.append(json.load(f))
             except Exception:
                 enriched.append(entry)

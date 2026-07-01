@@ -26,7 +26,7 @@ def _read_feed() -> list[dict]:
     if not FEED_FILE.exists():
         return []
     try:
-        with open(FEED_FILE) as f:
+        with open(FEED_FILE, encoding="utf-8") as f:
             data = json.load(f)
             if isinstance(data, list):
                 return data

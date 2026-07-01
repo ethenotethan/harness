@@ -26,7 +26,7 @@ def _load_wiki_registry() -> dict:
     if not registry_path.exists():
         return {}
     try:
-        with open(registry_path) as f:
+        with open(registry_path, encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
     except Exception:
         return {}
@@ -67,7 +67,7 @@ def resolve_wiki(name: Optional[str] = None) -> str:
         # Read raw YAML to get the default key
         registry_path = Path(os.path.expanduser("~/.hermes/wikis.yaml"))
         try:
-            with open(registry_path) as f:
+            with open(registry_path, encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
             default_name = data.get("default")
             if default_name and default_name in registry:
@@ -261,7 +261,7 @@ def wiki_taxonomy(wiki_path: Optional[str] = None) -> Optional[dict]:
     if not taxonomy_path.exists():
         return None
     try:
-        with open(taxonomy_path) as f:
+        with open(taxonomy_path, encoding="utf-8") as f:
             return yaml.safe_load(f) or {}
     except Exception:
         return None
