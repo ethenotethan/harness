@@ -257,9 +257,15 @@ CATALOG: List[AutomationBlueprint] = [
         prompt_template=(
             "Search the web for new and noteworthy items about: {topic}. "
             "Dedupe against what you sent in previous runs — only include "
-            "genuinely new developments. Deliver a tight digest of at most "
-            "{count} bullets, each one line with a link. If nothing new since "
-            "last run, respond with [SILENT]."
+            "genuinely new developments, at most {count} items.\n"
+            "Then publish them to the user's news feed with the `feed_publish` "
+            "tool (source: a short stable slug for this topic, e.g. the topic "
+            "lowercased-and-hyphenated) so they appear in the app's feed — one "
+            "article object per item with title, url, and a one-line summary. "
+            "feed_publish dedupes on its own, so it's safe to re-send.\n"
+            "Also deliver a tight digest message of the same items, each one "
+            "line with a link. If nothing new since last run, skip feed_publish "
+            "and respond with [SILENT]."
         ),
         slots=[
             BlueprintSlot(

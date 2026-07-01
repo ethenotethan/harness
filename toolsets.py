@@ -245,6 +245,12 @@ TOOLSETS = {
         "includes": []
     },
 
+    "feed": {
+        "description": "Publish curated articles to the user's news feed (HermesNative feed view)",
+        "tools": ["feed_publish"],
+        "includes": []
+    },
+
     "context_engine": {
         "description": "Runtime tools exposed by the active context engine",
         "tools": [],
