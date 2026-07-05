@@ -183,3 +183,27 @@ struct WikiChangesetsResponse: Codable {
   }
 }
 ```
+## wiki.changeset_diff — per-changeset unified diff
+
+```jsonc
+{
+  "method": "wiki.changeset_diff",
+  "params": {
+    "id":   "2026-06-28T140819-001",   // required — from wiki.changesets
+    "wiki": "main"                     // optional
+  }
+}
+```
+
+Response:
+
+```jsonc
+{
+  "diff": "diff --git a/entities/x.md b/entities/x.md\n--- a/...\n+++ b/...\n@@ -4,3 +4,4 @@ ...\n+Line two added.\n",
+  "changeset": { /* same shape as a wiki.changesets entry */ }
+}
+```
+
+Errors: `4001` bad/missing id · `5057` diff unavailable (changeset unknown, or
+the wiki wasn't git-initialized when it was captured — the message says which)
+· `5056` unexpected failure. Diffs are truncated at 200KB.

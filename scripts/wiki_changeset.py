@@ -306,6 +306,67 @@ def wiki_capture_changeset(
     return changeset
 
 
+def wiki_changeset_diff(changeset_id: str, wiki_path: Optional[str] = None) -> dict:
+    """Return the unified git diff for a single changeset.
+
+    Uses the ``git_commit`` recorded at capture time: the capture path commits
+    each page write, so ``git show <commit> -- <page>`` reproduces exactly what
+    changed. Returns ``{"diff": <unified diff>, "changeset": {...}}`` or
+    ``{"error": ...}`` when the changeset is unknown or the wiki has no git
+    history (older captures with empty git_commit).
+    """
+    csid = (changeset_id or "").strip()
+    # IDs are timestamp-shaped (e.g. 2026-06-28T140819-001); reject separators
+    # so a crafted id can't traverse out of the changesets dir.
+    if not csid or "/" in csid or "\\" in csid or ".." in csid:
+        return {"error": f"invalid changeset id: {changeset_id!r}"}
+
+    cs_file = _changesets_dir(wiki_path) / f"{csid}.json"
+    if not cs_file.exists():
+        return {"error": f"changeset not found: {csid}"}
+    try:
+        with open(cs_file, encoding="utf-8") as f:
+            changeset = json.load(f)
+    except (json.JSONDecodeError, OSError) as exc:
+        return {"error": f"changeset unreadable: {exc}"}
+
+    commit = (changeset.get("git_commit") or "").strip()
+    page = changeset.get("page", "")
+    if not commit:
+        return {
+            "error": "no git commit recorded for this changeset "
+            "(wiki was not git-initialized at capture time)",
+            "changeset": changeset,
+        }
+
+    wiki = _wiki_root(wiki_path)
+    try:
+        # --format="" drops the commit header, leaving just the diff body;
+        # scoping to the page keeps a multi-file commit focused.
+        result = subprocess.run(
+            ["git", "show", "--format=", "--no-color", commit, "--", page],
+            cwd=str(wiki),
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (subprocess.SubprocessError, OSError) as exc:
+        return {"error": f"git show failed: {exc}", "changeset": changeset}
+
+    if result.returncode != 0:
+        return {
+            "error": f"git show failed: {result.stderr.strip()[:200]}",
+            "changeset": changeset,
+        }
+
+    diff = result.stdout
+    # Cap pathological diffs; the client renders line-by-line.
+    if len(diff) > 200_000:
+        diff = diff[:200_000] + "\n… (diff truncated at 200KB)\n"
+
+    return {"diff": diff, "changeset": changeset}
+
+
 def wiki_query_changesets(
     wiki_path: Optional[str] = None,
     page: Optional[str] = None,

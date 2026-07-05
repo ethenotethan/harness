@@ -332,6 +332,26 @@ def wiki_changesets(
     )
 
 
+def wiki_changeset_diff(changeset_id: str, wiki_path: Optional[str] = None) -> dict:
+    """Return the unified git diff for one changeset (timeline detail view).
+
+    Args:
+        changeset_id: Changeset id from wiki.changesets (e.g. '2026-06-28T140819-001')
+        wiki_path: Wiki root path override
+
+    Returns:
+        {"diff": "<unified diff>", "changeset": {...}} or {"error": ...}
+    """
+    import sys
+    import os as _os
+    _repo_scripts = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "scripts")
+    for _d in (_repo_scripts, _os.path.join(_os.path.expanduser("~"), ".hermes", "scripts")):
+        if _d not in sys.path:
+            sys.path.insert(0, _d)
+    from wiki_changeset import wiki_changeset_diff as _diff
+    return _diff(changeset_id, wiki_path=wiki_path)
+
+
 def wiki_expand_links(page_slug: str, wiki_path: Optional[str] = None) -> dict:
     """Expand integration_links for a wiki page into live status.
     
