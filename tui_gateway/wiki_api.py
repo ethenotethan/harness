@@ -287,6 +287,52 @@ def wiki_flatten_taxonomy(wiki_path: Optional[str] = None) -> list[str]:
     return sorted(_flatten(tree.get("categories", {})))
 
 
+def _load_wiki_changeset_module(required_attr: str):
+    """Load the wiki_changeset helper, preferring the repo-bundled copy.
+
+    The previous sys.path approach let a STALE deployed copy in
+    ~/.hermes/scripts shadow the repo's updated module (and once cached in
+    sys.modules it kept winning) — surfacing to clients as
+    "cannot import name 'wiki_changeset_diff' from 'wiki_changeset'".
+
+    Load by explicit file path via importlib instead: repo copy first, user
+    copy as fallback — and only accept a copy that actually has the symbol
+    the caller needs, so version skew degrades to the next candidate rather
+    than a confusing ImportError from the wrong file.
+    """
+    import importlib.util
+    import os as _os
+
+    repo_copy = _os.path.join(
+        _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+        "scripts", "wiki_changeset.py",
+    )
+    user_copy = _os.path.join(
+        _os.path.expanduser("~"), ".hermes", "scripts", "wiki_changeset.py"
+    )
+
+    tried = []
+    for path in (repo_copy, user_copy):
+        if not _os.path.exists(path):
+            continue
+        tried.append(path)
+        try:
+            spec = importlib.util.spec_from_file_location("_hermes_wiki_changeset", path)
+            if spec is None or spec.loader is None:
+                continue
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+        except Exception:
+            continue
+        if hasattr(module, required_attr):
+            return module
+    raise ImportError(
+        f"no wiki_changeset module providing {required_attr!r} found "
+        f"(tried: {tried or [repo_copy, user_copy]}) — "
+        "the gateway install may predate this feature"
+    )
+
+
 def wiki_changesets(
     wiki_path: Optional[str] = None,
     page: Optional[str] = None,
@@ -312,15 +358,8 @@ def wiki_changesets(
     Returns:
         {"changesets": [...], "total": N, "limit": L, "offset": O}
     """
-    import sys
-    # Try repo-relative first (bundled with hermes-agent), fall back to user scripts
-    import os as _os
-    _repo_scripts = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "scripts")
-    for _d in (_repo_scripts, _os.path.join(_os.path.expanduser("~"), ".hermes", "scripts")):
-        if _d not in sys.path:
-            sys.path.insert(0, _d)
-    from wiki_changeset import wiki_query_changesets
-    return wiki_query_changesets(
+    module = _load_wiki_changeset_module("wiki_query_changesets")
+    return module.wiki_query_changesets(
         wiki_path=wiki_path,
         page=page,
         action=action,
@@ -342,14 +381,8 @@ def wiki_changeset_diff(changeset_id: str, wiki_path: Optional[str] = None) -> d
     Returns:
         {"diff": "<unified diff>", "changeset": {...}} or {"error": ...}
     """
-    import sys
-    import os as _os
-    _repo_scripts = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "scripts")
-    for _d in (_repo_scripts, _os.path.join(_os.path.expanduser("~"), ".hermes", "scripts")):
-        if _d not in sys.path:
-            sys.path.insert(0, _d)
-    from wiki_changeset import wiki_changeset_diff as _diff
-    return _diff(changeset_id, wiki_path=wiki_path)
+    module = _load_wiki_changeset_module("wiki_changeset_diff")
+    return module.wiki_changeset_diff(changeset_id, wiki_path=wiki_path)
 
 
 def wiki_expand_links(page_slug: str, wiki_path: Optional[str] = None) -> dict:
