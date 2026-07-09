@@ -156,6 +156,29 @@ def _extract_wikilinks(body: str) -> list[str]:
     return [m.strip().lower().replace(" ", "-") for m in matches]
 
 
+#: Content subdirectories scanned for wiki pages. Root-level *.md files
+#: (index.md, log.md, ...) are scanned too — see _iter_page_files.
+WIKI_SUBDIRS = ["entities", "concepts", "comparisons", "queries", "raw",
+                "projects", "goals", "life", "issues"]
+
+
+def _iter_page_files(wiki: Path):
+    """Yield (subdir, file) for every wiki page markdown file.
+
+    Covers the content subdirectories plus root-level pages (subdir "" —
+    e.g. index.md, log.md), which previously never appeared in wiki.scan
+    and were therefore invisible in graph clients.
+    """
+    for subdir in [""] + WIKI_SUBDIRS:
+        dir_path = wiki / subdir if subdir else wiki
+        if not dir_path.exists():
+            continue
+        for file in sorted(dir_path.iterdir()):
+            if file.suffix != ".md" or not file.is_file():
+                continue
+            yield subdir, file
+
+
 def wiki_scan(wiki_path: Optional[str] = None) -> dict:
     """Scan wiki directory and return graph structure."""
     wiki = Path(wiki_path or _default_wiki_path())
@@ -165,66 +188,56 @@ def wiki_scan(wiki_path: Optional[str] = None) -> dict:
     pages: list[dict] = []
     page_ids: set[str] = set()
     links: list[dict] = []
-    subdirs = ["entities", "concepts", "comparisons", "queries", "raw",
-               "projects", "goals", "life", "issues"]
 
     # First pass: collect all pages
-    for subdir in subdirs:
-        dir_path = wiki / subdir
-        if not dir_path.exists():
+    for subdir, file in _iter_page_files(wiki):
+        try:
+            content = file.read_text(encoding="utf-8")
+        except Exception:
             continue
-        for file in dir_path.iterdir():
-            if file.suffix != ".md":
-                continue
-            try:
-                content = file.read_text(encoding="utf-8")
-            except Exception:
-                continue
-            fm, _ = _parse_frontmatter(content)
-            slug = file.stem
-            rel_path = f"{subdir}/{file.name}"
+        fm, _ = _parse_frontmatter(content)
+        slug = file.stem
+        rel_path = f"{subdir}/{file.name}" if subdir else file.name
 
-            # Parse tags (handles "[tag1, tag2]" or "tag1, tag2")
-            raw_tags = fm.get("tags", "")
-            tags: list[str] = []
-            if raw_tags:
-                cleaned = raw_tags.strip().strip("[]").replace("'", "").replace('"', "")
-                tags = [t.strip() for t in cleaned.split(",") if t.strip()]
+        # Parse tags (handles "[tag1, tag2]" or "tag1, tag2")
+        raw_tags = fm.get("tags", "")
+        tags: list[str] = []
+        if raw_tags:
+            cleaned = raw_tags.strip().strip("[]").replace("'", "").replace('"', "")
+            tags = [t.strip() for t in cleaned.split(",") if t.strip()]
 
-            pages.append(
-                {
-                    "id": slug,
-                    "title": fm.get("title", slug),
-                    "type": fm.get("type", "concept"),
-                    "tags": tags,
-                    "tag_path": fm.get("tag_path", []) if isinstance(fm.get("tag_path"), list) else [],
-                    "integration_links": fm.get("integration_links", []) if isinstance(fm.get("integration_links"), list) else [],
-                    "path": rel_path,
-                    "created": fm.get("created", ""),
-                    "updated": fm.get("updated", ""),
-                    "confidence": fm.get("confidence", ""),
-                    "contested": fm.get("contested", "").lower() == "true",
-                }
-            )
-            page_ids.add(slug)
+        # Root-level pages (index/log) are meta pages unless frontmatter
+        # says otherwise; subdir pages keep the old "concept" default.
+        default_type = "meta" if not subdir else "concept"
+
+        pages.append(
+            {
+                "id": slug,
+                "title": fm.get("title", slug),
+                "type": fm.get("type", default_type),
+                "tags": tags,
+                "tag_path": fm.get("tag_path", []) if isinstance(fm.get("tag_path"), list) else [],
+                "integration_links": fm.get("integration_links", []) if isinstance(fm.get("integration_links"), list) else [],
+                "path": rel_path,
+                "created": fm.get("created", ""),
+                "updated": fm.get("updated", ""),
+                "confidence": fm.get("confidence", ""),
+                "contested": fm.get("contested", "").lower() == "true",
+            }
+        )
+        page_ids.add(slug)
 
     # Second pass: extract wikilinks (only link to existing pages)
-    for subdir in subdirs:
-        dir_path = wiki / subdir
-        if not dir_path.exists():
+    for _subdir, file in _iter_page_files(wiki):
+        try:
+            content = file.read_text(encoding="utf-8")
+        except Exception:
             continue
-        for file in dir_path.iterdir():
-            if file.suffix != ".md":
-                continue
-            try:
-                content = file.read_text(encoding="utf-8")
-            except Exception:
-                continue
-            _, body = _parse_frontmatter(content)
-            slug = file.stem
-            for target in _extract_wikilinks(body):
-                if target in page_ids:
-                    links.append({"source": slug, "target": target, "type": "wikilink"})
+        _, body = _parse_frontmatter(content)
+        slug = file.stem
+        for target in _extract_wikilinks(body):
+            if target in page_ids:
+                links.append({"source": slug, "target": target, "type": "wikilink"})
 
     return {"pages": pages, "links": links}
 
@@ -396,11 +409,10 @@ def wiki_expand_links(page_slug: str, wiki_path: Optional[str] = None) -> dict:
         {"github:hermes-agent#456": {"status": "merged", "title": "Fix wiki...", "url": "..."}}
     """
     wiki = Path(wiki_path or _default_wiki_path())
-    
-    # Find the page by slug
-    for subdir in ["entities", "concepts", "comparisons", "queries",
-                       "projects", "goals", "life", "issues"]:
-        file_path = wiki / subdir / f"{page_slug}.md"
+
+    # Find the page by slug (root-level pages like index/log included)
+    for subdir in [""] + WIKI_SUBDIRS:
+        file_path = (wiki / subdir if subdir else wiki) / f"{page_slug}.md"
         if file_path.exists():
             break
     else:

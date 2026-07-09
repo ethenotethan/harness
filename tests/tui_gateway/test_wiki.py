@@ -60,6 +60,50 @@ class TestScan:
         assert result["pages"][0]["tags"] == []
 
 
+class TestRootPages:
+    def test_root_level_pages_scanned(self):
+        root = _make_wiki()
+        (root / "log.md").write_text(
+            "# Wiki Log\n\nRecent changes. [[dflash-mlx]]\n", encoding="utf-8"
+        )
+        (root / "index.md").write_text(
+            "---\ntitle: Index\ntype: index\n---\n\n[[dflash-mlx]]\n", encoding="utf-8"
+        )
+        (root / "entities" / "dflash-mlx.md").write_text(
+            "---\ntitle: dflash-mlx\ntype: entity\n---\n\nBody.\n", encoding="utf-8"
+        )
+
+        result = wiki.wiki_scan(str(root))
+        pages = {p["id"]: p for p in result["pages"]}
+        assert "log" in pages
+        assert "index" in pages
+        # Root pages live at the wiki root — no subdir prefix.
+        assert pages["log"]["path"] == "log.md"
+        # No frontmatter type on a root page -> "meta"; explicit type wins.
+        assert pages["log"]["type"] == "meta"
+        assert pages["index"]["type"] == "index"
+
+        # Root pages participate in the link graph.
+        link_pairs = {(l["source"], l["target"]) for l in result["links"]}
+        assert ("log", "dflash-mlx") in link_pairs
+        assert ("index", "dflash-mlx") in link_pairs
+
+    def test_root_page_readable_via_wiki_page(self):
+        root = _make_wiki()
+        (root / "log.md").write_text("# Log\n\nEntries.\n", encoding="utf-8")
+        result = wiki.wiki_page("log.md", str(root))
+        assert result is not None
+        assert result["path"] == "log.md"
+        assert "Entries." in result["body"]
+
+    def test_non_markdown_root_files_ignored(self):
+        root = _make_wiki()
+        (root / "taxonomy.yaml").write_text("categories: {}\n", encoding="utf-8")
+        (root / "notes.txt").write_text("not a page", encoding="utf-8")
+        result = wiki.wiki_scan(str(root))
+        assert result["pages"] == []
+
+
 class TestPage:
     def test_read_page(self):
         root = _make_wiki()
