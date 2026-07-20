@@ -116,9 +116,47 @@ def _merge_map(existing: str, incoming: str) -> str:
     return json.dumps(merged, ensure_ascii=False, sort_keys=True)
 
 
+def _merge_dataset(existing: str, incoming: str) -> str:
+    """Union rows by the dataset's declared key field; incoming wins.
+
+    Dataset shape: {"key": "name", "columns": [...], "rows": [{...}]}.
+    The key field name comes from incoming, else existing, else "id".
+    Rows whose key value is empty are dropped (unkeyable). Top-level
+    fields (title/columns/key) come from incoming when present.
+    Unparseable JSON on either side -> incoming (never brick).
+    """
+    try:
+        old = json.loads(existing)
+        new = json.loads(incoming)
+        if not isinstance(old, dict) or not isinstance(new, dict):
+            return incoming
+    except (json.JSONDecodeError, TypeError):
+        return incoming
+
+    merged = {**old, **new}
+    key_field = str(new.get("key") or old.get("key") or "id")
+    merged["key"] = key_field
+
+    by_key: dict[str, dict] = {}
+    order: list[str] = []
+    for row in (old.get("rows") or []) + (new.get("rows") or []):
+        if not isinstance(row, dict):
+            continue
+        key_value = str(row.get(key_field, "")).strip().lower()
+        if not key_value:
+            continue
+        if key_value not in by_key:
+            order.append(key_value)
+        by_key[key_value] = row  # later (incoming) wins
+    merged["rows"] = [by_key[k] for k in order]
+    return json.dumps(merged, ensure_ascii=False, sort_keys=True)
+
+
 def merge_content(kind: str, existing: str, incoming: str) -> str:
     if kind == "map":
         return _merge_map(existing, incoming)
+    if kind == "dataset":
+        return _merge_dataset(existing, incoming)
     return incoming
 
 

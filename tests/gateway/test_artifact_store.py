@@ -142,3 +142,45 @@ def test_agent_tool_surface(artifact_home):
 
     missing = artifact_tool(action="get", id="nope")
     assert missing["success"] is False
+
+
+def test_dataset_merge_unions_rows_by_key(artifact_home):
+    from tui_gateway import artifact_store as store
+
+    store.set_artifact(
+        "contributors",
+        "dataset",
+        json.dumps({
+            "key": "login",
+            "columns": ["login", "name", "commits"],
+            "rows": [
+                {"login": "greg", "name": "Greg", "commits": 41},
+                {"login": "0xclandestine", "name": "0xClandestine", "commits": 12},
+            ],
+        }),
+        title="Darkbloom Contributors",
+    )
+    merged = store.set_artifact(
+        "contributors",
+        "dataset",
+        json.dumps({
+            "rows": [
+                {"login": "greg", "name": "Greg", "commits": 44},
+                {"login": "newperson", "name": "New Person", "commits": 1},
+            ],
+        }),
+    )
+    body = json.loads(merged["content"])
+    rows = {r["login"]: r for r in body["rows"]}
+    assert len(rows) == 3                       # union, not replace
+    assert rows["greg"]["commits"] == 44        # incoming wins
+    assert rows["0xclandestine"]["commits"] == 12  # untouched rows survive
+    assert body["key"] == "login"               # key carried over
+    assert body["columns"] == ["login", "name", "commits"]
+
+    # Keyless rows are dropped, not crashed on.
+    weird = store.set_artifact(
+        "contributors", "dataset",
+        json.dumps({"rows": [{"name": "no login"}]}),
+    )
+    assert len(json.loads(weird["content"])["rows"]) == 3

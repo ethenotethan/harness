@@ -122,7 +122,8 @@ ARTIFACT_SCHEMA = {
         "ALWAYS `get` an artifact before updating it — modify the CURRENT "
         "content, never reconstruct it from memory (a wholesale rewrite from "
         "memory destroys data other writers added). `map` kind merges markers "
-        "by label so you may set only new/changed markers; every other kind "
+        "by label and `dataset` kind merges rows by the declared key field, so "
+        "for those you may set only new/changed entries; every other kind "
         "replaces content wholesale, so write back the complete updated body. "
         "Use `list` to discover what exists."
     ),
