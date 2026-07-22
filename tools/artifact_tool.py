@@ -26,7 +26,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-VALID_KINDS = {"map", "chart", "graph", "stats", "table", "markdown", "dataset"}
+VALID_KINDS = {"map", "chart", "graph", "stats", "table", "markdown", "dataset", "sankey", "timeline"}
 
 
 def artifact_tool(
@@ -140,7 +140,7 @@ ARTIFACT_SCHEMA = {
             },
             "kind": {
                 "type": "string",
-                "enum": ["map", "chart", "graph", "stats", "table", "markdown", "dataset"],
+                "enum": ["map", "chart", "graph", "stats", "table", "markdown", "dataset", "sankey", "timeline"],
                 "description": "Render dialect of the content (required for set)",
             },
             "content": {
