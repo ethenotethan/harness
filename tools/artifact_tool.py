@@ -125,7 +125,14 @@ ARTIFACT_SCHEMA = {
         "by label and `dataset` kind merges rows by the declared key field, so "
         "for those you may set only new/changed entries; every other kind "
         "replaces content wholesale, so write back the complete updated body. "
-        "Use `list` to discover what exists."
+        "Use `list` to discover what exists.\n\n"
+        "USER TRIAGE: dataset/map artifacts may declare an `actions` array "
+        "(choice/toggle/delete controls the user taps in their client); the "
+        "user's marks land in entry fields — read them, they are signal "
+        "(e.g. rows with \"status\": \"going\", markers with \"reached_out\": "
+        "true). Entries with `_deleted: true` are tombstones the user removed: "
+        "the merge preserves them even if you re-emit the entry — NEVER strip "
+        "or set `_deleted` yourself unless the user explicitly asks."
     ),
     "parameters": {
         "type": "object",

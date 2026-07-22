@@ -184,3 +184,61 @@ def test_dataset_merge_unions_rows_by_key(artifact_home):
         json.dumps({"rows": [{"name": "no login"}]}),
     )
     assert len(json.loads(weird["content"])["rows"]) == 3
+
+
+def test_tombstones_survive_merge(artifact_home):
+    """A user-deleted entry (_deleted: true, set from the app) must not be
+    resurrected by an agent re-emitting the same row/marker without the
+    flag; an explicit _deleted (true/false) on the incoming entry wins."""
+    from tui_gateway import artifact_store as store
+
+    store.set_artifact(
+        "confs", "dataset",
+        json.dumps({
+            "key": "name",
+            "rows": [
+                {"name": "Acme Conf", "_deleted": True},
+                {"name": "Other Conf", "status": "going"},
+            ],
+        }),
+    )
+    merged = store.set_artifact(
+        "confs", "dataset",
+        json.dumps({"rows": [
+            {"name": "Acme Conf", "status": "found again"},   # no _deleted → stays dead
+            {"name": "Third Conf"},
+        ]}),
+    )
+    rows = {r["name"]: r for r in json.loads(merged["content"])["rows"]}
+    assert rows["Acme Conf"]["_deleted"] is True
+    assert rows["Acme Conf"]["status"] == "found again"   # fields still merge
+    assert "Third Conf" in rows
+
+    # Explicit un-delete wins.
+    revived = store.set_artifact(
+        "confs", "dataset",
+        json.dumps({"rows": [{"name": "Acme Conf", "_deleted": False}]}),
+    )
+    rows = {r["name"]: r for r in json.loads(revived["content"])["rows"]}
+    assert rows["Acme Conf"]["_deleted"] is False
+
+
+def test_map_marker_tombstones_survive_merge(artifact_home):
+    from tui_gateway import artifact_store as store
+
+    store.set_artifact(
+        "apts", "map",
+        json.dumps({"markers": [
+            {"lat": 1.0, "lon": 2.0, "label": "gone", "_deleted": True},
+        ]}),
+    )
+    merged = store.set_artifact(
+        "apts", "map",
+        json.dumps({"markers": [
+            {"lat": 1.0, "lon": 2.0, "label": "gone", "note": "re-listed"},
+            {"lat": 3.0, "lon": 4.0, "label": "new"},
+        ]}),
+    )
+    markers = {m["label"]: m for m in json.loads(merged["content"])["markers"]}
+    assert markers["gone"]["_deleted"] is True
+    assert "new" in markers

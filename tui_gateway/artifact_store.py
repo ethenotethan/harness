@@ -111,9 +111,24 @@ def _merge_map(existing: str, incoming: str) -> str:
             continue
         if label not in by_label:
             order.append(label)
-        by_label[label] = marker  # later (incoming) wins
+        by_label[label] = _carry_tombstone(by_label.get(label), marker)  # later (incoming) wins
     merged["markers"] = [by_label[label] for label in order]
     return json.dumps(merged, ensure_ascii=False, sort_keys=True)
+
+
+
+def _carry_tombstone(existing_entry: dict | None, incoming_entry: dict) -> dict:
+    """A user tombstone (``_deleted: true``) survives an agent re-emitting
+    the entry WITHOUT the flag — deletes don't resurrect. An incoming entry
+    that explicitly sets ``_deleted`` (true or false) wins: that is a
+    deliberate write, including un-delete."""
+    if (
+        isinstance(existing_entry, dict)
+        and existing_entry.get("_deleted") is True
+        and "_deleted" not in incoming_entry
+    ):
+        return {**incoming_entry, "_deleted": True}
+    return incoming_entry
 
 
 def _merge_dataset(existing: str, incoming: str) -> str:
@@ -147,7 +162,7 @@ def _merge_dataset(existing: str, incoming: str) -> str:
             continue
         if key_value not in by_key:
             order.append(key_value)
-        by_key[key_value] = row  # later (incoming) wins
+        by_key[key_value] = _carry_tombstone(by_key.get(key_value), row)  # later (incoming) wins
     merged["rows"] = [by_key[k] for k in order]
     return json.dumps(merged, ensure_ascii=False, sort_keys=True)
 
