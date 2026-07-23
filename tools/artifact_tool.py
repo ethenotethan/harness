@@ -26,7 +26,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-VALID_KINDS = {"map", "chart", "graph", "stats", "table", "markdown", "dataset", "sankey", "timeline"}
+VALID_KINDS = {"map", "chart", "graph", "stats", "table", "markdown", "dataset", "sankey", "timeline", "model"}
 
 
 def artifact_tool(
@@ -125,7 +125,12 @@ ARTIFACT_SCHEMA = {
         "by label and `dataset` kind merges rows by the declared key field, so "
         "for those you may set only new/changed entries; every other kind "
         "replaces content wholesale, so write back the complete updated body. "
-        "Use `list` to discover what exists.\n\n"
+        "Use `list` to discover what exists. `model` kind is the ensemble "
+        "artifact: named entity sets ({\"entities\": {name: {\"key\", \"items\"}}}), "
+        "relations ([{\"from\": \"set/key\", \"to\": \"set/key\", \"type\"}]), and "
+        "stacked views (map/table/graph/chart/stats) the client renders over "
+        "one store with linked selection. Entity sets merge by key and "
+        "relations by (from,to,type), so set only new/changed items.\n\n"
         "USER TRIAGE: dataset/map artifacts may declare an `actions` array "
         "(choice/toggle/delete controls the user taps in their client); the "
         "user's marks land in entry fields — read them, they are signal "
@@ -147,7 +152,7 @@ ARTIFACT_SCHEMA = {
             },
             "kind": {
                 "type": "string",
-                "enum": ["map", "chart", "graph", "stats", "table", "markdown", "dataset", "sankey", "timeline"],
+                "enum": ["map", "chart", "graph", "stats", "table", "markdown", "dataset", "sankey", "timeline", "model"],
                 "description": "Render dialect of the content (required for set)",
             },
             "content": {

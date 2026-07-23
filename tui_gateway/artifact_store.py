@@ -167,11 +167,81 @@ def _merge_dataset(existing: str, incoming: str) -> str:
     return json.dumps(merged, ensure_ascii=False, sort_keys=True)
 
 
+
+def _merge_model(existing: str, incoming: str) -> str:
+    """Ensemble models: {"entities": {name: {"key", "items": [...]}},
+    "relations": [{"from", "to", "type"}], "views": [...], "actions": {...}}.
+
+    Each entity set unions items by its declared key (incoming wins
+    field-wise; tombstones carried via _carry_tombstone). Sets absent from
+    the incoming block carry over untouched — agents may update one set.
+    Relations union by (from, to, type). Views/actions/title come from
+    incoming when present (declarative config — latest wins wholesale).
+    Unparseable JSON on either side -> incoming (never brick).
+    """
+    try:
+        old = json.loads(existing)
+        new = json.loads(incoming)
+        if not isinstance(old, dict) or not isinstance(new, dict):
+            return incoming
+    except (json.JSONDecodeError, TypeError):
+        return incoming
+
+    merged = {**old, **new}
+
+    old_sets = old.get("entities") or {}
+    new_sets = new.get("entities") or {}
+    if isinstance(old_sets, dict) and isinstance(new_sets, dict):
+        merged_sets = dict(old_sets)
+        for name, new_set in new_sets.items():
+            old_set = old_sets.get(name)
+            if not isinstance(old_set, dict) or not isinstance(new_set, dict):
+                merged_sets[name] = new_set
+                continue
+            out = {**old_set, **new_set}
+            key_field = str(new_set.get("key") or old_set.get("key") or "id")
+            out["key"] = key_field
+            by_key: dict[str, dict] = {}
+            order: list[str] = []
+            for item in (old_set.get("items") or []) + (new_set.get("items") or []):
+                if not isinstance(item, dict):
+                    continue
+                key_value = str(item.get(key_field, "")).strip().lower()
+                if not key_value:
+                    continue
+                if key_value not in by_key:
+                    order.append(key_value)
+                by_key[key_value] = _carry_tombstone(by_key.get(key_value), item)
+            out["items"] = [by_key[k] for k in order]
+            merged_sets[name] = out
+        merged["entities"] = merged_sets
+
+    by_triple: dict[str, dict] = {}
+    triple_order: list[str] = []
+    for rel in (old.get("relations") or []) + (new.get("relations") or []):
+        if not isinstance(rel, dict):
+            continue
+        frm = str(rel.get("from", "")).strip().lower()
+        to = str(rel.get("to", "")).strip().lower()
+        if not frm or not to:
+            continue
+        triple = f"{frm}|{to}|{str(rel.get('type', 'related')).strip().lower()}"
+        if triple not in by_triple:
+            triple_order.append(triple)
+        by_triple[triple] = _carry_tombstone(by_triple.get(triple), rel)
+    if triple_order:
+        merged["relations"] = [by_triple[t] for t in triple_order]
+
+    return json.dumps(merged, ensure_ascii=False, sort_keys=True)
+
+
 def merge_content(kind: str, existing: str, incoming: str) -> str:
     if kind == "map":
         return _merge_map(existing, incoming)
     if kind == "dataset":
         return _merge_dataset(existing, incoming)
+    if kind == "model":
+        return _merge_model(existing, incoming)
     return incoming
 
 

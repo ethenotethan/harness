@@ -242,3 +242,45 @@ def test_map_marker_tombstones_survive_merge(artifact_home):
     markers = {m["label"]: m for m in json.loads(merged["content"])["markers"]}
     assert markers["gone"]["_deleted"] is True
     assert "new" in markers
+
+
+def test_model_merge_entity_sets_relations_tombstones(artifact_home):
+    """Ensemble models: per-set union by key with tombstone carry, untouched
+    sets survive a partial update, relations dedupe by (from, to, type)."""
+    from tui_gateway import artifact_store as store
+
+    store.set_artifact(
+        "bkk-life", "model",
+        json.dumps({
+            "entities": {
+                "apartments": {"key": "name", "items": [
+                    {"name": "A", "_deleted": True},
+                    {"name": "B", "status": "viewed"},
+                ]},
+                "gyms": {"key": "name", "items": [{"name": "Felix"}]},
+            },
+            "relations": [{"from": "apartments/B", "to": "gyms/Felix", "type": "walkable"}],
+        }),
+    )
+    merged = store.set_artifact(
+        "bkk-life", "model",
+        json.dumps({
+            "entities": {"apartments": {"key": "name", "items": [
+                {"name": "A", "rent": 999},          # no _deleted → stays dead
+                {"name": "C"},
+            ]}},
+            "relations": [
+                {"from": "apartments/B", "to": "gyms/Felix", "type": "walkable", "note": "8 min"},
+                {"from": "apartments/C", "to": "gyms/Felix", "type": "walkable"},
+            ],
+        }),
+    )
+    body = json.loads(merged["content"])
+    apartments = {i["name"]: i for i in body["entities"]["apartments"]["items"]}
+    assert apartments["A"]["_deleted"] is True       # tombstone carried
+    assert apartments["A"]["rent"] == 999            # fields still merge
+    assert "B" in apartments and "C" in apartments
+    assert "gyms" in body["entities"]                # untouched set survives
+    rels = body["relations"]
+    assert len(rels) == 2                            # triple-deduped
+    assert any(r.get("note") == "8 min" for r in rels)  # incoming wins field-wise
