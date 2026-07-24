@@ -114,7 +114,17 @@ def test_delete_removes_artifact_and_revisions(artifact_home):
 
 
 def test_agent_tool_surface(artifact_home):
-    from tools.artifact_tool import artifact_tool
+    import json as _json
+
+    from tools.artifact_tool import artifact_tool as _raw_tool
+
+    def artifact_tool(**kwargs):
+        # The registry contract requires tools to return STRINGS — pin the
+        # type here (a raw dict is rejected as tool_result_contract at
+        # dispatch, which broke every artifact call in production).
+        result = _raw_tool(**kwargs)
+        assert isinstance(result, str), f"tool must return str, got {type(result).__name__}"
+        return _json.loads(result)
 
     # set → get read-before-write loop
     result = artifact_tool(

@@ -37,8 +37,33 @@ def artifact_tool(
     title: str = "",
     replace: bool = False,
     session_id: str = "",
+) -> str:
+    """Execute an artifact action against the shared store.
+
+    Returns a JSON STRING — the tool registry's result contract
+    (_normalize_handler_result) accepts only str or the multimodal
+    envelope; raw dicts are rejected as tool_result_contract errors,
+    which broke every artifact call once the contract landed.
+    """
+    return json.dumps(
+        _artifact_tool_impl(
+            action, id=id, kind=kind, content=content,
+            title=title, replace=replace, session_id=session_id,
+        ),
+        ensure_ascii=False,
+        default=str,
+    )
+
+
+def _artifact_tool_impl(
+    action: str,
+    id: str = "",
+    kind: str = "",
+    content: str = "",
+    title: str = "",
+    replace: bool = False,
+    session_id: str = "",
 ) -> dict:
-    """Execute an artifact action against the shared store."""
     from tui_gateway import artifact_store
 
     action = (action or "").strip().lower()
