@@ -146,6 +146,18 @@ def test_agent_tool_surface(artifact_home):
     revs = artifact_tool(action="revisions", id="clients")
     assert revs["success"] is True and len(revs["revisions"]) == 1
 
+    # html is an accepted kind; content is a raw HTML document (not JSON) and
+    # replaces wholesale (no per-kind merge).
+    html_doc = "<!doctype html><h1>Report</h1><p>Q3 up 12%</p>"
+    html_set = artifact_tool(
+        action="set", id="q3-report", kind="html",
+        content=html_doc, title="Q3 Report", session_id="s1",
+    )
+    assert html_set["success"] is True
+    assert html_set["artifact"]["kind"] == "html"
+    html_get = artifact_tool(action="get", id="q3-report")
+    assert html_get["artifact"]["content"] == html_doc
+
     # Bad kind is a tool error, not an exception.
     bad = artifact_tool(action="set", id="x", kind="hologram", content="{}")
     assert bad["success"] is False and "kind" in bad["error"]
