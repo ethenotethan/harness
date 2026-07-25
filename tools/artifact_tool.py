@@ -26,7 +26,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-VALID_KINDS = {"map", "chart", "graph", "stats", "table", "markdown", "dataset", "sankey", "timeline", "model"}
+VALID_KINDS = {"map", "chart", "graph", "stats", "table", "markdown", "dataset", "sankey", "timeline", "model", "html"}
 
 
 def artifact_tool(
@@ -141,8 +141,8 @@ ARTIFACT_SCHEMA = {
     "description": (
         "Read and maintain LIVING ARTIFACTS: named, persistent models the user "
         "views in their client (kinds: map, chart, graph, stats, table, markdown, "
-        "dataset — content is the same JSON/markdown you would put in a fenced "
-        "block of that kind). Artifacts survive across sessions and are shared "
+        "dataset, html — content is the same JSON/markdown/HTML you would put in "
+        "a fenced block of that kind). Artifacts survive across sessions and are shared "
         "with scheduled jobs and workflows; every change is revisioned.\n\n"
         "ALWAYS `get` an artifact before updating it — modify the CURRENT "
         "content, never reconstruct it from memory (a wholesale rewrite from "
@@ -156,6 +156,11 @@ ARTIFACT_SCHEMA = {
         "stacked views (map/table/graph/chart/stats) the client renders over "
         "one store with linked selection. Entity sets merge by key and "
         "relations by (from,to,type), so set only new/changed items.\n\n"
+        "`html` kind is a self-contained HTML document (content is the raw "
+        "HTML, not JSON) the client renders in a web view — use it for layouts "
+        "the structured kinds can't express (custom dashboards, styled "
+        "reports). It has no per-kind merge, so always write the COMPLETE "
+        "document; `get` first and edit the current content.\n\n"
         "USER TRIAGE: dataset/map artifacts may declare an `actions` array "
         "(choice/toggle/delete controls the user taps in their client); the "
         "user's marks land in entry fields — read them, they are signal "
@@ -177,7 +182,7 @@ ARTIFACT_SCHEMA = {
             },
             "kind": {
                 "type": "string",
-                "enum": ["map", "chart", "graph", "stats", "table", "markdown", "dataset", "sankey", "timeline", "model"],
+                "enum": ["map", "chart", "graph", "stats", "table", "markdown", "dataset", "sankey", "timeline", "model", "html"],
                 "description": "Render dialect of the content (required for set)",
             },
             "content": {
