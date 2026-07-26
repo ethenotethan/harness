@@ -16017,6 +16017,36 @@ def _(rid, params: dict) -> dict:
         return _err(rid, 5217, str(e))
 
 
+@method("artifact.action.log")
+def _(rid, params: dict) -> dict:
+    """Query the invocation ledger for an artifact.
+
+    Params:
+      artifact_id  (str, required)
+      binding_id   (str, optional) — filter to one binding
+      entity_ref   (str, optional) — filter to one entity
+      limit        (int, optional, default 50, max 200)
+
+    Returns newest-first list of invocation records. Native uses this to
+    re-hydrate badge state on artifact-pane open after app restart.
+    """
+    try:
+        artifact_id = (params.get("artifact_id") or "").strip()
+        if not artifact_id:
+            return _err(rid, 4001, "artifact_id required")
+        from tui_gateway.artifact_invocation_ledger import query as _ledger_query
+        records = _ledger_query(
+            artifact_id=artifact_id,
+            binding_id=params.get("binding_id"),
+            entity_ref=params.get("entity_ref"),
+            limit=int(params.get("limit", 50)),
+        )
+        return _ok(rid, {"records": records})
+    except Exception as e:
+        logger.exception("artifact.action.log failed")
+        return _err(rid, 5219, str(e))
+
+
 @method("actions.reload")
 def _(rid, params: dict) -> dict:
     """Reload plugin action handlers from ~/.hermes/plugins/actions/.
@@ -16065,6 +16095,7 @@ def _(rid, params: dict) -> dict:
             "artifact.action.invoke",
             "artifact.action.confirm",
             "artifact.action.reload",
+            "artifact.action.log",
             "wiki.scan",
             "wiki.page",
             "wiki.list",
