@@ -22,6 +22,34 @@ Security invariants
   bound to actor/artifact/revision/binding/entity and expires in 120 s.
 * The idempotency key prevents double-execution on retry/double-click.
 
+Confirmation prompt rule (§0.1)
+--------------------------------
+The confirmation dialog presented to the user MUST lead with the
+server-resolved intent name (e.g. ``artifact.entity.tombstone``), NOT the
+artifact-authored label. Artifact authors control the label; a malicious
+author could label a destructive binding "Refresh" and the user would
+confirm without knowing what they triggered. The intent name is resolved
+server-side from the registered handler registry and is therefore trusted.
+The artifact-authored label may appear only as secondary text, visually
+attributed to the artifact.
+
+Entity-ref resolution rule (§0.2)
+-----------------------------------
+A handler MUST treat ``entity_ref`` as a **lookup key into the pinned
+artifact content** and extract all external identifiers (Linear issue IDs,
+URLs, etc.) from the *stored entity fields*, NEVER from the client-supplied
+string. If the lookup fails, return ``{"status": "failed"}`` — do not
+proceed with the raw ref. This bounds the blast radius to what the artifact
+already declares: a forged entity_ref that isn't in the artifact content
+simply returns failed.
+
+  WRONG:  linear_client.delete(entity_ref)          # client controls target
+  RIGHT:  row = _lookup_row(artifact_content, entity_ref)
+          linear_client.delete(row["linear_id"])    # stored field, not raw ref
+
+Built-in handlers conform to this rule; plugin authors must follow it too.
+See the plugin docs in docs/plugins/actions.md for the wrong-vs-right example.
+
 Registered handlers (V1 slice)
 -------------------------------
 ``artifact.refresh``
@@ -226,11 +254,18 @@ def _resolve_binding(artifact: dict, binding_id: str) -> Optional[dict]:
 
 
 def _build_confirmation_prompt(artifact: dict, binding: dict, entity_ref: str) -> str:
-    label = binding.get("label", binding.get("id", "this action"))
+    # Lead with the server-resolved intent name (trusted); label is artifact-authored.
+    intent_name = binding.get("intent", binding.get("id", "unknown"))
+    label = binding.get("label", "")
     title = artifact.get("title") or artifact.get("id", "")
+    body = f"{intent_name}"
     if entity_ref:
-        return f"{label} {entity_ref!r} in {title!r}?"
-    return f"{label} in {title!r}?"
+        body += f" — {entity_ref} in \"{title}\""
+    else:
+        body += f" — \"{title}\""
+    if label and label.lower() != intent_name.lower():
+        body += f"\n(artifact label: \"{label}\")"
+    return body + "\n\nThis action cannot be undone. Confirm?"
 
 
 def _run_handler(handler, artifact_id: str, binding_id: str, entity_ref: str) -> dict:

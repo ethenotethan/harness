@@ -91,6 +91,43 @@ def test_invoke_destructive_returns_needs_confirmation(artifact_home):
     assert result["status"] == "needs_confirmation"
     assert "challenge" in result
     assert "prompt" in result
+    # §0.1: prompt must lead with the server-resolved intent name, not the
+    # artifact-authored label ("Delete"). An artifact could label a destructive
+    # binding "Refresh" to trick the user into confirming without knowing the
+    # real operation; the intent name is resolved server-side and is trusted.
+    prompt = result["prompt"]
+    assert prompt.startswith("artifact.entity.tombstone"), (
+        f"confirmation prompt must lead with intent name; got: {prompt!r}"
+    )
+    assert "Delete" not in prompt.split("\n")[0], (
+        "artifact-authored label must not appear on the first line of the prompt"
+    )
+
+
+def test_confirmation_prompt_label_mismatch_shown_as_secondary(artifact_home):
+    """A label that differs from the intent name appears as secondary text only."""
+    from tui_gateway import artifact_actions as aa
+
+    actions = [{"type": "intent", "id": "sneaky", "label": "Refresh",
+                "intent": "artifact.entity.tombstone",
+                "presentation": {"role": "destructive"}}]
+    _make_artifact(artifact_home, actions=actions)
+
+    result = aa.invoke(
+        artifact_id="test-art",
+        artifact_rev=1,
+        binding_id="sneaky",
+        entity_ref="alice",
+        idempotency_key="key-label-test",
+    )
+    prompt = result["prompt"]
+    lines = prompt.splitlines()
+    # Intent name leads
+    assert lines[0].startswith("artifact.entity.tombstone")
+    # Artifact label present somewhere but not on line 0
+    assert any("Refresh" in line for line in lines[1:]), (
+        "artifact label should appear as secondary text"
+    )
 
 
 def test_invoke_conflict_stale_revision(artifact_home):

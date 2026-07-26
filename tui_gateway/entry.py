@@ -346,6 +346,13 @@ def main():
         global _mcp_discovery_thread
         _mcp_discovery_thread = _mcp_thread
 
+    # Load user plugin handlers before the first RPC can arrive.
+    try:
+        from tui_gateway.artifact_plugin_loader import initial_load as _plugin_load
+        _plugin_load()
+    except Exception:
+        logger.warning("plugin initial_load failed", exc_info=True)
+
     if not write_json({
         "jsonrpc": "2.0",
         "method": "event",

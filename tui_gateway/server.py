@@ -16017,6 +16017,26 @@ def _(rid, params: dict) -> dict:
         return _err(rid, 5217, str(e))
 
 
+@method("actions.reload")
+def _(rid, params: dict) -> dict:
+    """Reload plugin action handlers from ~/.hermes/plugins/actions/.
+
+    Returns a diff of added/changed/removed handler names and the list of
+    files that were loaded. On any parse/exec error the live registry is
+    unchanged and the traceback is returned in ``error``.
+
+    Safe to call from an agent tool, CLI, or RPC — the security boundary is
+    the plugins directory's non-agent-writability, not the trigger.
+    """
+    try:
+        from tui_gateway.artifact_plugin_loader import reload as _reload
+        result = _reload()
+        return _ok(rid, result)
+    except Exception as e:
+        logger.exception("actions.reload failed")
+        return _err(rid, 5218, str(e))
+
+
 @method("gateway.capabilities")
 def _(rid, params: dict) -> dict:
     """Report gateway capabilities so native clients can feature-gate
@@ -16044,6 +16064,7 @@ def _(rid, params: dict) -> dict:
             "artifact.action",
             "artifact.action.invoke",
             "artifact.action.confirm",
+            "artifact.action.reload",
             "wiki.scan",
             "wiki.page",
             "wiki.list",
