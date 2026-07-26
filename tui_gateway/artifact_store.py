@@ -255,10 +255,15 @@ def set_artifact(
     title: Optional[str] = None,
     updated_by: str = "",
     replace: bool = False,
+    actions: Optional[list] = None,
 ) -> dict:
     """Upsert an artifact, merging per kind unless replace=True; appends a
     revision. Returns the stored artifact dict (the merged state).
     Raises ValueError on invalid input.
+
+    ``actions`` is an optional list of action declarations (choice/toggle/
+    delete/intent) for the artifact's native controls. Stored atomically
+    with content; carried forward when a write omits it.
     """
     artifact_id = (artifact_id or "").strip()
     kind = (kind or "").strip().lower()
@@ -280,10 +285,13 @@ def set_artifact(
         if existing and not replace and existing.get("kind") == kind:
             content = merge_content(kind, existing.get("content", ""), content)
 
+        # Carry existing actions forward when the caller doesn't supply new ones.
+        stored_actions = actions if actions is not None else (existing or {}).get("actions")
+
         revisions = _read_json(_revisions_file(artifact_id), [])
         rev = (revisions[-1]["rev"] + 1) if revisions else 1
 
-        stored = {
+        stored: dict = {
             "id": artifact_id,
             "kind": kind,
             "title": (title or (existing or {}).get("title") or "").strip(),
@@ -292,6 +300,9 @@ def set_artifact(
             "updated_at": _now_iso(),
             "updated_by": updated_by or "",
         }
+        if stored_actions is not None:
+            stored["actions"] = stored_actions
+
         index[artifact_id] = stored
         _write_json(_index_file(), index)
 

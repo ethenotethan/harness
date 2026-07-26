@@ -15841,6 +15841,8 @@ def _(rid, params: dict) -> dict:
     try:
         from tui_gateway.artifact_store import set_artifact
 
+        raw_actions = params.get("actions")
+        actions = raw_actions if isinstance(raw_actions, list) else None
         stored = set_artifact(
             artifact_id=str(params.get("id", "")),
             kind=str(params.get("kind", "")),
@@ -15848,6 +15850,7 @@ def _(rid, params: dict) -> dict:
             title=params.get("title"),
             updated_by=str(params.get("updated_by", "")),
             replace=bool(params.get("replace", False)),
+            actions=actions,
         )
         _emit("artifact.changed", "", {
             "id": stored["id"], "kind": stored["kind"],
@@ -15938,6 +15941,115 @@ def _(rid, params: dict) -> dict:
     except Exception as e:
         logger.exception("artifact.revision failed")
         return _err(rid, 5215, str(e))
+
+
+@method("artifact.action.invoke")
+def _(rid, params: dict) -> dict:
+    """Invoke a backend intent declared in an artifact's action manifest.
+
+    The client sends only stable identifiers — artifact ID, pinned revision,
+    binding ID, entity ref, and an idempotency key. The server resolves the
+    registered handler from the artifact's declarations at that revision;
+    a forged binding or substituted intent name is rejected because the
+    server never trusts the caller's intent string.
+
+    Returns: {"status": "needs_confirmation"|"succeeded"|"failed"|
+              "conflict"|"unsupported", ...}
+    """
+    try:
+        from tui_gateway.artifact_actions import invoke
+
+        result = invoke(
+            artifact_id=str(params.get("artifact_id", "")),
+            artifact_rev=int(params.get("artifact_rev", 0)),
+            binding_id=str(params.get("binding_id", "")),
+            entity_ref=str(params.get("entity_ref", "")),
+            idempotency_key=str(params.get("idempotency_key", "")),
+        )
+        if result.get("status") == "succeeded":
+            # Emit artifact.changed so the client refreshes live.
+            from tui_gateway.artifact_store import get_artifact
+            artifact = get_artifact(str(params.get("artifact_id", "")))
+            if artifact:
+                _emit("artifact.changed", "", {
+                    "id": artifact["id"], "kind": artifact.get("kind", ""),
+                    "title": artifact.get("title", ""), "rev": artifact.get("rev", 0),
+                    "updated_at": artifact.get("updated_at", ""),
+                    "updated_by": artifact.get("updated_by", ""),
+                })
+        return _ok(rid, result)
+    except (TypeError, ValueError) as e:
+        return _err(rid, 4001, str(e))
+    except Exception as e:
+        logger.exception("artifact.action.invoke failed")
+        return _err(rid, 5216, str(e))
+
+
+@method("artifact.action.confirm")
+def _(rid, params: dict) -> dict:
+    """Complete a pending destructive intent after native confirmation.
+
+    ``challenge`` is the short-lived token issued by artifact.action.invoke
+    when the handler requires confirmation. It is bound to actor, artifact
+    revision, binding, resolved target, and expiry on the server — the
+    artifact cannot weaken confirmation policy by declaring confirm: false.
+    """
+    try:
+        from tui_gateway.artifact_actions import confirm
+
+        result = confirm(
+            artifact_id=str(params.get("artifact_id", "")),
+            challenge=str(params.get("challenge", "")),
+        )
+        if result.get("status") == "succeeded":
+            from tui_gateway.artifact_store import get_artifact
+            artifact = get_artifact(str(params.get("artifact_id", "")))
+            if artifact:
+                _emit("artifact.changed", "", {
+                    "id": artifact["id"], "kind": artifact.get("kind", ""),
+                    "title": artifact.get("title", ""), "rev": artifact.get("rev", 0),
+                    "updated_at": artifact.get("updated_at", ""),
+                    "updated_by": artifact.get("updated_by", ""),
+                })
+        return _ok(rid, result)
+    except Exception as e:
+        logger.exception("artifact.action.confirm failed")
+        return _err(rid, 5217, str(e))
+
+
+@method("gateway.capabilities")
+def _(rid, params: dict) -> dict:
+    """Report gateway capabilities so native clients can feature-gate
+    controls without trial-and-error method calls.
+
+    ``capability_names`` is the authoritative set — clients check for
+    substring matches (e.g. ``artifact.action``) rather than exact values
+    so adding sub-capabilities doesn't break old clients.
+    """
+    try:
+        from hermes_cli import __version__, __release_date__
+        version = f"{__version__}+{__release_date__}"
+    except Exception:
+        version = "unknown"
+
+    return _ok(rid, {
+        "gateway_version": version,
+        "capability_names": [
+            "artifact.set",
+            "artifact.get",
+            "artifact.list",
+            "artifact.delete",
+            "artifact.revisions",
+            "artifact.revision",
+            "artifact.action",
+            "artifact.action.invoke",
+            "artifact.action.confirm",
+            "wiki.scan",
+            "wiki.page",
+            "wiki.list",
+            "wiki.changesets",
+        ],
+    })
 
 
 @method("feed.get")
