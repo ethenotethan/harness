@@ -431,6 +431,13 @@ def main():
     # import cost entirely off the path for users with no mcp_servers.
     ensure_mcp_discovery_started()
 
+    # Load user plugin handlers before the first RPC can arrive.
+    try:
+        from tui_gateway.artifact_plugin_loader import initial_load as _plugin_load
+        _plugin_load()
+    except Exception:
+        logger.warning("plugin initial_load failed", exc_info=True)
+
     if not write_json({
         "jsonrpc": "2.0",
         "method": "event",
