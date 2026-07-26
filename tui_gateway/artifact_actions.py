@@ -85,7 +85,8 @@ CHALLENGE_TTL = 120  # seconds
 
 
 def _issue_challenge(
-    artifact_id: str, binding_id: str, entity_ref: str, prompt: str
+    artifact_id: str, binding_id: str, entity_ref: str, prompt: str,
+    idempotency_key: str = "",
 ) -> str:
     token = secrets.token_urlsafe(24)
     _pending_challenges[token] = {
@@ -93,6 +94,7 @@ def _issue_challenge(
         "binding_id": binding_id,
         "entity_ref": entity_ref,
         "prompt": prompt,
+        "idempotency_key": idempotency_key,
         "expires": time.monotonic() + CHALLENGE_TTL,
     }
     return token
@@ -159,6 +161,7 @@ def invoke(
     binding_id: str,
     entity_ref: str,
     idempotency_key: str,
+    actor: str = "",
 ) -> dict:
     """Resolve and invoke a backend intent.
 
@@ -171,31 +174,50 @@ def invoke(
         refresh and retry.
     ``unsupported`` — binding not found or intent not registered.
     """
-    from tui_gateway import artifact_store
+    import time as _time
+    from tui_gateway import artifact_store, artifact_invocation_ledger as ledger
 
-    # Idempotency: return cached result for an already-processed key.
+    # Idempotency — fast path: in-memory cache first, then durable ledger.
+    # The ledger check survives gateway restarts; the in-memory dict is the
+    # hot path for the same session.
     if idempotency_key:
         cached = _cached_result(idempotency_key)
         if cached is not None:
             return cached
+        ledger_record = ledger.lookup_terminal(idempotency_key)
+        if ledger_record is not None:
+            result = {"status": ledger_record["outcome"]}
+            if ledger_record.get("reason"):
+                result["reason"] = ledger_record["reason"]
+            _cache_result(idempotency_key, result)
+            return result
 
     # Load the artifact and pin to the submitted revision.
     artifact = artifact_store.get_artifact(artifact_id)
     if artifact is None:
         result = {"status": "failed", "reason": f"artifact not found: {artifact_id!r}"}
         _cache_result(idempotency_key, result)
+        ledger.append(
+            artifact_id=artifact_id, rev=artifact_rev, binding_id=binding_id,
+            entity_ref=entity_ref, intent="", idempotency_key=idempotency_key,
+            phase="invoke", outcome="failed", reason=result["reason"], actor=actor,
+        )
         return result
 
     if artifact.get("rev", 0) != artifact_rev:
-        result = {"status": "conflict"}
-        # Don't cache conflicts — the client will refresh and resubmit.
-        return result
+        # Conflicts not cached — client will refresh and resubmit with a new rev.
+        return {"status": "conflict"}
 
     # Resolve the binding from the artifact's action declarations.
     binding = _resolve_binding(artifact, binding_id)
     if binding is None:
         result = {"status": "unsupported"}
         _cache_result(idempotency_key, result)
+        ledger.append(
+            artifact_id=artifact_id, rev=artifact_rev, binding_id=binding_id,
+            entity_ref=entity_ref, intent="", idempotency_key=idempotency_key,
+            phase="invoke", outcome="unsupported", actor=actor,
+        )
         return result
 
     intent_name = binding.get("intent", "")
@@ -203,23 +225,45 @@ def invoke(
     if handler is None:
         result = {"status": "unsupported"}
         _cache_result(idempotency_key, result)
+        ledger.append(
+            artifact_id=artifact_id, rev=artifact_rev, binding_id=binding_id,
+            entity_ref=entity_ref, intent=intent_name, idempotency_key=idempotency_key,
+            phase="invoke", outcome="unsupported", actor=actor,
+        )
         return result
 
     role = binding.get("presentation", {}).get("role", "normal")
     if role == "destructive":
         prompt = _build_confirmation_prompt(artifact, binding, entity_ref)
-        challenge = _issue_challenge(artifact_id, binding_id, entity_ref, prompt)
+        challenge = _issue_challenge(artifact_id, binding_id, entity_ref, prompt, idempotency_key)
         # Don't cache needs_confirmation — the challenge is one-use.
+        # Log to ledger so the confirm phase can later reference the same key.
+        ledger.append(
+            artifact_id=artifact_id, rev=artifact_rev, binding_id=binding_id,
+            entity_ref=entity_ref, intent=intent_name, idempotency_key=idempotency_key,
+            phase="invoke", outcome="needs_confirmation", actor=actor,
+        )
         return {"status": "needs_confirmation", "challenge": challenge, "prompt": prompt}
 
     # Non-destructive: run inline.
+    t0 = _time.monotonic()
     result = _run_handler(handler, artifact_id, binding_id, entity_ref)
+    duration_ms = int((_time.monotonic() - t0) * 1000)
     _cache_result(idempotency_key, result)
+    ledger.append(
+        artifact_id=artifact_id, rev=artifact_rev, binding_id=binding_id,
+        entity_ref=entity_ref, intent=intent_name, idempotency_key=idempotency_key,
+        phase="invoke", outcome=result.get("status", "failed"),
+        reason=result.get("reason"), duration_ms=duration_ms, actor=actor,
+    )
     return result
 
 
-def confirm(artifact_id: str, challenge: str) -> dict:
+def confirm(artifact_id: str, challenge: str, actor: str = "") -> dict:
     """Complete a pending destructive intent after native confirmation."""
+    import time as _time
+    from tui_gateway import artifact_invocation_ledger as ledger
+
     entry = _consume_challenge(artifact_id, challenge)
     if entry is None:
         return {"status": "failed", "reason": "confirmation expired or invalid"}
@@ -238,7 +282,23 @@ def confirm(artifact_id: str, challenge: str) -> dict:
     if handler is None:
         return {"status": "unsupported"}
 
-    return _run_handler(handler, artifact_id, entry["binding_id"], entry["entity_ref"])
+    intent_name = binding.get("intent", "")
+    idempotency_key = entry.get("idempotency_key", "")
+    t0 = _time.monotonic()
+    result = _run_handler(handler, artifact_id, entry["binding_id"], entry["entity_ref"])
+    duration_ms = int((_time.monotonic() - t0) * 1000)
+
+    if idempotency_key:
+        _cache_result(idempotency_key, result)
+
+    ledger.append(
+        artifact_id=artifact_id, rev=artifact.get("rev", 0),
+        binding_id=entry["binding_id"], entity_ref=entry["entity_ref"],
+        intent=intent_name, idempotency_key=idempotency_key,
+        phase="confirm", outcome=result.get("status", "failed"),
+        reason=result.get("reason"), duration_ms=duration_ms, actor=actor,
+    )
+    return result
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────
