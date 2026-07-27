@@ -170,17 +170,19 @@ def _delete_linear_issue(artifact_id, binding_id, entity_ref):
 register_handler("linear.issue.delete", _delete_linear_issue)
 ```
 
-Wire it to a button by declaring the binding in the artifact:
+Wire it to a button by declaring the binding in the artifact. Declarations
+are stored **alongside** the content, not inside it — pass them through the
+`actions` parameter of `artifact.set` (RPC) or the artifact tool's `set`
+action (a JSON-array string). Do not embed them in the content body, wrap
+the content in a JSON envelope, or edit the artifact index on disk; for
+`html` kind the content stays the raw HTML document.
 
 ```json
-{
-  "id": "linear-issues",
-  "actions": [
-    {"type": "intent", "id": "delete-ticket", "label": "Delete",
-     "intent": "linear.issue.delete",
-     "presentation": {"role": "destructive"}}
-  ]
-}
+[
+  {"type": "intent", "id": "delete-ticket", "label": "Delete",
+   "intent": "linear.issue.delete",
+   "presentation": {"role": "destructive"}}
+]
 ```
 
 Each dataset row needs a `linear_id` field holding the real Linear issue ID

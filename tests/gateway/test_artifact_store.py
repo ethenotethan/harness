@@ -166,6 +166,61 @@ def test_agent_tool_surface(artifact_home):
     assert missing["success"] is False
 
 
+def test_agent_tool_actions_declarations(artifact_home):
+    """The agent tool's `actions` param (JSON string) reaches the store —
+    the declarations that make intent buttons resolvable, stored alongside
+    content, never inside it."""
+    import json as _json
+
+    from tools.artifact_tool import artifact_tool as _raw_tool
+
+    def artifact_tool(**kwargs):
+        return _json.loads(_raw_tool(**kwargs))
+
+    declarations = [{
+        "type": "intent", "id": "inspect-cron", "label": "Inspect",
+        "intent": "artifact.refresh", "presentation": {"role": "normal"},
+    }]
+    html_doc = (
+        '<!doctype html><button data-hermes-binding="inspect-cron" '
+        'data-hermes-entity="job-1">Inspect</button>'
+    )
+    result = artifact_tool(
+        action="set", id="cron-panel", kind="html", content=html_doc,
+        actions=_json.dumps(declarations), session_id="s1",
+    )
+    assert result["success"] is True
+
+    fetched = artifact_tool(action="get", id="cron-panel")
+    assert fetched["artifact"]["actions"] == declarations
+    # Content stays raw HTML — declarations never leak into the body.
+    assert fetched["artifact"]["content"] == html_doc
+
+    # A write that omits actions carries the stored declarations forward.
+    result = artifact_tool(
+        action="set", id="cron-panel", kind="html",
+        content=html_doc + "<!-- v2 -->", session_id="s1",
+    )
+    assert result["success"] is True
+    fetched = artifact_tool(action="get", id="cron-panel")
+    assert fetched["artifact"]["actions"] == declarations
+
+    # Invalid JSON is a tool error, not a silent drop (a dropped
+    # declaration would dead-button the artifact with no signal).
+    bad = artifact_tool(
+        action="set", id="cron-panel", kind="html", content=html_doc,
+        actions="not json",
+    )
+    assert bad["success"] is False and "actions" in bad["error"]
+
+    # A JSON value that isn't an array is rejected the same way.
+    bad = artifact_tool(
+        action="set", id="cron-panel", kind="html", content=html_doc,
+        actions='{"type": "intent"}',
+    )
+    assert bad["success"] is False and "actions" in bad["error"]
+
+
 def test_dataset_merge_unions_rows_by_key(artifact_home):
     from tui_gateway import artifact_store as store
 
