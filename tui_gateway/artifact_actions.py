@@ -62,6 +62,17 @@ Registered handlers (V1 slice)
     guarded, propagates to all readers via artifact.changed). Destructive;
     requires confirmation.
 
+``artifact.session.spawn``
+    Runs the intent as a *contained agent session* rather than executing
+    anything inline. It creates a session through the standard session
+    runtime (so tool policy, isolation, and live introspection all apply)
+    and returns the live ``session_id`` in its result, letting the client
+    click through into real-time introspection of the run. The initial
+    task is built server-side from the binding's author-declared template
+    and the entity resolved out of the pinned content (§0.2) — never from
+    the raw client-supplied ref. Whether it requires confirmation is
+    decided by the binding's ``presentation.role`` like any other intent.
+
 External integrations (e.g. ``linear.issue.delete``) are registered when
 their integration exists and are not part of this initial slice.
 """
@@ -168,7 +179,10 @@ def invoke(
     Returns a result dict with ``status`` in:
     ``needs_confirmation`` — destructive, requires confirm(); includes
         ``challenge`` and ``prompt``.
-    ``succeeded`` — handler ran successfully; optional ``message``.
+    ``succeeded`` — handler ran successfully; optional ``message``. A
+        handler that ran the intent as a contained agent session also
+        includes ``session_id`` (the live 8-char id), so the client can
+        click through into real-time introspection of that run.
     ``failed`` — handler returned an error; includes ``reason``.
     ``conflict`` — artifact changed since button rendered; client should
         refresh and retry.
@@ -406,6 +420,166 @@ def _handle_tombstone(artifact_id: str, binding_id: str, entity_ref: str) -> dic
         actions=artifact.get("actions"),
     )
     return {"status": "succeeded", "message": f"Tombstoned {entity_ref!r}."}
+
+
+@_handler("artifact.session.spawn")
+def _handle_session_spawn(artifact_id: str, binding_id: str, entity_ref: str) -> dict:
+    """Run the intent as a contained agent session and return its live id.
+
+    Instead of executing anything inline, this creates a session through the
+    standard session runtime and hands back the ``session_id``. The client
+    then navigates into that session for real-time introspection — the intent
+    becomes a scoped, tool-policied, observable agent run rather than a
+    one-off mutation. All arbitrary-execution risk is contained by the
+    session sandbox that already exists; this handler only spawns and links.
+
+    §0.2: the task the session is given is composed *server-side* from the
+    binding's author-declared ``session_prompt`` template and the entity
+    fields resolved out of the pinned artifact content. The raw client
+    ``entity_ref`` is used only as a lookup key, never interpolated as an
+    instruction. If the ref doesn't resolve to a stored entity, we fail
+    rather than spawn a session pointed at an attacker-controlled string.
+    """
+    from tui_gateway import artifact_store
+
+    artifact = artifact_store.get_artifact(artifact_id)
+    if artifact is None:
+        return {"status": "failed", "reason": "artifact not found"}
+
+    binding = _resolve_binding(artifact, binding_id)
+    if binding is None:
+        # invoke() already resolved this; defensive for direct/confirm calls.
+        return {"status": "unsupported"}
+
+    task = _compose_session_task(artifact, binding, entity_ref)
+    if task is None:
+        return {
+            "status": "failed",
+            "reason": f"entity {entity_ref!r} not found in {artifact.get('kind', '')} artifact",
+        }
+
+    title = binding.get("label") or f"{artifact.get('title') or artifact_id}"
+    try:
+        session_id = _spawn_session(task=task, title=title, artifact_id=artifact_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("artifact.session.spawn: session creation failed")
+        return {"status": "failed", "reason": f"could not start session: {exc}"}
+
+    if not session_id:
+        return {"status": "failed", "reason": "session runtime returned no session id"}
+
+    return {
+        "status": "succeeded",
+        "session_id": session_id,
+        "message": f"Started session for {binding.get('intent', binding_id)!r}.",
+    }
+
+
+def _compose_session_task(artifact: dict, binding: dict, entity_ref: str) -> Optional[str]:
+    """Build the initial task string for a spawned session, server-side.
+
+    The template comes from the binding's author-declared ``session_prompt``
+    (falls back to a generic instruction). Entity context is pulled from the
+    *stored* artifact content via ``entity_ref`` as a lookup key (§0.2) — the
+    raw ref is never spliced into the instruction. Returns None when an
+    ``entity_ref`` is supplied but resolves to no stored entity, so the caller
+    can fail closed instead of spawning against an unresolved target.
+    """
+    template = binding.get("session_prompt")
+    if not isinstance(template, str) or not template.strip():
+        template = "Carry out the requested action for this artifact."
+
+    if not entity_ref:
+        # Artifact-scoped intent (no per-row target).
+        return f"{template}\n\nArtifact: {artifact.get('title') or artifact.get('id', '')}"
+
+    entity = _lookup_entity(artifact, entity_ref)
+    if entity is None:
+        return None
+
+    # Only stored, artifact-declared fields reach the task — a compact JSON of
+    # the resolved entity, not the client string.
+    entity_json = json.dumps(entity, ensure_ascii=False, sort_keys=True)
+    return (
+        f"{template}\n\n"
+        f"Artifact: {artifact.get('title') or artifact.get('id', '')}\n"
+        f"Target entity (resolved from stored content): {entity_json}"
+    )
+
+
+def _lookup_entity(artifact: dict, entity_ref: str) -> Optional[dict]:
+    """Resolve ``entity_ref`` to a stored entity dict in the pinned content,
+    mirroring the addressing used by ``_tombstone_entity``. Returns None if the
+    ref matches no stored entity. Never returns the raw ref."""
+    kind = artifact.get("kind", "")
+    try:
+        obj = json.loads(artifact.get("content", "") or "{}")
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+    if kind == "dataset":
+        rows = obj.get("rows", [])
+        key_field = obj.get("key", "id")
+        target = entity_ref.strip().lower()
+        return next(
+            (row for row in rows
+             if str(row.get(key_field, "")).strip().lower() == target),
+            None,
+        )
+    if kind == "map":
+        target = entity_ref.strip().lower()
+        return next(
+            (m for m in obj.get("markers", [])
+             if str(m.get("label", "")).strip().lower() == target),
+            None,
+        )
+    if kind == "model":
+        parts = entity_ref.split("/", 1)
+        if len(parts) != 2:
+            return None
+        set_name, key_value = parts[0], parts[1].strip().lower()
+        sets = obj.get("entities")
+        if not isinstance(sets, dict) or set_name not in sets:
+            return None
+        set_obj = sets[set_name]
+        key_field = set_obj.get("key", "id")
+        return next(
+            (item for item in set_obj.get("items", [])
+             if str(item.get(key_field, "")).strip().lower() == key_value),
+            None,
+        )
+    return None
+
+
+def _spawn_session(task: str, title: str, artifact_id: str) -> Optional[str]:
+    """Create a live session through the standard session runtime and seed it
+    with ``task``. Returns the live ``session_id`` (8-char) the client drives.
+
+    Isolated behind one function so the single dependency on the ``server``
+    module (its in-process ``_methods`` dispatch) is easy to stub in tests and
+    doesn't leak the whole server surface into the intent engine.
+    """
+    from tui_gateway import server
+
+    create = server._methods.get("session.create")
+    if create is None:
+        raise RuntimeError("session.create not registered")
+
+    resp = create("artifact-intent", {
+        "title": title,
+        "source": "artifact",
+    })
+    session_id = (resp or {}).get("result", {}).get("session_id")
+    if not session_id:
+        return None
+
+    # Seed the initial task; the run streams in the background. Best-effort —
+    # the session exists and is navigable even if the seed prompt is slow.
+    submit = server._methods.get("prompt.submit")
+    if submit is not None:
+        submit("artifact-intent", {"session_id": session_id, "text": task})
+
+    return session_id
 
 
 def _tombstone_entity(content: str, kind: str, entity_ref: str) -> Optional[str]:
