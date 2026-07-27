@@ -23,7 +23,10 @@ register_handler("my.custom.action", _my_handler)
 
 A handler receives keyword arguments `artifact_id`, `binding_id`,
 `entity_ref` and returns a dict with `status` in
-`succeeded | failed` (plus optional `message` / `reason`).
+`succeeded | failed` (plus optional `message` / `reason`). A handler that
+runs the intent as a contained agent session (see below) additionally
+returns `session_id` on success — the client uses it to click through into
+live introspection of that run.
 
 ## Reloading — no gateway restart needed
 
@@ -90,6 +93,45 @@ the user confirms a native dialog that leads with the server-resolved intent
 name before the handler ever runs. The handler code itself needs nothing
 special; confirmation is enforced by the invocation engine, and an artifact
 cannot opt out of it.
+
+## Running an intent as a contained agent session
+
+Some intents can't be written as deterministic code in advance — the click
+should kick off *work* (investigate this row, draft a reply, reconcile this
+record) that only an agent can carry out. Rather than build a bespoke
+one-off executor and inherit all the arbitrary-execution risk, run the
+intent inside the standard session runtime: it gets the same sandbox, tool
+policy, and live introspection every session has, and the user can watch it.
+
+The built-in `artifact.session.spawn` handler does exactly this. It creates a
+session, seeds it with a task, and returns the live `session_id`:
+
+```json
+[
+  {"type": "intent", "id": "investigate", "label": "Investigate",
+   "intent": "artifact.session.spawn",
+   "session_prompt": "Investigate this row and report what you find.",
+   "presentation": {"role": "normal"}}
+]
+```
+
+- `session_prompt` (author-declared) is the task **template**. It is combined
+  server-side with the entity resolved out of the pinned content — the raw
+  client `entity_ref` is a lookup key only, never spliced into the
+  instruction (same rule as every handler). An `entity_ref` that resolves to
+  no stored entity fails closed; it never spawns a session pointed at an
+  attacker-controlled string.
+- On success the result carries `session_id` (the live 8-char id). The client
+  turns the success state into a click-through that navigates into that
+  session for real-time introspection.
+- Confirmation still applies: mark the binding `"role": "destructive"` and the
+  session is created only after the user confirms. The gate runs in the
+  invocation engine, before the handler — an artifact can't opt out.
+
+A custom session-spawning handler follows the same shape: resolve the entity
+from stored content, compose the task server-side, create the session through
+the runtime, and return its id. Never build the task from the raw
+`entity_ref`.
 
 ## Reference plugin: linear.issue.delete
 
@@ -210,5 +252,6 @@ file and the previous handlers are still live.
 ## Overriding built-ins
 
 Registering the same intent name as a built-in (`artifact.refresh`,
-`artifact.entity.tombstone`) deliberately replaces it. Files load
-alphabetically; on a name conflict between plugin files, the last file wins.
+`artifact.entity.tombstone`, `artifact.session.spawn`) deliberately replaces
+it. Files load alphabetically; on a name conflict between plugin files, the
+last file wins.

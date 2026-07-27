@@ -365,6 +365,166 @@ def test_refresh_with_maintainer_declared(artifact_home):
     assert "maintainer" in result.get("message", "").lower()
 
 
+# ── session-spawn handler ──────────────────────────────────────────────────
+
+
+class _FakeMethods(dict):
+    """Stand-in for server._methods that records session.create / prompt.submit
+    calls and hands back a fixed live session_id — no real runtime spun up."""
+
+    def __init__(self, session_id="abc12345"):
+        super().__init__()
+        self.session_id = session_id
+        self.created = []
+        self.submitted = []
+        self["session.create"] = self._create
+        self["prompt.submit"] = self._submit
+
+    def _create(self, rid, params):
+        self.created.append(params)
+        return {"result": {"session_id": self.session_id}}
+
+    def _submit(self, rid, params):
+        self.submitted.append(params)
+        return {"result": {"status": "streaming"}}
+
+
+@pytest.fixture()
+def fake_server_methods(monkeypatch):
+    from tui_gateway import server
+    fake = _FakeMethods()
+    monkeypatch.setattr(server, "_methods", fake, raising=False)
+    return fake
+
+
+def test_session_spawn_returns_live_session_id(artifact_home, fake_server_methods):
+    from tui_gateway import artifact_actions as aa
+
+    actions = [{"type": "intent", "id": "investigate", "label": "Investigate",
+                "intent": "artifact.session.spawn",
+                "session_prompt": "Investigate this issue.",
+                "presentation": {"role": "normal"}}]
+    stored = _make_artifact(artifact_home, actions=actions)
+
+    result = aa.invoke(
+        artifact_id="test-art",
+        artifact_rev=stored["rev"],
+        binding_id="investigate",
+        entity_ref="alice",
+        idempotency_key="key-spawn-1",
+    )
+    assert result["status"] == "succeeded"
+    # The live session id flows back so the client can click through.
+    assert result["session_id"] == "abc12345"
+    assert fake_server_methods.created, "a session should have been created"
+
+
+def test_session_spawn_seeds_task_from_stored_entity_not_raw_ref(
+    artifact_home, fake_server_methods
+):
+    """§0.2: the seeded task is composed from the resolved stored entity, and
+    the raw client entity_ref is not spliced in as an instruction."""
+    from tui_gateway import artifact_actions as aa
+
+    actions = [{"type": "intent", "id": "investigate", "label": "Investigate",
+                "intent": "artifact.session.spawn",
+                "session_prompt": "Investigate this row.",
+                "presentation": {"role": "normal"}}]
+    stored = _make_artifact(artifact_home, actions=actions)
+
+    aa.invoke(
+        artifact_id="test-art",
+        artifact_rev=stored["rev"],
+        binding_id="investigate",
+        entity_ref="alice",  # lookup key; matches row {"name": "Alice"}
+        idempotency_key="key-spawn-2",
+    )
+    assert fake_server_methods.submitted, "an initial task should be seeded"
+    task = fake_server_methods.submitted[0]["text"]
+    assert "Investigate this row." in task           # author template
+    assert "Alice" in task                            # resolved stored field
+    assert "resolved from stored content" in task     # provenance marker
+
+
+def test_session_spawn_unresolved_entity_fails_closed(
+    artifact_home, fake_server_methods
+):
+    """An entity_ref that resolves to no stored entity must fail, not spawn a
+    session pointed at an attacker-controlled string."""
+    from tui_gateway import artifact_actions as aa
+
+    actions = [{"type": "intent", "id": "investigate", "label": "Investigate",
+                "intent": "artifact.session.spawn",
+                "presentation": {"role": "normal"}}]
+    stored = _make_artifact(artifact_home, actions=actions)
+
+    result = aa.invoke(
+        artifact_id="test-art",
+        artifact_rev=stored["rev"],
+        binding_id="investigate",
+        entity_ref="nonesuch",  # not a row in the artifact
+        idempotency_key="key-spawn-3",
+    )
+    assert result["status"] == "failed"
+    assert not fake_server_methods.created, "no session should be created"
+
+
+def test_session_spawn_artifact_scoped_needs_no_entity(
+    artifact_home, fake_server_methods
+):
+    """With no entity_ref the intent is artifact-scoped and still spawns."""
+    from tui_gateway import artifact_actions as aa
+
+    actions = [{"type": "intent", "id": "summarize", "label": "Summarize",
+                "intent": "artifact.session.spawn",
+                "session_prompt": "Summarize this artifact.",
+                "presentation": {"role": "normal"}}]
+    stored = _make_artifact(artifact_home, actions=actions)
+
+    result = aa.invoke(
+        artifact_id="test-art",
+        artifact_rev=stored["rev"],
+        binding_id="summarize",
+        entity_ref="",
+        idempotency_key="key-spawn-4",
+    )
+    assert result["status"] == "succeeded"
+    assert result["session_id"] == "abc12345"
+
+
+def test_session_spawn_destructive_requires_confirmation(
+    artifact_home, fake_server_methods
+):
+    """Session spawning honors the confirmation gate like any other intent:
+    a destructive binding must confirm before the session is created."""
+    from tui_gateway import artifact_actions as aa
+
+    actions = [{"type": "intent", "id": "purge", "label": "Purge",
+                "intent": "artifact.session.spawn",
+                "session_prompt": "Purge this row.",
+                "presentation": {"role": "destructive"}}]
+    stored = _make_artifact(artifact_home, actions=actions)
+
+    invoke_result = aa.invoke(
+        artifact_id="test-art",
+        artifact_rev=stored["rev"],
+        binding_id="purge",
+        entity_ref="alice",
+        idempotency_key="key-spawn-5",
+    )
+    assert invoke_result["status"] == "needs_confirmation"
+    # No session created before confirmation.
+    assert not fake_server_methods.created
+
+    confirm_result = aa.confirm(
+        artifact_id="test-art",
+        challenge=invoke_result["challenge"],
+    )
+    assert confirm_result["status"] == "succeeded"
+    assert confirm_result["session_id"] == "abc12345"
+    assert fake_server_methods.created, "session created only after confirm"
+
+
 # ── actions persisted through artifact store ──────────────────────────────
 
 
