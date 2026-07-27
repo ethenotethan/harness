@@ -238,6 +238,21 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     if tool_guidance:
         stable_parts.append(" ".join(tool_guidance))
 
+    # Fork-specific native primitives (artifacts registry, LLM wiki, news
+    # feed). Each block is multi-paragraph and independently gated on its
+    # capability being present, so they go in as their own stable_parts rather
+    # than merged into the space-joined tool_guidance line. Gating is what
+    # keeps this from bloating prompts on surfaces that lack the capability —
+    # and keeps agent self-knowledge in lockstep with what a fork actually
+    # ships. See agent/native_guidance.py for the extension contract.
+    try:
+        from agent.native_guidance import native_guidance_blocks
+
+        stable_parts.extend(native_guidance_blocks(agent.valid_tool_names))
+    except Exception:
+        # Native-guidance assembly must never block prompt build.
+        pass
+
     # Steering only lands inside tool results, so it's only reachable when the
     # agent has tools. Static text → byte-stable prompt (no cache hit).
     if agent.valid_tool_names:

@@ -144,4 +144,102 @@ class TestTelegramRichMessagesHint:
             mock_cfg.return_value = {}
             stable = _stable_prompt(agent)
         assert "Standard Markdown is automatically converted" in stable
+
+
+class TestNativeGuidanceGating:
+    """Each fork-specific native-primitive block appears only when its
+    capability is present. See agent/native_guidance.py."""
+
+    def test_artifact_block_gated_on_artifact_tool(self):
+        from agent.native_guidance import native_guidance_blocks, ARTIFACT_GUIDANCE
+
+        assert ARTIFACT_GUIDANCE in native_guidance_blocks(
+            ["artifact"], wiki_is_present=False
+        )
+        assert ARTIFACT_GUIDANCE not in native_guidance_blocks(
+            ["read_file"], wiki_is_present=False
+        )
+
+    def test_feed_block_gated_on_feed_publish_tool(self):
+        from agent.native_guidance import native_guidance_blocks, FEED_GUIDANCE
+
+        assert FEED_GUIDANCE in native_guidance_blocks(
+            ["feed_publish"], wiki_is_present=False
+        )
+        assert FEED_GUIDANCE not in native_guidance_blocks(
+            ["artifact"], wiki_is_present=False
+        )
+
+    def test_wiki_block_gated_on_wiki_presence(self):
+        from agent.native_guidance import native_guidance_blocks, WIKI_GUIDANCE
+
+        assert WIKI_GUIDANCE in native_guidance_blocks([], wiki_is_present=True)
+        assert WIKI_GUIDANCE not in native_guidance_blocks([], wiki_is_present=False)
+
+    def test_wiki_present_false_when_no_wiki_dir(self, monkeypatch, tmp_path):
+        from agent import native_guidance
+
+        # No registry, no $WIKI_PATH, and a HOME with no ~/wiki → absent.
+        monkeypatch.delenv("WIKI_PATH", raising=False)
+        monkeypatch.setattr(
+            native_guidance, "resolve_wiki", None, raising=False
+        )
+        with patch(
+            "tui_gateway.wiki_api.resolve_wiki",
+            return_value=str(tmp_path / "no-such-wiki"),
+        ):
+            assert native_guidance.wiki_present() is False
+
+    def test_blocks_ordered_artifact_wiki_feed(self):
+        from agent.native_guidance import (
+            native_guidance_blocks,
+            ARTIFACT_GUIDANCE,
+            WIKI_GUIDANCE,
+            FEED_GUIDANCE,
+        )
+
+        blocks = native_guidance_blocks(
+            ["artifact", "feed_publish"], wiki_is_present=True
+        )
+        assert blocks == [ARTIFACT_GUIDANCE, WIKI_GUIDANCE, FEED_GUIDANCE]
+
+    def test_injected_into_stable_prompt_when_artifact_tool_present(self):
+        agent = _make_agent(valid_tool_names=["artifact"], platform="tui")
+        with patch("agent.native_guidance.wiki_present", return_value=False):
+            stable = _stable_prompt(agent)
+        assert "Living artifacts" in stable
+        assert "data-hermes-binding" in stable
+        assert "News feed" not in stable  # feed_publish absent
+
+    def test_absent_from_stable_prompt_without_native_tools(self):
+        agent = _make_agent(valid_tool_names=["read_file"], platform="tui")
+        with patch("agent.native_guidance.wiki_present", return_value=False):
+            stable = _stable_prompt(agent)
+        assert "Living artifacts" not in stable
+        assert "LLM wiki" not in stable
+        assert "News feed" not in stable
+
+
+class TestNativeSelfUpdateHint:
+    """The self-update flow rides on the tui/desktop platform hints and tells
+    the agent to hand the restart back to the user."""
+
+    def test_present_on_tui(self):
+        agent = _make_agent(platform="tui")
+        with patch("agent.native_guidance.wiki_present", return_value=False):
+            stable = _stable_prompt(agent)
+        assert "Self-update" in stable
+        assert "restart the gateway yourself" in stable
+
+    def test_present_on_desktop(self):
+        agent = _make_agent(platform="desktop")
+        with patch("agent.native_guidance.wiki_present", return_value=False):
+            stable = _stable_prompt(agent)
+        assert "Self-update" in stable
+
+    def test_absent_on_messaging_platform(self):
+        agent = _make_agent(platform="telegram")
+        with patch("agent.native_guidance.wiki_present", return_value=False):
+            stable = _stable_prompt(agent)
+        assert "Self-update" not in stable
         assert "lean into it" not in stable

@@ -16067,6 +16067,33 @@ def _(rid, params: dict) -> dict:
         return _err(rid, 5218, str(e))
 
 
+@method("gateway.restart")
+def _(rid, params: dict) -> dict:
+    """Re-exec the gateway process in place, loading all updated source files.
+
+    Use after pulling new code onto the gateway host — the response is sent
+    before the process replaces itself, so callers receive it reliably.
+
+    The native app will experience a WebSocket disconnect followed by the
+    standard reconnect sequence. On reconnect, gateway.capabilities will
+    reflect any new capabilities added by the update.
+
+    Safe to call from an agent tool (e.g. after ``git pull`` updates the
+    fork). The process re-execs with the same ``sys.argv`` and inherits
+    the environment, so all env vars (LINEAR_API_KEY, HERMES_HOME, etc.)
+    are preserved.
+    """
+    import threading
+
+    def _do_restart():
+        import time
+        time.sleep(0.15)  # let the response frame flush through the transport
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+    threading.Thread(target=_do_restart, daemon=True).start()
+    return _ok(rid, {"status": "restarting"})
+
+
 @method("gateway.capabilities")
 def _(rid, params: dict) -> dict:
     """Report gateway capabilities so native clients can feature-gate
@@ -16096,6 +16123,7 @@ def _(rid, params: dict) -> dict:
             "artifact.action.confirm",
             "artifact.action.reload",
             "artifact.action.log",
+            "gateway.restart",
             "wiki.scan",
             "wiki.page",
             "wiki.list",

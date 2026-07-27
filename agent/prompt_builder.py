@@ -626,6 +626,22 @@ STEER_CHANNEL_NOTE = (
 # message representation stays consistent ("system" everywhere).
 DEVELOPER_ROLE_MODELS = ("gpt-5", "codex")
 
+# The self-update flow is channel-specific — it names the native app's
+# "Restart Gateway" control — so it lives with the tui/desktop platform
+# hints rather than in the tool-gated native_guidance blocks. The agent
+# pulls the fork with its shell tools but never restarts the gateway
+# itself (a restart is human-triggered from the native app); this line
+# tells it to hand the restart back to the user.
+NATIVE_SELF_UPDATE_HINT = (
+    "\n\nSelf-update: to apply a new version of the researchoors fork, run "
+    "`git pull` in the gateway's install directory, then tell the user to "
+    "restart the gateway (the native app has a Restart Gateway control). Do "
+    "NOT attempt to restart the gateway yourself — the restart is the user's "
+    "to trigger. Your ~/.hermes/ data — sessions, memories, skills, the "
+    "invocations ledger, and action plugins — is never touched by a restart; "
+    "after it, all newly pulled capabilities are live."
+)
+
 PLATFORM_HINTS = {
     "whatsapp": (
         "You are on a text messaging communication platform, WhatsApp. "
@@ -739,6 +755,7 @@ PLATFORM_HINTS = {
         "target a gateway-connected messaging platform (e.g. deliver='telegram' "
         "or 'all'). Do not promise the user that a deliver='origin' or "
         "default-deliver cron job will message them in this session."
+        + NATIVE_SELF_UPDATE_HINT
     ),
     "desktop": (
         "You are chatting inside the Hermes desktop app — a graphical chat "
@@ -750,6 +767,7 @@ PLATFORM_HINTS = {
         "video play inline, and other files arrive as download links. You can "
         "also include image URLs in markdown format ![alt](url) and they "
         "render inline as photos."
+        + NATIVE_SELF_UPDATE_HINT
     ),
     "sms": (
         "You are communicating via SMS. Keep responses concise and use plain text "
