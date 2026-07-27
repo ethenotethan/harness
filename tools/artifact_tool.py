@@ -36,6 +36,7 @@ def artifact_tool(
     content: str = "",
     title: str = "",
     replace: bool = False,
+    actions: str = "",
     session_id: str = "",
 ) -> str:
     """Execute an artifact action against the shared store.
@@ -48,7 +49,8 @@ def artifact_tool(
     return json.dumps(
         _artifact_tool_impl(
             action, id=id, kind=kind, content=content,
-            title=title, replace=replace, session_id=session_id,
+            title=title, replace=replace, actions=actions,
+            session_id=session_id,
         ),
         ensure_ascii=False,
         default=str,
@@ -62,6 +64,7 @@ def _artifact_tool_impl(
     content: str = "",
     title: str = "",
     replace: bool = False,
+    actions: str = "",
     session_id: str = "",
 ) -> dict:
     from tui_gateway import artifact_store
@@ -84,6 +87,25 @@ def _artifact_tool_impl(
                     "success": False,
                     "error": f"kind must be one of {sorted(VALID_KINDS)}",
                 }
+            # Action declarations arrive as a JSON string (tool params are
+            # scalars). None (omitted) carries the stored declarations
+            # forward; a present-but-invalid string is an error, not a
+            # silent drop — a dropped declaration would dead-button the
+            # artifact with no signal to the model.
+            parsed_actions = None
+            if actions.strip():
+                try:
+                    parsed_actions = json.loads(actions)
+                except ValueError:
+                    return {
+                        "success": False,
+                        "error": "actions must be a JSON array of action declarations",
+                    }
+                if not isinstance(parsed_actions, list):
+                    return {
+                        "success": False,
+                        "error": "actions must be a JSON array of action declarations",
+                    }
             stored = artifact_store.set_artifact(
                 artifact_id=id,
                 kind=normalized_kind,
@@ -91,6 +113,7 @@ def _artifact_tool_impl(
                 title=title or None,
                 updated_by=f"agent:{session_id}" if session_id else "agent",
                 replace=bool(replace),
+                actions=parsed_actions,
             )
             _emit_changed(stored)
             summary = {k: v for k, v in stored.items() if k != "content"}
@@ -193,6 +216,20 @@ ARTIFACT_SCHEMA = {
             "replace": {
                 "type": "boolean",
                 "description": "Skip per-kind merge and overwrite outright (default false)",
+            },
+            "actions": {
+                "type": "string",
+                "description": (
+                    "JSON array of action declarations for the artifact's "
+                    "native controls, stored alongside content (NOT inside "
+                    "it). Intent buttons: [{\"type\": \"intent\", \"id\": "
+                    "\"delete-ticket\", \"label\": \"Delete\", \"intent\": "
+                    "\"linear.issue.delete\", \"presentation\": {\"role\": "
+                    "\"destructive\"}}]. In html-kind content, wire elements "
+                    "to a declaration via data-hermes-binding=\"<id>\" and "
+                    "data-hermes-entity=\"<row-key>\". Omit to carry the "
+                    "stored declarations forward unchanged."
+                ),
             },
         },
         "required": ["action"],
