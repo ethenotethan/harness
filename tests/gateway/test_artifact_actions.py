@@ -370,11 +370,18 @@ def test_refresh_with_maintainer_declared(artifact_home):
 
 class _FakeMethods(dict):
     """Stand-in for server._methods that records session.create / prompt.submit
-    calls and hands back a fixed live session_id — no real runtime spun up."""
+    calls and hands back a fixed live session_id — no real runtime spun up.
 
-    def __init__(self, session_id="abc12345"):
+    ``session.create`` returns both the short runtime ``session_id`` and the
+    long ``stored_session_id`` (the stable database key) so the spawn handler's
+    id selection can be exercised. Pass ``stored_session_id=None`` to model an
+    older runtime that omits the database id (fallback path)."""
+
+    def __init__(self, session_id="abc12345",
+                 stored_session_id="20260101_000000_abcdef"):
         super().__init__()
         self.session_id = session_id
+        self.stored_session_id = stored_session_id
         self.created = []
         self.submitted = []
         self["session.create"] = self._create
@@ -382,7 +389,10 @@ class _FakeMethods(dict):
 
     def _create(self, rid, params):
         self.created.append(params)
-        return {"result": {"session_id": self.session_id}}
+        result = {"session_id": self.session_id}
+        if self.stored_session_id is not None:
+            result["stored_session_id"] = self.stored_session_id
+        return {"result": result}
 
     def _submit(self, rid, params):
         self.submitted.append(params)
@@ -414,9 +424,39 @@ def test_session_spawn_returns_live_session_id(artifact_home, fake_server_method
         idempotency_key="key-spawn-1",
     )
     assert result["status"] == "succeeded"
-    # The live session id flows back so the client can click through.
-    assert result["session_id"] == "abc12345"
+    # The stable database id flows back so the client can click through: its
+    # navigation resolves against session.list rows, which carry only the
+    # database id — never the short runtime id.
+    assert result["session_id"] == "20260101_000000_abcdef"
     assert fake_server_methods.created, "a session should have been created"
+    # …but the task is seeded against the short runtime id, the correct handle
+    # for the in-memory prompt.submit dispatch.
+    assert fake_server_methods.submitted[0]["session_id"] == "abc12345"
+
+
+def test_session_spawn_falls_back_to_runtime_id_without_db_id(artifact_home, monkeypatch):
+    """A runtime that returns no stored_session_id (older gateway) still yields
+    a usable click-through id — the short runtime id."""
+    from tui_gateway import server, artifact_actions as aa
+
+    fake = _FakeMethods(stored_session_id=None)
+    monkeypatch.setattr(server, "_methods", fake, raising=False)
+
+    actions = [{"type": "intent", "id": "investigate", "label": "Investigate",
+                "intent": "artifact.session.spawn",
+                "session_prompt": "Investigate this issue.",
+                "presentation": {"role": "normal"}}]
+    stored = _make_artifact(artifact_home, actions=actions)
+
+    result = aa.invoke(
+        artifact_id="test-art",
+        artifact_rev=stored["rev"],
+        binding_id="investigate",
+        entity_ref="alice",
+        idempotency_key="key-spawn-fallback",
+    )
+    assert result["status"] == "succeeded"
+    assert result["session_id"] == "abc12345"
 
 
 def test_session_spawn_seeds_task_from_stored_entity_not_raw_ref(
@@ -489,7 +529,7 @@ def test_session_spawn_artifact_scoped_needs_no_entity(
         idempotency_key="key-spawn-4",
     )
     assert result["status"] == "succeeded"
-    assert result["session_id"] == "abc12345"
+    assert result["session_id"] == "20260101_000000_abcdef"
 
 
 def test_session_spawn_destructive_requires_confirmation(
@@ -521,7 +561,7 @@ def test_session_spawn_destructive_requires_confirmation(
         challenge=invoke_result["challenge"],
     )
     assert confirm_result["status"] == "succeeded"
-    assert confirm_result["session_id"] == "abc12345"
+    assert confirm_result["session_id"] == "20260101_000000_abcdef"
     assert fake_server_methods.created, "session created only after confirm"
 
 

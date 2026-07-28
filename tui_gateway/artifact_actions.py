@@ -553,7 +553,20 @@ def _lookup_entity(artifact: dict, entity_ref: str) -> Optional[dict]:
 
 def _spawn_session(task: str, title: str, artifact_id: str) -> Optional[str]:
     """Create a live session through the standard session runtime and seed it
-    with ``task``. Returns the live ``session_id`` (8-char) the client drives.
+    with ``task``. Returns the session's stable database id (the id
+    ``session.list`` exposes and ``session.resume`` accepts), so the client
+    can click through to the spawned run.
+
+    ``session.create`` returns two ids: the short 8-char runtime ``session_id``
+    that drives in-memory RPCs (``prompt.submit`` etc.), and the long
+    ``stored_session_id`` (``YYYYMMDD_HHMMSS_xxxxxx``) that is the session's
+    stable key in ``session.list``. We seed the task with the runtime id but
+    hand the client the database id: the client's navigation resolves a session
+    against list rows, which carry only the database id — a runtime id it has
+    never seen (this session was spawned server-side, so the client never ran
+    ``session.create`` to learn the mapping) would silently fail to resolve.
+    Fall back to the runtime id when no database id is present (e.g. test
+    doubles that only model the runtime id).
 
     Isolated behind one function so the single dependency on the ``server``
     module (its in-process ``_methods`` dispatch) is easy to stub in tests and
@@ -569,17 +582,20 @@ def _spawn_session(task: str, title: str, artifact_id: str) -> Optional[str]:
         "title": title,
         "source": "artifact",
     })
-    session_id = (resp or {}).get("result", {}).get("session_id")
-    if not session_id:
+    result = (resp or {}).get("result", {})
+    runtime_id = result.get("session_id")
+    if not runtime_id:
         return None
 
     # Seed the initial task; the run streams in the background. Best-effort —
     # the session exists and is navigable even if the seed prompt is slow.
+    # The runtime id is the correct handle for in-memory dispatch here.
     submit = server._methods.get("prompt.submit")
     if submit is not None:
-        submit("artifact-intent", {"session_id": session_id, "text": task})
+        submit("artifact-intent", {"session_id": runtime_id, "text": task})
 
-    return session_id
+    # Prefer the stable database id for the client's click-through.
+    return result.get("stored_session_id") or runtime_id
 
 
 def _tombstone_entity(content: str, kind: str, entity_ref: str) -> Optional[str]:
