@@ -3627,6 +3627,11 @@ def run_job(
     )
     for _var_name in _cron_delivery_vars:
         _VAR_MAP[_var_name].set("")
+    # Attribute this context to the job so provenance-aware writers (the
+    # artifact tool's updated_by stamp + self-declared maintainers merge)
+    # credit the JOB, not the synthetic per-run session id. Cleared in the
+    # finally alongside the delivery vars.
+    _VAR_MAP["HERMES_CRON_JOB_ID"].set(job_id)
 
     # Per-job working directory — _SESSION_CWD was already set via
     # set_session_vars(cwd=...) above. Here we only handle the
@@ -4488,6 +4493,7 @@ def run_job(
             exit_non_dispatcher_owned_context(_non_dispatcher_token)
         for _var_name in _cron_delivery_vars:
             _VAR_MAP[_var_name].set("")
+        _VAR_MAP["HERMES_CRON_JOB_ID"].set("")
         if _session_db:
             # Compression can rotate the live agent onto a continuation while
             # this run is in flight. Finalize that continuation, not the stale
