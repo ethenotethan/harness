@@ -245,6 +245,30 @@ def merge_content(kind: str, existing: str, incoming: str) -> str:
     return incoming
 
 
+def _declare_maintainer(content: str, updated_by: str) -> str:
+    """Self-declared maintenance: a ``cron:<jobId>`` writer merges itself into
+    the content's top-level ``maintainers`` array. The link exists because the
+    cron actually tends the artifact — no human wiring required. Non-cron
+    writers and non-JSON-object content (markdown/html/table bodies) pass
+    through untouched; provenance must never brick a write.
+    """
+    if not updated_by.startswith("cron:"):
+        return content
+    try:
+        parsed = json.loads(content)
+    except ValueError:
+        return content
+    if not isinstance(parsed, dict):
+        return content
+    declared = parsed.get("maintainers")
+    maintainers = [m for m in declared if isinstance(m, str)] if isinstance(declared, list) else []
+    if updated_by in maintainers:
+        return content
+    maintainers.append(updated_by)
+    parsed["maintainers"] = maintainers
+    return json.dumps(parsed, ensure_ascii=False, sort_keys=True)
+
+
 # ── Operations ───────────────────────────────────────────────────────────
 
 
@@ -284,6 +308,10 @@ def set_artifact(
 
         if existing and not replace and existing.get("kind") == kind:
             content = merge_content(kind, existing.get("content", ""), content)
+
+        # After the merge (and also on replace) so the declaration lands in
+        # what's actually stored, even when the incoming body omitted it.
+        content = _declare_maintainer(content, updated_by or "")
 
         # Carry existing actions forward when the caller doesn't supply new ones.
         stored_actions = actions if actions is not None else (existing or {}).get("actions")

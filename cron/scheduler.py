@@ -2956,6 +2956,11 @@ def run_job(
     )
     for _var_name in _cron_delivery_vars:
         _VAR_MAP[_var_name].set("")
+    # Attribute this context to the job so provenance-aware writers (the
+    # artifact tool's updated_by stamp + self-declared maintainers merge)
+    # credit the JOB, not the synthetic per-run session id. Cleared in the
+    # finally alongside the delivery vars.
+    _VAR_MAP["HERMES_CRON_JOB_ID"].set(job_id)
 
     # Per-job working directory.  When set (and validated at create/update
     # time), we point TERMINAL_CWD at it so:
@@ -3607,6 +3612,7 @@ def run_job(
         clear_session_vars(_ctx_tokens)
         for _var_name in _cron_delivery_vars:
             _VAR_MAP[_var_name].set("")
+        _VAR_MAP["HERMES_CRON_JOB_ID"].set("")
         if _session_db:
             # Title the cron session from the job (name -> id) and PERSIST it
             # BEFORE end_session()/close() tear the connection down, so the

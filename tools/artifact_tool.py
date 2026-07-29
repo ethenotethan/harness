@@ -111,7 +111,7 @@ def _artifact_tool_impl(
                 kind=normalized_kind,
                 content=content,
                 title=title or None,
-                updated_by=f"agent:{session_id}" if session_id else "agent",
+                updated_by=_writer_stamp(session_id),
                 replace=bool(replace),
                 actions=parsed_actions,
             )
@@ -136,6 +136,26 @@ def _artifact_tool_impl(
     except Exception as exc:  # noqa: BLE001 — tool results must not raise
         logger.exception("artifact tool failed")
         return {"success": False, "error": str(exc)}
+
+
+def _writer_stamp(session_id: str) -> str:
+    """Provenance stamp for this write: WHO is revising the artifact.
+
+    ``cron:<jobId>`` when a cron job's run is driving the agent (read from the
+    per-job ContextVar the scheduler sets) — the store then also self-declares
+    the job in the artifact's ``maintainers``. Otherwise ``session:<id>`` for
+    a normal agent session, or bare ``agent`` when no session id is known
+    (e.g. the MCP transport path).
+    """
+    try:
+        from gateway.session_context import get_session_env
+
+        cron_job_id = get_session_env("HERMES_CRON_JOB_ID")
+    except Exception:  # noqa: BLE001 — provenance must never fail the write
+        cron_job_id = ""
+    if cron_job_id:
+        return f"cron:{cron_job_id}"
+    return f"session:{session_id}" if session_id else "agent"
 
 
 def _emit_changed(payload: dict) -> None:
