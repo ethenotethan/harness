@@ -564,7 +564,7 @@ def _validate_cron_script_path(script: Optional[str]) -> Optional[str]:
     return None
 
 
-def _format_job(job: Dict[str, Any]) -> Dict[str, Any]:
+def _format_job(job: Dict[str, Any], *, full_prompt: bool = False) -> Dict[str, Any]:
     prompt = str(job.get("prompt") or "")
     skills = _canonical_skills(job.get("skill"), job.get("skills"))
     job_id = str(job.get("id") or "unknown")
@@ -590,6 +590,10 @@ def _format_job(job: Dict[str, Any]) -> Dict[str, Any]:
         "paused_at": job.get("paused_at"),
         "paused_reason": job.get("paused_reason"),
     }
+    # Only `describe` carries the whole prompt — `list` stays preview-only so a
+    # session with many large-prompt jobs doesn't ship every prompt on refresh.
+    if full_prompt:
+        result["prompt"] = prompt
     if job.get("script"):
         result["script"] = job["script"]
     if job.get("no_agent"):
@@ -677,6 +681,7 @@ def cronjob(
     workdir: Optional[str] = None,
     no_agent: Optional[bool] = None,
     attach_to_session: Optional[bool] = None,
+    limit: Optional[int] = None,
     task_id: str = None,
 ) -> str:
     """Unified cron job management tool."""
@@ -806,6 +811,32 @@ def cronjob(
             )
         # Resolve to canonical ID (supports name-based lookup)
         job_id = job["id"]
+
+        if normalized == "describe":
+            # The full, untruncated prompt for one job. `list` only returns a
+            # 100-char preview to keep the list small; clients call `describe`
+            # when a card is expanded to fetch the whole prompt for display/edit.
+            return json.dumps(
+                {"success": True, "job": _format_job(job, full_prompt=True)},
+                indent=2,
+            )
+
+        if normalized == "history":
+            # Durable per-run execution ledger for one job: real started/finished
+            # timestamps, status, and error — the run stats a job's scalar
+            # last_run_at/last_status can't express. Newest-first.
+            try:
+                from cron.executions import list_executions
+            except Exception:
+                return json.dumps(
+                    {"success": True, "job_id": job_id, "runs": []}, indent=2
+                )
+            capped = 50 if limit is None else max(1, min(int(limit), 500))
+            runs = list_executions(job_id=job_id, limit=capped)
+            return json.dumps(
+                {"success": True, "job_id": job_id, "count": len(runs), "runs": runs},
+                indent=2,
+            )
 
         if normalized == "remove":
             removed = remove_job(job_id)

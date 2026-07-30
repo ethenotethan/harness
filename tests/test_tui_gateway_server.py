@@ -10310,3 +10310,76 @@ def test_get_usage_clamps_post_compression_sentinel():
     usage = server._get_usage(agent)
     assert "context_used" not in usage
     assert "context_percent" not in usage
+
+
+class TestCronManageActions:
+    """`cron.manage` dispatch: the actions the Portal cron cards rely on —
+    full-prompt describe, run-history, and prompt update — plus the unknown
+    guard."""
+
+    @pytest.fixture(autouse=True)
+    def _cron_dirs(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("cron.jobs.CRON_DIR", tmp_path / "cron")
+        monkeypatch.setattr("cron.jobs.JOBS_FILE", tmp_path / "cron" / "jobs.json")
+        monkeypatch.setattr("cron.jobs.OUTPUT_DIR", tmp_path / "cron" / "output")
+        monkeypatch.setattr(
+            "cron.executions.EXECUTIONS_FILE", tmp_path / "cron" / "executions.db"
+        )
+
+    def _make_job(self, prompt: str) -> str:
+        from tools.cronjob_tools import cronjob
+
+        created = json.loads(
+            cronjob(action="create", prompt=prompt, schedule="every 1h", name="Job")
+        )
+        return created["job_id"]
+
+    def test_describe_returns_full_prompt(self):
+        long_prompt = "Do the thing. " + ("detail " * 60)
+        job_id = self._make_job(long_prompt)
+
+        resp = server.dispatch(
+            {"id": "1", "method": "cron.manage",
+             "params": {"action": "describe", "name": job_id}}
+        )
+        assert resp["result"]["success"] is True
+        assert resp["result"]["job"]["prompt"] == long_prompt
+
+    def test_history_returns_runs(self):
+        job_id = self._make_job("Check")
+        from cron import executions
+
+        rec = executions.create_execution(job_id, source="test")
+        executions.mark_execution_running(rec["id"])
+        executions.finish_execution(rec["id"], success=True)
+
+        resp = server.dispatch(
+            {"id": "2", "method": "cron.manage",
+             "params": {"action": "history", "name": job_id}}
+        )
+        assert resp["result"]["success"] is True
+        assert resp["result"]["count"] == 1
+        assert resp["result"]["runs"][0]["status"] == "completed"
+
+    def test_update_persists_new_prompt(self):
+        job_id = self._make_job("Old prompt")
+
+        resp = server.dispatch(
+            {"id": "3", "method": "cron.manage",
+             "params": {"action": "update", "name": job_id, "prompt": "New longer prompt"}}
+        )
+        assert resp["result"]["success"] is True
+
+        # describe reflects the edit — proving update actually reached storage.
+        described = server.dispatch(
+            {"id": "4", "method": "cron.manage",
+             "params": {"action": "describe", "name": job_id}}
+        )
+        assert described["result"]["job"]["prompt"] == "New longer prompt"
+
+    def test_unknown_action_still_rejected(self):
+        resp = server.dispatch(
+            {"id": "5", "method": "cron.manage",
+             "params": {"action": "frobnicate", "name": "x"}}
+        )
+        assert resp["error"]["code"] == 4016

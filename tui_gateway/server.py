@@ -15226,6 +15226,39 @@ def _(rid, params: dict) -> dict:
                     )
                 ),
             )
+        # `describe` returns one job WITH its full (untruncated) prompt — the
+        # list response only carries a 100-char preview, so clients lazily fetch
+        # the whole prompt when a card is expanded rather than bloating the list.
+        if action == "describe":
+            return _ok(rid, json.loads(cronjob(action="describe", job_id=jid)))
+        # `history` returns the durable per-run execution ledger for one job
+        # (started/finished timestamps, status, error) — real run stats the
+        # scalar last_run_at/last_status on a job can't express.
+        if action == "history":
+            return _ok(
+                rid,
+                json.loads(
+                    cronjob(
+                        action="history",
+                        job_id=jid,
+                        limit=params.get("limit"),
+                    )
+                ),
+            )
+        if action == "update":
+            return _ok(
+                rid,
+                json.loads(
+                    cronjob(
+                        action="update",
+                        job_id=jid,
+                        prompt=params.get("prompt"),
+                        name=params.get("job_name"),
+                        schedule=params.get("schedule"),
+                        deliver=params.get("deliver"),
+                    )
+                ),
+            )
         if action in {"remove", "pause", "resume"}:
             return _ok(rid, json.loads(cronjob(action=action, job_id=jid)))
         return _err(rid, 4016, f"unknown cron action: {action}")

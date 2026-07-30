@@ -309,6 +309,68 @@ class TestUnifiedCronjobTool:
         assert updated["job"]["name"] == "New Name"
         assert updated["job"]["schedule"] == "every 120m"
 
+    def test_describe_returns_full_prompt_while_list_stays_preview(self):
+        long_prompt = "Audit the fleet. " + ("step " * 80)  # > 100 chars
+        created = json.loads(
+            cronjob(action="create", prompt=long_prompt, schedule="every 1h", name="Audit")
+        )
+        job_id = created["job_id"]
+
+        # list carries only the truncated preview, never the whole prompt.
+        listing = json.loads(cronjob(action="list"))
+        listed = listing["jobs"][0]
+        assert "prompt" not in listed
+        assert listed["prompt_preview"].endswith("...")
+        assert len(listed["prompt_preview"]) < len(long_prompt)
+
+        # describe carries the full, untruncated prompt.
+        described = json.loads(cronjob(action="describe", job_id=job_id))
+        assert described["success"] is True
+        assert described["job"]["prompt"] == long_prompt
+        assert described["job"]["job_id"] == job_id
+
+    def test_describe_unknown_job_reports_not_found(self):
+        result = json.loads(cronjob(action="describe", job_id="does-not-exist"))
+        assert result["success"] is False
+        assert "not found" in result["error"]
+
+    def test_history_returns_execution_ledger_newest_first(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "cron.executions.EXECUTIONS_FILE", tmp_path / "cron" / "executions.db"
+        )
+        from cron import executions
+
+        created = json.loads(cronjob(action="create", prompt="Check", schedule="every 1h"))
+        job_id = created["job_id"]
+
+        first = executions.create_execution(job_id, source="test")
+        executions.mark_execution_running(first["id"])
+        executions.finish_execution(first["id"], success=True)
+        second = executions.create_execution(job_id, source="test")
+        executions.mark_execution_running(second["id"])
+        executions.finish_execution(second["id"], success=False, error="boom")
+
+        history = json.loads(cronjob(action="history", job_id=job_id))
+        assert history["success"] is True
+        assert history["job_id"] == job_id
+        assert history["count"] == 2
+        # Newest-first: the failed run is most recent.
+        assert history["runs"][0]["status"] == "failed"
+        assert history["runs"][0]["error"] == "boom"
+        assert history["runs"][0]["started_at"] is not None
+        assert history["runs"][0]["finished_at"] is not None
+        assert history["runs"][1]["status"] == "completed"
+
+    def test_history_empty_for_job_without_runs(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "cron.executions.EXECUTIONS_FILE", tmp_path / "cron" / "executions.db"
+        )
+        created = json.loads(cronjob(action="create", prompt="Check", schedule="every 1h"))
+        history = json.loads(cronjob(action="history", job_id=created["job_id"]))
+        assert history["success"] is True
+        assert history["count"] == 0
+        assert history["runs"] == []
+
     def test_update_runtime_overrides_can_set_and_clear(self):
         created = json.loads(
             cronjob(
