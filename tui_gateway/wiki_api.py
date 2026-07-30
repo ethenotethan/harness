@@ -11,11 +11,15 @@ Multi-wiki support via ~/.hermes/wikis.yaml registry.
 v2 (2026-06-12): Adds hierarchical taxonomy (tag_path), taxonomy tree serving,
 and integration link expansion for project management systems.
 """
+import logging
 import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 import yaml
+
+logger = logging.getLogger(__name__)
 
 
 def _load_wiki_registry() -> dict:
@@ -262,6 +266,165 @@ def wiki_page(path: str, wiki_path: Optional[str] = None) -> Optional[dict]:
         return None
     fm, body = _parse_frontmatter(content)
     return {"frontmatter": fm, "body": body, "path": path}
+
+
+#: Frontmatter keys that hold YAML lists. Clients whose frontmatter model is
+#: string-only (Portal's [String: String]) round-trip these as empty strings;
+#: an empty scalar for a list key therefore means "couldn't represent it" —
+#: preserve the current list rather than wiping it. A non-empty scalar is
+#: comma-split; a real list is used as-is.
+LIST_FRONTMATTER_KEYS = {"tag_path", "integration_links", "sources"}
+
+#: Preferred key order when serializing frontmatter (rest alphabetical), so
+#: hand-edited and client-written files produce stable, reviewable diffs.
+_FRONTMATTER_KEY_ORDER = [
+    "title", "type", "tags", "tag_path", "created", "updated",
+    "confidence", "contested", "integration_links", "sources",
+]
+
+
+def _serialize_frontmatter(meta: dict) -> str:
+    """Serialize a frontmatter dict back to YAML-ish text `_parse_frontmatter`
+    can read: scalars as `key: value`, lists as `key:` + `  - item` lines."""
+    def sort_key(k: str):
+        return (_FRONTMATTER_KEY_ORDER.index(k) if k in _FRONTMATTER_KEY_ORDER
+                else len(_FRONTMATTER_KEY_ORDER), k)
+
+    def scalar(v) -> str:
+        s = str(v)
+        if any(c in s for c in (":", "#", '"')) or s != s.strip():
+            s = '"' + s.replace('"', '\\"') + '"'
+        return s
+
+    lines = []
+    for key in sorted(meta.keys(), key=sort_key):
+        value = meta[key]
+        if isinstance(value, list):
+            lines.append(f"{key}:")
+            lines.extend(f"  - {scalar(item)}" for item in value)
+        else:
+            lines.append(f"{key}: {scalar(value)}")
+    return "\n".join(lines) + "\n"
+
+
+def wiki_update(
+    path: str,
+    body: str,
+    frontmatter: Optional[dict] = None,
+    if_match: Optional[str] = None,
+    force: bool = False,
+    wiki_path: Optional[str] = None,
+) -> dict:
+    """Write a wiki page (full replace) with optimistic concurrency.
+
+    The one write method on the wiki surface — see the `wiki.update`
+    semantics in Portal's docs/rpc-reference.md.
+
+    Args:
+        path: Page path relative to the wiki root (must end in .md and
+            resolve INSIDE the root — traversal is rejected).
+        body: FULL replacement markdown body (no patch mode).
+        frontmatter: When a dict, REPLACES the entire frontmatter block
+            (absent keys are dropped); when None, the existing frontmatter
+            is preserved. `updated` is always set server-side; `created`
+            is set on new pages.
+        if_match: Optimistic-concurrency precondition — the `updated` value
+            the client read at load. When it differs from the server's
+            current `updated`, the write is rejected with a conflict.
+        force: Bypass the if_match precondition ("save anyway").
+        wiki_path: Wiki root path override.
+
+    Returns:
+        {"frontmatter": ..., "body": ..., "path": ..., "updated": ...} on
+        success, or {"error": msg, "code": "invalid"|"conflict", ...} —
+        conflicts also carry "latest": the server's current page.
+    """
+    wiki = Path(wiki_path or _default_wiki_path())
+    target = wiki / path
+    # Security: refuse to escape the wiki directory (mirrors wiki_page).
+    try:
+        target = target.resolve()
+        wiki = wiki.resolve()
+    except Exception:
+        return {"error": "path resolution failed", "code": "invalid"}
+    if not str(target).startswith(str(wiki)):
+        return {"error": f"path escapes wiki: {path}", "code": "invalid"}
+    if target.suffix != ".md":
+        return {"error": f"not a markdown page: {path}", "code": "invalid"}
+
+    # Read the current page (if any) for the precondition + preservation.
+    exists = target.exists()
+    current_fm: dict = {}
+    if exists:
+        try:
+            current_fm, _ = _parse_frontmatter(target.read_text(encoding="utf-8"))
+        except Exception as e:
+            return {"error": f"could not read existing page: {e}", "code": "invalid"}
+
+    # Optimistic concurrency: stale read → reject with the server's latest.
+    current_updated = current_fm.get("updated", "")
+    if exists and if_match is not None and not force and if_match != current_updated:
+        latest = wiki_page(path, str(wiki))
+        if latest is not None:
+            latest["updated"] = current_updated
+        return {
+            "error": f"conflict: page changed since read (updated {current_updated!r})",
+            "code": "conflict",
+            "latest": latest,
+        }
+
+    action = "update" if exists else "create"
+
+    # Build the new frontmatter block.
+    new_fm = dict(current_fm) if frontmatter is None else dict(frontmatter)
+    # Coerce list-valued keys so string-only clients can't wipe them.
+    for key in LIST_FRONTMATTER_KEYS:
+        if key not in new_fm:
+            continue
+        value = new_fm[key]
+        if isinstance(value, list):
+            continue
+        if isinstance(value, str):
+            if not value.strip():
+                # Empty scalar = "couldn't represent" → keep the current list.
+                if key in current_fm:
+                    new_fm[key] = current_fm[key]
+                else:
+                    del new_fm[key]
+            else:
+                new_fm[key] = [t.strip() for t in value.split(",") if t.strip()]
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if not exists and not new_fm.get("created"):
+        new_fm["created"] = now
+    new_fm["updated"] = now  # server-authoritative
+
+    # Serialize: frontmatter block + body (exactly one blank line between).
+    normalized_body = body if body.startswith("\n") else "\n" + body
+    content = f"---\n{_serialize_frontmatter(new_fm)}---{normalized_body}"
+
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    except Exception as e:
+        return {"error": f"write failed: {e}", "code": "invalid"}
+
+    # Record the change (git commit + changeset index) — best effort: the
+    # write itself already succeeded, so a capture hiccup only loses the
+    # audit entry, never the page.
+    try:
+        module = _load_wiki_changeset_module("wiki_capture_changeset")
+        module.wiki_capture_changeset(
+            page_path=path,
+            action=action,
+            summary=f"Manual edit via wiki.update ({action})",
+            trigger="manual",
+            wiki_path=str(wiki),
+        )
+    except Exception:
+        logger.warning("wiki.update: changeset capture failed for %s", path, exc_info=True)
+
+    return {"frontmatter": new_fm, "body": body, "path": path, "updated": now}
 
 
 def wiki_taxonomy(wiki_path: Optional[str] = None) -> Optional[dict]:
