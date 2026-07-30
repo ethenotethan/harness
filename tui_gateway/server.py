@@ -1470,8 +1470,11 @@ def _ok(rid, result: dict) -> dict:
     return {"jsonrpc": "2.0", "id": rid, "result": result}
 
 
-def _err(rid, code: int, msg: str) -> dict:
-    return {"jsonrpc": "2.0", "id": rid, "error": {"code": code, "message": msg}}
+def _err(rid, code: int, msg: str, data: Optional[dict] = None) -> dict:
+    error = {"code": code, "message": msg}
+    if data is not None:
+        error["data"] = data
+    return {"jsonrpc": "2.0", "id": rid, "error": error}
 
 
 def method(name: str):
@@ -15862,6 +15865,64 @@ def _(rid, params: dict) -> dict:
     except Exception as e:
         logger.exception("wiki.changeset_diff failed")
         return _err(rid, 5056, str(e))
+
+
+@method("wiki.update")
+def _(rid, params: dict) -> dict:
+    """Write a wiki page — the one mutating method on the wiki surface.
+
+    Full-replace write with optimistic concurrency (see the ``wiki.update``
+    semantics in Portal's docs/rpc-reference.md):
+
+    - ``path`` (str, required): page path relative to the wiki root (.md,
+      must resolve inside the root).
+    - ``body`` (str, required): FULL replacement markdown body.
+    - ``frontmatter`` (object, optional): REPLACES the entire frontmatter
+      block when present; omitted preserves it. ``updated`` is always set
+      server-side.
+    - ``if_match`` (str, optional): optimistic-concurrency precondition —
+      the ``updated`` the client read at load. Stale → error 409 with
+      ``data.latest`` carrying the server's current page.
+    - ``force`` (bool, default false): bypass the if_match precondition.
+    - ``wiki`` (str, optional): wiki name (omit for default).
+
+    Records a changeset (trigger: manual, action: update|create) with the
+    usual git commit capture, so edits appear in wiki.changesets.
+    """
+    try:
+        page_path = params.get("path")
+        if not page_path or not isinstance(page_path, str):
+            return _err(rid, 4001, "path is required")
+        body = params.get("body")
+        if not isinstance(body, str):
+            return _err(rid, 4001, "body is required")
+        frontmatter = params.get("frontmatter")
+        if frontmatter is not None and not isinstance(frontmatter, dict):
+            return _err(rid, 4001, "frontmatter must be an object")
+        if_match = params.get("if_match")
+        if if_match is not None and not isinstance(if_match, str):
+            return _err(rid, 4001, "if_match must be a string")
+        wiki_path = resolve_wiki(params.get("wiki"))
+
+        from tui_gateway.wiki_api import wiki_update
+
+        result = wiki_update(
+            page_path,
+            body,
+            frontmatter=frontmatter,
+            if_match=if_match,
+            force=bool(params.get("force", False)),
+            wiki_path=wiki_path,
+        )
+        if "error" in result:
+            if result.get("code") == "conflict":
+                return _err(rid, 409, result["error"],
+                            data={"latest": result.get("latest")})
+            return _err(rid, 4001, result["error"])
+        return _ok(rid, result)
+    except Exception as e:
+        logger.exception("wiki.update failed")
+        return _err(rid, 5058, str(e))
 
 
 @method("artifact.set")
