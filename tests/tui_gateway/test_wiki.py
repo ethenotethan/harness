@@ -149,3 +149,178 @@ class TestFrontmatter:
         fm, body = wiki._parse_frontmatter(text)
         assert fm == {}
         assert body.strip() == "Body"
+
+
+class TestUpdate:
+    def _seed_page(self, root, updated="2026-07-01T00:00:00Z"):
+        (root / "entities" / "dflash-mlx.md").write_text(
+            "---\n"
+            "title: dflash-mlx\n"
+            "type: entity\n"
+            "tags: [optimization]\n"
+            "tag_path:\n"
+            "  - ml/inference\n"
+            f"updated: {updated}\n"
+            "custom: keepme\n"
+            "---\n"
+            "\n"
+            "Original body. [[speculative-decoding]]\n",
+            encoding="utf-8",
+        )
+
+    def test_create_new_page(self):
+        root = _make_wiki()
+        result = wiki.wiki_update(
+            "entities/new-page.md",
+            "\nFresh body.\n",
+            frontmatter={"title": "New Page", "type": "entity"},
+            wiki_path=str(root),
+        )
+        assert "error" not in result
+        assert result["frontmatter"]["title"] == "New Page"
+        assert result["updated"] != ""
+        # created is stamped on new pages
+        assert result["frontmatter"]["created"] == result["updated"]
+        # The file round-trips through the reader.
+        page = wiki.wiki_page("entities/new-page.md", str(root))
+        assert page is not None
+        assert page["frontmatter"]["title"] == "New Page"
+        assert page["body"].strip() == "Fresh body."
+
+    def test_update_preserves_frontmatter_when_omitted(self):
+        root = _make_wiki()
+        self._seed_page(root)
+        result = wiki.wiki_update(
+            "entities/dflash-mlx.md", "\nReplaced body.\n", wiki_path=str(root)
+        )
+        assert "error" not in result
+        fm = result["frontmatter"]
+        assert fm["title"] == "dflash-mlx"
+        assert fm["custom"] == "keepme"
+        # Server bumps updated past the seeded value.
+        assert fm["updated"] != "2026-07-01T00:00:00Z"
+        page = wiki.wiki_page("entities/dflash-mlx.md", str(root))
+        assert page["body"].strip() == "Replaced body."
+
+    def test_frontmatter_replacement_drops_absent_keys(self):
+        root = _make_wiki()
+        self._seed_page(root)
+        result = wiki.wiki_update(
+            "entities/dflash-mlx.md",
+            "\nBody.\n",
+            frontmatter={"title": "Retitled", "type": "entity"},
+            wiki_path=str(root),
+        )
+        fm = result["frontmatter"]
+        assert fm["title"] == "Retitled"
+        assert "custom" not in fm  # absent from the replacement → dropped
+
+    def test_if_match_allows_write(self):
+        root = _make_wiki()
+        self._seed_page(root)
+        result = wiki.wiki_update(
+            "entities/dflash-mlx.md",
+            "\nNew body.\n",
+            if_match="2026-07-01T00:00:00Z",
+            wiki_path=str(root),
+        )
+        assert "error" not in result
+
+    def test_stale_if_match_conflicts_with_latest(self):
+        root = _make_wiki()
+        self._seed_page(root)
+        result = wiki.wiki_update(
+            "entities/dflash-mlx.md",
+            "\nClobber body.\n",
+            if_match="1999-01-01T00:00:00Z",
+            wiki_path=str(root),
+        )
+        assert result.get("code") == "conflict"
+        assert result["latest"]["updated"] == "2026-07-01T00:00:00Z"
+        assert "Original body" in result["latest"]["body"]
+        # The file is untouched.
+        page = wiki.wiki_page("entities/dflash-mlx.md", str(root))
+        assert "Original body" in page["body"]
+
+    def test_force_bypasses_conflict(self):
+        root = _make_wiki()
+        self._seed_page(root)
+        result = wiki.wiki_update(
+            "entities/dflash-mlx.md",
+            "\nForced body.\n",
+            if_match="1999-01-01T00:00:00Z",
+            force=True,
+            wiki_path=str(root),
+        )
+        assert "error" not in result
+        page = wiki.wiki_page("entities/dflash-mlx.md", str(root))
+        assert "Forced body" in page["body"]
+
+    def test_list_keys_survive_string_only_clients(self):
+        root = _make_wiki()
+        self._seed_page(root)
+        # A string-only client round-trips tag_path as "" — the current list
+        # must be preserved, not wiped.
+        result = wiki.wiki_update(
+            "entities/dflash-mlx.md",
+            "\nBody.\n",
+            frontmatter={"title": "dflash-mlx", "type": "entity", "tag_path": ""},
+            wiki_path=str(root),
+        )
+        assert result["frontmatter"]["tag_path"] == ["ml/inference"]
+        # A non-empty scalar is comma-split into a list.
+        result = wiki.wiki_update(
+            "entities/dflash-mlx.md",
+            "\nBody.\n",
+            frontmatter={"title": "dflash-mlx", "tag_path": "a/b, c"},
+            wiki_path=str(root),
+        )
+        assert result["frontmatter"]["tag_path"] == ["a/b", "c"]
+        # And the written file parses back to a list.
+        page = wiki.wiki_page("entities/dflash-mlx.md", str(root))
+        assert page["frontmatter"]["tag_path"] == ["a/b", "c"]
+
+    def test_traversal_rejected(self):
+        root = _make_wiki()
+        result = wiki.wiki_update("../outside.md", "\nNope.\n", wiki_path=str(root))
+        assert result.get("code") == "invalid"
+        assert not (root.parent / "outside.md").exists()
+
+    def test_non_markdown_rejected(self):
+        root = _make_wiki()
+        result = wiki.wiki_update("entities/notes.txt", "\nNope.\n", wiki_path=str(root))
+        assert result.get("code") == "invalid"
+
+    def test_changeset_recorded(self):
+        root = _make_wiki()
+        self._seed_page(root)
+        wiki.wiki_update("entities/dflash-mlx.md", "\nTracked.\n", wiki_path=str(root))
+        index = (root / "changesets" / "index.json")
+        assert index.exists()
+        import json
+        entries = json.loads(index.read_text(encoding="utf-8"))
+        assert len(entries) == 1
+        assert entries[0]["action"] == "update"
+        assert entries[0]["page"] == "entities/dflash-mlx.md"
+        # The full changeset file carries the trigger.
+        cs = json.loads(
+            (root / "changesets" / f"{entries[0]['id']}.json").read_text(encoding="utf-8")
+        )
+        assert cs["trigger"] == "manual"
+
+    def test_serialized_lists_parse_back(self):
+        root = _make_wiki()
+        result = wiki.wiki_update(
+            "entities/lists.md",
+            "\nBody.\n",
+            frontmatter={
+                "title": "Lists",
+                "tag_path": ["a/b", "c"],
+                "integration_links": ["github:org/repo#1"],
+            },
+            wiki_path=str(root),
+        )
+        assert "error" not in result
+        page = wiki.wiki_page("entities/lists.md", str(root))
+        assert page["frontmatter"]["tag_path"] == ["a/b", "c"]
+        assert page["frontmatter"]["integration_links"] == ["github:org/repo#1"]
