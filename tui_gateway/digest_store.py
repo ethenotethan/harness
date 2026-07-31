@@ -63,13 +63,21 @@ def append_digest(source: str, articles: list[dict]) -> int:
         aid = _article_id(source, a.get("title", ""), now)
         if aid in existing_ids:
             continue
-        new_articles.append({
+        article = {
             "id": aid, "source": source,
             "title": a.get("title", ""), "url": a.get("url", ""),
             "summary": a.get("summary", "")[:500],
             "tags": a.get("tags", []), "image_url": a.get("image_url", ""),
             "ts": now,
-        })
+        }
+        # Optional tweet enrichment (the client's X-style card): pass through
+        # verbatim when the producer supplies them. Absent keys stay absent so
+        # older items keep reading as plain link cards.
+        for key in ("author_name", "author_handle", "author_avatar_url",
+                    "metrics", "replies"):
+            if key in a:
+                article[key] = a[key]
+        new_articles.append(article)
     feed[:0] = new_articles
     feed = feed[:MAX_ARTICLES]
     _write_feed(feed)

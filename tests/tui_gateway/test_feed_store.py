@@ -119,3 +119,45 @@ class TestFeedToolRegistered:
         tool = registry._tools.get("feed_publish")
         assert tool is not None, "feed_publish tool must be registered"
         assert tool.toolset == "feed"
+
+
+class TestTweetEnrichment:
+    def test_enrichment_fields_pass_through(self, feed_file):
+        """Twitter enrichment (author/avatar/metrics/replies) survives the
+        store so the client's X-style card can render it."""
+        digest_store.append_digest(
+            "twitter",
+            [
+                {
+                    "title": "@janedoe",
+                    "url": "https://x.com/janedoe/status/1",
+                    "summary": "hello world",
+                    "author_name": "Jane Doe",
+                    "author_handle": "janedoe",
+                    "author_avatar_url": "https://cdn.x.com/a.jpg",
+                    "metrics": {"replies": 12, "reposts": 48, "likes": 1204, "views": 22000},
+                    "replies": [
+                        {"author_name": "Dev", "author_handle": "dev",
+                         "text": "nice", "url": "https://x.com/dev/status/2"}
+                    ],
+                },
+            ],
+        )
+
+        feed = digest_store.get_feed()
+        assert feed["total"] == 1
+        a = feed["articles"][0]
+        assert a["author_name"] == "Jane Doe"
+        assert a["author_handle"] == "janedoe"
+        assert a["author_avatar_url"] == "https://cdn.x.com/a.jpg"
+        assert a["metrics"]["likes"] == 1204
+        assert a["replies"][0]["text"] == "nice"
+
+    def test_plain_articles_carry_no_enrichment_keys(self, feed_file):
+        """Older producers publish no enrichment — absent keys stay absent, so
+        the client keeps decoding them as plain link cards."""
+        digest_store.append_digest("ai-digest", [{"title": "plain", "url": "https://ex/1"}])
+        a = digest_store.get_feed()["articles"][0]
+        for key in ("author_name", "author_handle", "author_avatar_url",
+                    "metrics", "replies"):
+            assert key not in a

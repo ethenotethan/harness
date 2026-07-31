@@ -22,7 +22,12 @@ def feed_publish(source: str, articles: list) -> str:
         source:   Feed source name (e.g. ``"ai-digest"``). Shown as a filter
                   tab in the client and used as the dedup key.
         articles: List of article dicts. Each may carry ``title``, ``url``,
-                  ``summary``, ``tags`` (list), and ``image_url``.
+                  ``summary``, ``tags`` (list), and ``image_url``. Twitter
+                  items should additionally carry the X-card enrichment when
+                  the source data has it: ``author_name``, ``author_handle``,
+                  ``author_avatar_url``, ``metrics`` ({replies, reposts,
+                  likes, views}), and ``replies`` ([{author_name,
+                  author_handle, text, url}]) — all passed through verbatim.
 
     Returns:
         JSON string ``{"published": added, "total": N, "source": source}``.
@@ -105,6 +110,46 @@ FEED_PUBLISH_SCHEMA = {
                         "image_url": {
                             "type": "string",
                             "description": "Optional thumbnail image URL.",
+                        },
+                        "author_name": {
+                            "type": "string",
+                            "description": (
+                                "Optional (twitter items): the post author's display "
+                                "name (e.g. 'Jane Doe'). Include it whenever the "
+                                "source data has it — the client renders an X-style "
+                                "card and needs it for the header."
+                            ),
+                        },
+                        "author_handle": {
+                            "type": "string",
+                            "description": (
+                                "Optional (twitter items): the author's handle "
+                                "(e.g. 'janedoe', with or without '@')."
+                            ),
+                        },
+                        "author_avatar_url": {
+                            "type": "string",
+                            "description": (
+                                "Optional (twitter items): the author's avatar image "
+                                "URL (from the X API user object)."
+                            ),
+                        },
+                        "metrics": {
+                            "type": "object",
+                            "description": (
+                                "Optional (twitter items): engagement counts — keys "
+                                "'replies', 'reposts', 'likes', 'views' (integers; "
+                                "send only what the source provides, the card hides "
+                                "absent counts). X API public_metrics maps directly."
+                            ),
+                        },
+                        "replies": {
+                            "type": "array",
+                            "description": (
+                                "Optional (twitter items): top replies for the card's "
+                                "read-only comments section — objects with "
+                                "'author_name', 'author_handle', 'text', 'url'."
+                            ),
                         },
                     },
                     "required": ["title"],
