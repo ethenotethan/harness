@@ -222,6 +222,11 @@ def wiki_scan(wiki_path: Optional[str] = None) -> dict:
                 "tags": tags,
                 "tag_path": fm.get("tag_path", []) if isinstance(fm.get("tag_path"), list) else [],
                 "integration_links": fm.get("integration_links", []) if isinstance(fm.get("integration_links"), list) else [],
+                # Already parsed as a list key (LIST_FRONTMATTER_KEYS) and
+                # already written by the ingest skill — it was simply never
+                # forwarded, so page-level provenance sat on disk unreadable
+                # by any client. Forwarding it is the whole fix.
+                "sources": fm.get("sources", []) if isinstance(fm.get("sources"), list) else [],
                 "path": rel_path,
                 "created": fm.get("created", ""),
                 "updated": fm.get("updated", ""),
@@ -313,6 +318,9 @@ def wiki_update(
     frontmatter: Optional[dict] = None,
     if_match: Optional[str] = None,
     force: bool = False,
+    trigger: str = "manual",
+    source_events: Optional[list] = None,
+    summary: Optional[str] = None,
     wiki_path: Optional[str] = None,
 ) -> dict:
     """Write a wiki page (full replace) with optimistic concurrency.
@@ -332,6 +340,16 @@ def wiki_update(
             the client read at load. When it differs from the server's
             current `updated`, the write is rejected with a conflict.
         force: Bypass the if_match precondition ("save anyway").
+        trigger: What kind of change this is. Previously hardcoded to
+            "manual" here, which made every write through this method
+            indistinguishable — an automated ingest and a hand edit in the
+            desktop app landed in the timeline identically. Callers that
+            know better can now say so.
+        source_events: The ingestion events that caused this write, as
+            wiki-relative raw source paths. Recorded on the changeset as
+            provenance; omitted means unrecorded, which reads as *unknown*.
+        summary: Human-readable summary for the changeset. Defaults to a
+            generic one derived from the trigger.
         wiki_path: Wiki root path override.
 
     Returns:
@@ -417,8 +435,9 @@ def wiki_update(
         module.wiki_capture_changeset(
             page_path=path,
             action=action,
-            summary=f"Manual edit via wiki.update ({action})",
-            trigger="manual",
+            summary=summary or f"{trigger} edit via wiki.update ({action})",
+            trigger=trigger,
+            source_events=source_events,
             wiki_path=str(wiki),
         )
     except Exception:
@@ -545,6 +564,118 @@ def wiki_changesets(
         since=since,
         until=until,
     )
+
+
+#: Subdirectory holding raw ingested sources. Each file in here IS an event:
+#: immutable, path-identified, and already carrying its own url + ingest time.
+RAW_SUBDIR = "raw"
+
+
+def wiki_events(
+    wiki_path: Optional[str] = None,
+    kind: Optional[str] = None,
+    limit: int = 200,
+    offset: int = 0,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+) -> dict:
+    """The ingestion event log — every event that caused a wiki update.
+
+    No new storage. An event is a file already on disk under ``raw/``, whose
+    frontmatter carries ``source_url`` / ``ingested`` / ``sha256``; the changeset
+    index already records which events caused which page writes. This is a join
+    over both, which is why it can be added without a migration and why it is
+    accurate for history that predates it.
+
+    Each event reports the changesets it caused, so a client can navigate
+    event → changeset → page as well as the reverse.
+
+    Args:
+        wiki_path: Wiki root path override
+        kind: Filter by event kind (the ``event_kind`` / ``type`` frontmatter
+            value). Kinds are defined by ``type: event-type`` wiki pages, not
+            by a fixed list here — the taxonomy belongs to the wiki.
+        limit: Max results (default 200, max 1000)
+        offset: Pagination offset
+        since: ISO timestamp, only events at or after this
+        until: ISO timestamp, only events at or before this
+
+    Returns:
+        {"events": [...], "total": N, "limit": L, "offset": O}
+    """
+    wiki = Path(wiki_path or _default_wiki_path())
+    raw_dir = wiki / RAW_SUBDIR
+    if not raw_dir.exists():
+        return {"events": [], "total": 0, "limit": limit, "offset": offset}
+
+    # Which changesets each event caused. Built once from the index rather than
+    # per event, so the join stays linear in changeset count.
+    caused: dict = {}
+    try:
+        module = _load_wiki_changeset_module("wiki_query_changesets")
+        # Pull the whole index: an event's effects can be arbitrarily far back
+        # in the timeline, so a windowed read would under-report them.
+        known = module.wiki_query_changesets(wiki_path=str(wiki), limit=1000)
+        for changeset in known.get("changesets", []):
+            for key in changeset.get("source_event_keys") or []:
+                caused.setdefault(key, []).append(
+                    {
+                        "id": changeset.get("id", ""),
+                        "page": changeset.get("page", ""),
+                        "title": changeset.get("title", ""),
+                        "action": changeset.get("action", ""),
+                        "timestamp": changeset.get("timestamp", ""),
+                    }
+                )
+    except Exception:
+        # A wiki whose gateway install predates changesets still has raw
+        # sources, and a log of events with no effects recorded beats no log.
+        logger.warning("wiki.events: changeset join unavailable", exc_info=True)
+
+    events: list[dict] = []
+    for file in sorted(raw_dir.iterdir()):
+        if file.suffix != ".md" or not file.is_file():
+            continue
+        try:
+            fm, _ = _parse_frontmatter(file.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        key = f"{RAW_SUBDIR}/{file.name}"
+        # `ingested` is when the event happened; mtime is the fallback for a
+        # source written before the field existed. Never invented — an event
+        # with neither sorts last rather than claiming a time it didn't have.
+        timestamp = str(fm.get("ingested", "")).strip()
+        # The kind is the page's own declared type, matched against event-type
+        # pages client-side. Absent means undeclared, not "manual".
+        event_kind = str(fm.get("event_kind", "") or fm.get("type", "")).strip()
+
+        if kind and event_kind != kind:
+            continue
+        if since and timestamp and timestamp < since:
+            continue
+        if until and timestamp and timestamp > until:
+            continue
+
+        events.append(
+            {
+                "key": key,
+                "kind": event_kind,
+                "title": str(fm.get("title", file.stem)),
+                "timestamp": timestamp,
+                "source_url": str(fm.get("source_url", "")),
+                "sha256": str(fm.get("sha256", "")),
+                "changesets": caused.get(key, []),
+            }
+        )
+
+    # Newest first, matching the changeset timeline. An empty timestamp sorts
+    # below every real one under reverse ordering, so undated events land at
+    # the end rather than being silently dated to now.
+    events.sort(key=lambda e: e["timestamp"], reverse=True)
+
+    total = len(events)
+    window = events[offset : offset + min(max(limit, 0), 1000)]
+    return {"events": window, "total": total, "limit": limit, "offset": offset}
 
 
 def wiki_changeset_diff(changeset_id: str, wiki_path: Optional[str] = None) -> dict:

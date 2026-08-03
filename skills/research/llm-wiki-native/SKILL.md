@@ -83,11 +83,36 @@ python3 scripts/wiki.py <command> [args] [--wiki NAME]
 | Recent timeline (newest first) | `python3 scripts/wiki.py changesets --limit 20` |
 | One page's history | `python3 scripts/wiki.py changesets --page entities/llama-cpp.md` |
 | Creates this week | `python3 scripts/wiki.py changesets --action create --since 2026-06-22T00:00:00Z` |
-| **Record a change** | `python3 scripts/wiki.py capture entities/llama-cpp.md update "Added speculative decoding benchmarks" --trigger ingest --source raw/articles/src.md` |
+| Event log (what caused updates) | `python3 scripts/wiki.py events --limit 20` |
+| Sources that produced nothing yet | `python3 scripts/wiki.py events --json` → events with empty `changesets` |
+| **Record a change** | `python3 scripts/wiki.py capture entities/llama-cpp.md update "Added speculative decoding benchmarks" --trigger ingest --source-event raw/articles/src.md` |
 
-`--json` on `scan` / `page` / `changesets` returns raw JSON for programmatic use.
-`capture` actions: `create` · `update` · `archive` · `delete`. Triggers:
-`ingest` · `query` · `lint` · `process-inbox` · `manual`.
+`--json` on `scan` / `page` / `changesets` / `events` returns raw JSON for
+programmatic use. `capture` actions: `create` · `update` · `archive` · `delete`.
+Triggers are conventionally `ingest` · `query` · `lint` · `process-inbox` ·
+`manual`, but the set is **open**: what an event kind is gets declared by a
+`type: event-type` wiki page, so a new ingestion source is a page you write,
+not a code change.
+
+## Provenance — always declare what caused a change
+
+`capture` takes `--source-event RAW_PATH`, repeatable, naming each event that
+caused the change. **Declare it on every capture that has one.** A synthesis
+drawing on three sources passes it three times.
+
+Omitting it records provenance as `unknown`. That is the honest answer for a
+hand edit with no ingestion behind it, and a real gap for anything else —
+`unknown` is never inferred or backfilled, precisely so that its presence
+means something. The value of the whole log depends on `unknown` staying rare:
+it should only ever describe changes that predate this field.
+
+Two things follow that are worth using:
+
+- `python3 scripts/wiki.py events` lists sources with **no** resulting
+  changesets — ingested material nobody has synthesized from yet. That's a
+  work queue, not an error.
+- A page's `sources:` frontmatter is page-level provenance and is now returned
+  by `scan`. Keep it in sync with what you capture.
 
 ## Procedure
 
@@ -117,7 +142,7 @@ This prevents duplicate pages and missed cross-references — the same goal as t
    ```bash
    python3 scripts/wiki.py capture entities/llama-cpp.md update \
      "Added b4820 speculative-decoding benchmarks" --trigger ingest \
-     --source raw/articles/llama-cpp-release.md
+     --source-event raw/articles/llama-cpp-release.md
    ```
 5. Update `index.md` and `log.md` as usual. Report every file created/updated.
 
@@ -150,6 +175,10 @@ Record fixes you make with `capture … --trigger lint`.
   — capture after removing the file.)
 - **One capture per page, per logical change.** Don't capture the same file twice
   for one edit; do capture each distinct page an ingest touches.
+- **Don't invent provenance.** If you don't know which source caused a change,
+  leave `--source-event` off and let it record `unknown`. Naming a plausible
+  source you didn't actually read is worse than admitting the gap — it makes
+  every other recorded provenance untrustworthy.
 - **`capture` doesn't write content.** It records a changeset for a page you wrote
   with `write_file`. It is not a substitute for writing the markdown.
 - **Never modify `raw/`.** Sources are immutable; corrections go in wiki pages.

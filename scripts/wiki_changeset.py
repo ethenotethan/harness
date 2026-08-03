@@ -132,12 +132,48 @@ def _parse_frontmatter(content: str) -> tuple[dict, str]:
     return metadata, parts[2]
 
 
+def normalize_provenance(
+    source: str = "",
+    source_events: Optional[list] = None,
+) -> list:
+    """Normalize the two provenance inputs into one ordered list of event keys.
+
+    An event key is the wiki-relative path of the raw source that caused the
+    change (``raw/articles/llama-cpp-release.md``). Raw sources are immutable
+    files, so the path is a stable identity and the file itself already carries
+    the event's URL and ingest time — provenance needs no new storage, only the
+    edge.
+
+    ``source`` is the legacy single-value form and is folded in as the first
+    key, so every existing caller keeps working and gains a list for free.
+    Blanks and duplicates are dropped: an empty list and an absent field mean
+    the same thing to a reader, and the client collapses both to ``unknown``.
+    """
+    keys: list[str] = []
+    candidates = [source] if isinstance(source, str) else []
+    if isinstance(source_events, (list, tuple)):
+        candidates.extend(source_events)
+    elif isinstance(source_events, str):
+        # A single string where a list was expected — the shape a shell caller
+        # or a JSON-lite client most easily produces. Accept it rather than
+        # silently recording nothing.
+        candidates.append(source_events)
+    for candidate in candidates:
+        if not isinstance(candidate, str):
+            continue
+        key = candidate.strip()
+        if key and key not in keys:
+            keys.append(key)
+    return keys
+
+
 def wiki_capture_changeset(
     page_path: str,
     action: str,
     summary: str,
     trigger: str = "manual",
     source: str = "",
+    source_events: Optional[list] = None,
     wiki_path: Optional[str] = None,
 ) -> dict:
     """Capture a changeset for a wiki page modification.
@@ -152,11 +188,21 @@ def wiki_capture_changeset(
         summary: Human-readable summary of what changed
         trigger: What triggered this change ('ingest', 'query', 'lint',
                  'process-inbox', 'manual')
-        source: Optional source file (e.g. 'raw/articles/source.md')
+        source: Legacy single source file (e.g. 'raw/articles/source.md').
+                Folded into source_event_keys as the first entry.
+        source_events: The events that caused this change, as wiki-relative
+                raw source paths. A synthesis usually has several, which the
+                single ``source`` could never express.
         wiki_path: Optional wiki root path override
 
     Returns:
         The changeset dict that was stored, or error dict.
+
+    Provenance is recorded, never inferred. A capture that declares no events
+    stores an empty ``source_event_keys``, which reads downstream as *unknown*
+    — "nobody recorded this" — not as "nothing caused it". Those two are
+    indistinguishable here, so the honest move is to refuse to guess and let
+    the count of unknowns shrink as callers start declaring.
     """
     wiki = _wiki_root(wiki_path)
     target = wiki / page_path
@@ -279,6 +325,10 @@ def wiki_capture_changeset(
         "diff_stats": diff_stats,
         "trigger": trigger,
         "source": source,
+        # The provenance edge: which ingestion events caused this change.
+        # Always present (possibly empty) so a reader never has to distinguish
+        # "field missing because old" from "field missing because unrecorded".
+        "source_event_keys": normalize_provenance(source, source_events),
         "git_commit": git_commit,
         "after_sha256": after_hash,
     }
@@ -326,7 +376,7 @@ def wiki_changeset_diff(changeset_id: str, wiki_path: Optional[str] = None) -> d
         return {"error": f"changeset not found: {csid}"}
     try:
         with open(cs_file, encoding="utf-8") as f:
-            changeset = json.load(f)
+            changeset = _with_provenance(json.load(f))
     except (json.JSONDecodeError, OSError) as exc:
         return {"error": f"changeset unreadable: {exc}"}
 
@@ -365,6 +415,26 @@ def wiki_changeset_diff(changeset_id: str, wiki_path: Optional[str] = None) -> d
         diff = diff[:200_000] + "\n… (diff truncated at 200KB)\n"
 
     return {"diff": diff, "changeset": changeset}
+
+
+def _with_provenance(changeset: dict) -> dict:
+    """Ensure a changeset read from disk carries ``source_event_keys``.
+
+    Changesets written before provenance existed have a ``source`` string and
+    no list. Deriving the list on read migrates them in place, at no cost and
+    with no rewrite pass: a KB adopting this needs no migration script, only a
+    newer gateway. Everything with neither field reads as an empty list, which
+    the client renders as *unknown*.
+    """
+    if not isinstance(changeset, dict):
+        return changeset
+    if isinstance(changeset.get("source_event_keys"), list):
+        return changeset
+    enriched = dict(changeset)
+    enriched["source_event_keys"] = normalize_provenance(
+        changeset.get("source", "") or ""
+    )
+    return enriched
 
 
 def wiki_query_changesets(
@@ -431,11 +501,11 @@ def wiki_query_changesets(
         if cs_file.exists():
             try:
                 with open(cs_file, encoding="utf-8") as f:
-                    enriched.append(json.load(f))
+                    enriched.append(_with_provenance(json.load(f)))
             except Exception:
-                enriched.append(entry)
+                enriched.append(_with_provenance(entry))
         else:
-            enriched.append(entry)
+            enriched.append(_with_provenance(entry))
 
     return {
         "changesets": enriched,
@@ -464,6 +534,9 @@ if __name__ == "__main__":
             summary=sys.argv[4] if len(sys.argv) > 4 else "",
             trigger=sys.argv[5] if len(sys.argv) > 5 else "manual",
             source=sys.argv[6] if len(sys.argv) > 6 else "",
+            # Remaining args are additional event keys, so a synthesis drawing
+            # on several sources can be captured in one call.
+            source_events=list(sys.argv[7:]),
         )
         print(json.dumps(result, indent=2))
     elif cmd == "query":
