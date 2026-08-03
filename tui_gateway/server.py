@@ -15839,6 +15839,40 @@ def _(rid, params: dict) -> dict:
         return _err(rid, 5055, str(e))
 
 
+@method("wiki.events")
+def _(rid, params: dict) -> dict:
+    """Return the ingestion event log — what caused wiki updates.
+
+    A join over data already on disk: raw sources under ``raw/`` are the
+    events, and the changeset index records which events caused which page
+    writes. Each event carries the changesets it produced, so a client can
+    walk event → changeset → page and back.
+
+    Params:
+        - ``kind`` (str, optional): filter by event kind. Kinds are defined by
+          ``type: event-type`` wiki pages, not a fixed list.
+        - ``limit`` (int, default 200, max 1000) / ``offset`` (int, default 0)
+        - ``since`` / ``until`` (ISO timestamps, optional)
+        - ``wiki`` (str, optional): wiki name (omit for default).
+    """
+    try:
+        wiki_path = resolve_wiki(params.get("wiki"))
+        from tui_gateway.wiki_api import wiki_events
+
+        result = wiki_events(
+            wiki_path=wiki_path,
+            kind=params.get("kind"),
+            limit=params.get("limit", 200),
+            offset=params.get("offset", 0),
+            since=params.get("since"),
+            until=params.get("until"),
+        )
+        return _ok(rid, result)
+    except Exception as e:
+        logger.exception("wiki.events failed")
+        return _err(rid, 5059, str(e))
+
+
 @method("wiki.changeset_diff")
 def _(rid, params: dict) -> dict:
     """Return the unified git diff for a single changeset.
@@ -15884,10 +15918,17 @@ def _(rid, params: dict) -> dict:
       the ``updated`` the client read at load. Stale → error 409 with
       ``data.latest`` carrying the server's current page.
     - ``force`` (bool, default false): bypass the if_match precondition.
+    - ``trigger`` (str, default "manual"): what kind of change this is.
+      Was hardcoded to "manual", so every write through this method looked
+      identical in the timeline regardless of what made it.
+    - ``source_events`` (array of str, optional): the ingestion events that
+      caused this write, as wiki-relative raw source paths. Recorded as the
+      changeset's provenance; omitted reads downstream as *unknown*.
+    - ``summary`` (str, optional): changeset summary.
     - ``wiki`` (str, optional): wiki name (omit for default).
 
-    Records a changeset (trigger: manual, action: update|create) with the
-    usual git commit capture, so edits appear in wiki.changesets.
+    Records a changeset (action: update|create) with the usual git commit
+    capture, so edits appear in wiki.changesets.
     """
     try:
         page_path = params.get("path")
@@ -15902,6 +15943,15 @@ def _(rid, params: dict) -> dict:
         if_match = params.get("if_match")
         if if_match is not None and not isinstance(if_match, str):
             return _err(rid, 4001, "if_match must be a string")
+        trigger = params.get("trigger", "manual")
+        if not isinstance(trigger, str) or not trigger.strip():
+            return _err(rid, 4001, "trigger must be a non-empty string")
+        source_events = params.get("source_events")
+        if source_events is not None and not isinstance(source_events, list):
+            return _err(rid, 4001, "source_events must be an array of strings")
+        summary = params.get("summary")
+        if summary is not None and not isinstance(summary, str):
+            return _err(rid, 4001, "summary must be a string")
         wiki_path = resolve_wiki(params.get("wiki"))
 
         from tui_gateway.wiki_api import wiki_update
@@ -15912,6 +15962,9 @@ def _(rid, params: dict) -> dict:
             frontmatter=frontmatter,
             if_match=if_match,
             force=bool(params.get("force", False)),
+            trigger=trigger.strip(),
+            source_events=source_events,
+            summary=summary,
             wiki_path=wiki_path,
         )
         if "error" in result:
@@ -16222,6 +16275,7 @@ def _(rid, params: dict) -> dict:
             "wiki.page",
             "wiki.list",
             "wiki.changesets",
+            "wiki.events",
         ],
     })
 

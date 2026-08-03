@@ -46,7 +46,11 @@ All params are optional. Omit everything for the full timeline (newest first, 50
         "lines_removed": 12
       },
       "trigger":        "ingest",                         // what caused the change
-      "source":         "raw/articles/llama-cpp-release.md", // raw source (empty string if none)
+      "source":         "raw/articles/llama-cpp-release.md", // LEGACY single source; prefer source_event_keys
+      "source_event_keys": [                              // provenance: the events that caused this
+        "raw/articles/llama-cpp-release.md",
+        "raw/papers/spec-decoding.md"
+      ],
       "git_commit":     "218f565a",                       // short git hash (empty if no git)
       "after_sha256":   "a7185eefbeca4d2f..."             // page content hash after change
     }
@@ -84,6 +88,12 @@ The `type` field is the `type:` frontmatter value from each page:
 
 ## Trigger values
 
+These five are conventional, not exhaustive. A trigger is a free string, and
+what each one *is* is declared by a `type: event-type` wiki page — so adding an
+ingestion source is a page commit, not a gateway or client release. Clients
+resolve unrecognized values against those pages and fall back to a stable
+derived presentation, so a new trigger is never a broken one.
+
 | trigger | meaning |
 |---------|---------|
 | `ingest` | from a source ingest (article, paper, URL) |
@@ -91,6 +101,34 @@ The `type` field is the `type:` frontmatter value from each page:
 | `lint` | auto-fix during linting |
 | `process-inbox` | from human inbox thoughts |
 | `manual` | direct agent action |
+
+## Provenance — `source_event_keys`
+
+`source_event_keys` is the edge from a change back to the events that caused
+it: an ordered list of wiki-relative raw source paths. Raw sources are
+immutable files carrying their own `source_url` / `ingested` / `sha256`, so the
+path is a stable identity and provenance needs no new storage.
+
+It is **always present**, so a reader never has to distinguish "field missing
+because this changeset is old" from "field missing because nobody recorded it":
+
+| value | meaning |
+|-------|---------|
+| `["raw/a.md", "raw/b.md"]` | recorded — these events caused the change |
+| `[]` | **unknown**. Not a claim that nothing caused it |
+
+Empty means *unrecorded*, deliberately not split into "no cause" vs "cause not
+written down". Those two are indistinguishable on disk — the legacy `source`
+defaults to `""` for both — and inferring which from the `trigger` would be
+guesswork presented as fact. So the log refuses to guess.
+
+That makes `unknown` trustworthy only if it stays rare going forward, which is
+why every write path now accepts provenance and the count of unknowns only
+shrinks: `unknown` comes to mean precisely "predates provenance".
+
+Changesets written before this field existed are migrated **on read** — the
+legacy `source` becomes the first key. An existing KB needs a newer gateway,
+not a migration script.
 
 ## Error response
 
@@ -117,6 +155,9 @@ struct WikiChangeset: Codable, Identifiable {
     let diffStats: DiffStats
     let trigger: String
     let source: String
+    /// Absent on pre-provenance payloads, so decode it optionally and treat
+    /// nil and [] identically — both are "unknown".
+    let sourceEventKeys: [String]?
     let gitCommit: String
     let afterSha256: String
 
@@ -128,6 +169,7 @@ struct WikiChangeset: Codable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case id, timestamp, action, page, title, type, summary, trigger, source
         case diffStats = "diff_stats"
+        case sourceEventKeys = "source_event_keys"
         case gitCommit = "git_commit"
         case afterSha256 = "after_sha256"
     }
@@ -207,3 +249,91 @@ Response:
 Errors: `4001` bad/missing id · `5057` diff unavailable (changeset unknown, or
 the wiki wasn't git-initialized when it was captured — the message says which)
 · `5056` unexpected failure. Diffs are truncated at 200KB.
+
+## wiki.events — the ingestion event log
+
+Every event that caused a wiki update, newest first. This is a **join over data
+already on disk**, not new storage: files under `raw/` are the events, and the
+changeset index records which events caused which page writes. So it is
+accurate for history that predates it.
+
+```jsonc
+{
+  "method": "wiki.events",
+  "params": {
+    // ALL optional
+    "wiki":   "main",
+    "kind":   "ingest",                  // filter by event kind (see below)
+    "limit":  200,                       // default 200, max 1000
+    "offset": 0,
+    "since":  "2026-06-01T00:00:00Z",
+    "until":  "2026-06-28T00:00:00Z"
+  }
+}
+```
+
+Response:
+
+```jsonc
+{
+  "events": [
+    {
+      "key":        "raw/articles/llama-cpp-release.md",  // stable identity; the provenance join key
+      "kind":       "ingest",                             // event_kind, else the page's type
+      "title":      "llama.cpp b4820 release notes",
+      "timestamp":  "2026-06-28T14:05:00Z",              // `ingested`; "" when never recorded
+      "source_url": "https://github.com/ggml-org/llama.cpp/releases/tag/b4820",
+      "sha256":     "a7185eefbeca4d2f...",
+      "changesets": [                                     // what this event caused
+        {
+          "id":        "2026-06-28T140819-001",
+          "page":      "entities/llama-cpp.md",
+          "title":     "llama.cpp",
+          "action":    "update",
+          "timestamp": "2026-06-28T14:08:19Z"
+        }
+      ]
+    }
+  ],
+  "total":  12,
+  "limit":  200,
+  "offset": 0
+}
+```
+
+`kind` is **not** a fixed enum. It's the raw source's `event_kind` (falling back
+to its `type`), matched against `type: event-type` wiki pages that declare what
+each kind is and how to draw it. An undeclared kind is still a valid kind.
+
+Notes:
+
+- **An event that caused nothing still appears** with `"changesets": []`. An
+  ingested source nobody synthesized from is exactly the gap worth seeing.
+- **`timestamp` is never invented.** A source with no `ingested` reports `""`
+  and sorts last, rather than being silently dated to now.
+- A wiki with no `raw/` returns an empty log, not an error.
+
+Errors: `5059` unexpected failure.
+
+## wiki.update — provenance on write
+
+`wiki.update` accepts three additional optional params so a write can declare
+what caused it:
+
+```jsonc
+{
+  "method": "wiki.update",
+  "params": {
+    "path": "entities/llama-cpp.md",
+    "body": "...",
+    "trigger": "ingest",                                   // default "manual"
+    "source_events": ["raw/articles/llama-cpp-release.md"], // provenance
+    "summary": "Added b4820 speculative-decoding benchmarks"
+  }
+}
+```
+
+`trigger` was previously hardcoded to `"manual"` on this path, which made every
+write through it indistinguishable in the timeline regardless of what made it.
+Omitting `source_events` records `[]` — *unknown* — which is the honest result
+for a hand edit that genuinely had no ingestion event.

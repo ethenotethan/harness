@@ -19,11 +19,19 @@ Usage (through the `terminal` tool):
   python3 wiki.py changesets  [--wiki NAME] [--page PATH] [--action A]
                               [--trigger T] [--since ISO] [--until ISO]
                               [--limit N] [--offset N] [--json]
-  python3 wiki.py capture PATH ACTION SUMMARY [--trigger T] [--source SRC]
-                              [--wiki NAME]
+  python3 wiki.py events      [--wiki NAME] [--kind K] [--since ISO] [--until ISO]
+                              [--limit N] [--offset N] [--json]
+  python3 wiki.py capture PATH ACTION SUMMARY [--trigger T]
+                              [--source-event RAW_PATH]... [--wiki NAME]
 
 ACTION  ∈ create | update | archive | delete
-TRIGGER ∈ ingest | query | lint | process-inbox | manual   (default: manual)
+TRIGGER — conventionally ingest | query | lint | process-inbox | manual
+          (default: manual), but any kind the wiki declares via a
+          `type: event-type` page is valid; the taxonomy is the wiki's.
+
+Pass --source-event once per event that caused the change. Omitting it records
+provenance as *unknown*, which is honest for a hand edit and a gap for an
+ingest — `events` shows which sources have produced nothing.
 
 The wiki is resolved by NAME via ~/.hermes/wikis.yaml, else $WIKI_PATH, else
 ~/wiki — identical to the gateway, so a name here means the same wiki there.
@@ -100,10 +108,25 @@ def _human(obj) -> str:
                  f"(showing {len(obj['changesets'])}, offset {obj.get('offset', 0)})"]
         for c in obj["changesets"]:
             stats = c.get("diff_stats", {}) or {}
+            keys = c.get("source_event_keys") or []
+            # Surface unknown provenance rather than leaving a blank: the point
+            # of the field is that its absence is visible.
+            provenance = f" ← {', '.join(keys)}" if keys else " ← unknown"
             lines.append(
                 f"  {c.get('timestamp','')}  {c.get('action','?'):7} "
                 f"{c.get('page','')}  +{stats.get('lines_added',0)}/-{stats.get('lines_removed',0)} "
-                f"[{c.get('trigger','')}]  {c.get('summary','')}"
+                f"[{c.get('trigger','')}]  {c.get('summary','')}{provenance}"
+            )
+        return "\n".join(lines)
+    if isinstance(obj, dict) and "events" in obj:
+        lines = [f"{obj.get('total', len(obj['events']))} events "
+                 f"(showing {len(obj['events'])}, offset {obj.get('offset', 0)})"]
+        for e in obj["events"]:
+            caused = e.get("changesets") or []
+            effect = f"→ {len(caused)} change(s)" if caused else "→ nothing yet"
+            lines.append(
+                f"  {e.get('timestamp','') or '(undated)':20}  [{e.get('kind','') or '?'}]  "
+                f"{e.get('key','')}  {effect}"
             )
         return "\n".join(lines)
     return json.dumps(obj, indent=2, ensure_ascii=False)
@@ -155,6 +178,19 @@ def cmd_changesets(a):
     _print(res, a.json)
 
 
+def cmd_events(a):
+    _need_api()
+    res = wiki_api.wiki_events(
+        wiki_path=_resolve(a),
+        kind=a.kind,
+        limit=a.limit,
+        offset=a.offset,
+        since=a.since,
+        until=a.until,
+    )
+    _print(res, a.json)
+
+
 def cmd_capture(a):
     if wiki_changeset is None:
         sys.exit(
@@ -167,12 +203,17 @@ def cmd_capture(a):
         summary=a.summary,
         trigger=a.trigger,
         source=a.source,
+        source_events=getattr(a, "source_events", None),
         wiki_path=_resolve(a),
     )
     if isinstance(res, dict) and res.get("error"):
         sys.exit(f"error: {res['error']}")
     cid = res.get("id") if isinstance(res, dict) else None
-    print(f"captured changeset {cid or ''}: {a.action} {a.path}".rstrip())
+    keys = res.get("source_event_keys") or [] if isinstance(res, dict) else []
+    # Say when provenance is missing. A silent capture is how a KB accumulates
+    # unknowns nobody notices until the whole log is untrustworthy.
+    provenance = f" ← {', '.join(keys)}" if keys else "  [provenance: unknown]"
+    print(f"captured changeset {cid or ''}: {a.action} {a.path}{provenance}".rstrip())
 
 
 def _resolve(a):
@@ -210,12 +251,25 @@ def main(argv=None):
     s.add_argument("--limit", type=int, default=50); s.add_argument("--offset", type=int, default=0)
     s.add_argument("--json", action="store_true"); s.set_defaults(func=cmd_changesets)
 
+    s = sub.add_parser("events", help="ingestion event log — what caused wiki updates")
+    s.add_argument("--kind"); s.add_argument("--since"); s.add_argument("--until")
+    s.add_argument("--limit", type=int, default=200); s.add_argument("--offset", type=int, default=0)
+    s.add_argument("--json", action="store_true"); s.set_defaults(func=cmd_events)
+
     s = sub.add_parser("capture", help="record a changeset after writing a page")
     s.add_argument("path"); s.add_argument("action", choices=["create", "update", "archive", "delete"])
     s.add_argument("summary")
+    # Deliberately not `choices=[...]`: what an event kind IS belongs to the
+    # wiki (a `type: event-type` page), not to this parser. A closed list here
+    # would mean adding an ingestion source requires editing this file.
     s.add_argument("--trigger", default="manual",
-                   choices=["ingest", "query", "lint", "process-inbox", "manual"])
-    s.add_argument("--source", default="")
+                   help="event kind — conventionally ingest | query | lint | "
+                        "process-inbox | manual, but any kind a wiki declares")
+    s.add_argument("--source", default="", help="legacy single source path")
+    s.add_argument("--source-event", action="append", default=[], dest="source_events",
+                   metavar="RAW_PATH",
+                   help="event that caused this change (repeatable) — "
+                        "e.g. --source-event raw/articles/src.md")
     s.set_defaults(func=cmd_capture)
 
     a = p.parse_args(argv)
