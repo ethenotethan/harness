@@ -175,4 +175,7 @@ class TestApiServerAdapterToolset:
             mock_agent_cls.assert_called_once()
             call_kwargs = mock_agent_cls.call_args
             toolsets = call_kwargs.kwargs.get("enabled_toolsets")
-            assert sorted(toolsets) == ["terminal", "web"]
+            # `artifact` is auto-recovered by _get_platform_tools — a
+            # non-configurable core toolset (rides with todo/memory), present
+            # regardless of the user's explicit selection.
+            assert sorted(toolsets) == ["artifact", "terminal", "web"]
