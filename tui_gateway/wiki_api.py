@@ -571,6 +571,47 @@ def wiki_changesets(
 RAW_SUBDIR = "raw"
 
 
+def _parse_event_time(value: str) -> Optional[datetime]:
+    """Parse an ``ingested`` frontmatter value into an aware UTC datetime.
+
+    ``ingested`` is written by whatever ingested the source — sometimes by hand —
+    so it is not reliably strict RFC3339. A bare ``datetime.isoformat()``
+    (no zone), a space separator, or a plain date are all common. Each denotes a
+    real instant, so each should be parsed rather than treated as "no time".
+
+    A value with no zone is read as UTC: a wiki timestamp nobody attached a zone
+    to is one nobody chose a zone for, and being off by an offset beats losing
+    the event.
+
+    Returns None when the value genuinely isn't a time, which callers treat as
+    undated — never as "now", which would be inventing data.
+    """
+    text = (value or "").strip()
+    if not text:
+        return None
+    # fromisoformat handles the space separator, microseconds, and offsets;
+    # "Z" only from 3.11, so normalize it for older interpreters.
+    candidate = text[:-1] + "+00:00" if text.endswith(("Z", "z")) else text
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
+
+
+def _normalize_event_time(value: str) -> str:
+    """Render an ``ingested`` value as strict RFC3339 UTC, or "" if unparseable.
+
+    The wire contract is one format, so clients don't each have to re-derive
+    what a wiki might contain. An unparseable value becomes "" — the same thing
+    a missing field produces, which is what "undated" already means on the wire.
+    """
+    parsed = _parse_event_time(value)
+    if parsed is None:
+        return ""
+    return parsed.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def wiki_events(
     wiki_path: Optional[str] = None,
     kind: Optional[str] = None,
@@ -602,11 +643,24 @@ def wiki_events(
 
     Returns:
         {"events": [...], "total": N, "limit": L, "offset": O}
+
+        Each event's ``timestamp`` is strict RFC3339 UTC
+        (``2026-08-04T16:55:58Z``) regardless of how ``ingested`` was written, or
+        ``""`` when no time could be established at all. ``time_estimated`` is
+        True when the timestamp came from the file's mtime rather than from
+        ``ingested``. Bounds are compared as instants, so a window means the same
+        thing whatever format the wiki used.
     """
     wiki = Path(wiki_path or _default_wiki_path())
     raw_dir = wiki / RAW_SUBDIR
     if not raw_dir.exists():
         return {"events": [], "total": 0, "limit": limit, "offset": offset}
+
+    # Window bounds as instants, parsed once. An unparseable bound is treated as
+    # absent rather than as an impossible one, so a malformed `since` widens the
+    # query instead of silently returning nothing.
+    since_dt = _parse_event_time(since or "")
+    until_dt = _parse_event_time(until or "")
 
     # Which changesets each event caused. Built once from the index rather than
     # per event, so the join stays linear in changeset count.
@@ -641,19 +695,42 @@ def wiki_events(
         except Exception:
             continue
         key = f"{RAW_SUBDIR}/{file.name}"
-        # `ingested` is when the event happened; mtime is the fallback for a
-        # source written before the field existed. Never invented — an event
-        # with neither sorts last rather than claiming a time it didn't have.
-        timestamp = str(fm.get("ingested", "")).strip()
+        # `ingested` is when the event happened, normalized to one wire format so
+        # a client isn't left guessing which of its several shapes it received.
+        #
+        # mtime is the fallback for a source written before the field existed —
+        # an event with no time at all can't be plotted, so a real observation
+        # beats none. But it is flagged rather than passed off as the event's
+        # own time: `git clone` rewrites every mtime to checkout time, which
+        # would otherwise pile a whole wiki's history onto one bogus instant.
+        # `time_estimated` is what lets the client draw it as estimated.
+        event_time = _parse_event_time(str(fm.get("ingested", "")))
+        time_estimated = False
+        if event_time is None:
+            try:
+                event_time = datetime.fromtimestamp(file.stat().st_mtime, timezone.utc)
+                time_estimated = True
+            except OSError:
+                event_time = None
+        timestamp = (
+            event_time.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            if event_time
+            else ""
+        )
         # The kind is the page's own declared type, matched against event-type
         # pages client-side. Absent means undeclared, not "manual".
         event_kind = str(fm.get("event_kind", "") or fm.get("type", "")).strip()
 
         if kind and event_kind != kind:
             continue
-        if since and timestamp and timestamp < since:
+        # Compared as instants, not strings. Lexical comparison silently drops
+        # events that ARE in the window: "2026-07-20 12:00:00" sorts below
+        # "2026-07-20T00:00:00Z" because a space sorts below "T", and a date-only
+        # value sorts below every timestamp on its own day. It also keeps events
+        # that aren't, since a non-UTC offset doesn't sort by real time.
+        if since_dt and event_time and event_time < since_dt:
             continue
-        if until and timestamp and timestamp > until:
+        if until_dt and event_time and event_time > until_dt:
             continue
 
         events.append(
@@ -662,15 +739,21 @@ def wiki_events(
                 "kind": event_kind,
                 "title": str(fm.get("title", file.stem)),
                 "timestamp": timestamp,
+                # True when `timestamp` came from the file's mtime rather than
+                # from `ingested` — a real observation, but not the event's own
+                # time, and a client should say so rather than imply precision.
+                "time_estimated": time_estimated,
                 "source_url": str(fm.get("source_url", "")),
                 "sha256": str(fm.get("sha256", "")),
                 "changesets": caused.get(key, []),
             }
         )
 
-    # Newest first, matching the changeset timeline. An empty timestamp sorts
-    # below every real one under reverse ordering, so undated events land at
-    # the end rather than being silently dated to now.
+    # Newest first, matching the changeset timeline. Sorting the emitted strings
+    # is sound now that they're all one normalized format; it was not when the
+    # field passed through verbatim. An empty timestamp still sorts below every
+    # real one under reverse ordering, so a genuinely undated event lands at the
+    # end rather than being silently dated to now.
     events.sort(key=lambda e: e["timestamp"], reverse=True)
 
     total = len(events)
