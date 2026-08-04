@@ -157,19 +157,175 @@ class TestWikiEvents:
         result = wiki_api.wiki_events(wiki_path=str(git_wiki))
         assert result["events"][0]["changesets"] == []
 
-    def test_events_are_newest_first_and_undated_ones_land_last(self, git_wiki):
+    def test_events_are_newest_first(self, git_wiki):
         for name, ingested in [
             ("old", "2026-07-01T10:00:00Z"),
             ("new", "2026-07-03T10:00:00Z"),
-            ("undated", ""),
         ]:
-            stamp = f"ingested: {ingested}\n" if ingested else ""
-            _write(git_wiki, f"raw/{name}.md", f"---\ntitle: {name}\n{stamp}---\nRaw.\n")
+            _write(
+                git_wiki, f"raw/{name}.md",
+                f"---\ntitle: {name}\ningested: {ingested}\n---\nRaw.\n",
+            )
 
         events = wiki_api.wiki_events(wiki_path=str(git_wiki))["events"]
-        # An undated event must never be silently dated to now and jump the
-        # feed; it sorts last.
-        assert [e["title"] for e in events] == ["new", "old", "undated"]
+        assert [e["title"] for e in events] == ["new", "old"]
+
+    def test_a_source_with_no_ingested_falls_back_to_mtime_and_says_so(self, git_wiki):
+        # An event with no time can't be plotted at all, so the file's own mtime
+        # is better than nothing — but it is NOT the event's time (a fresh clone
+        # rewrites every mtime), so it must be flagged rather than presented as
+        # precise. This is what the client draws as an estimated-time mark.
+        _write(git_wiki, "raw/nostamp.md", "---\ntitle: No stamp\n---\nRaw.\n")
+
+        event = wiki_api.wiki_events(wiki_path=str(git_wiki))["events"][0]
+        assert event["timestamp"] != ""
+        assert event["time_estimated"] is True
+
+    def test_a_dated_source_is_not_marked_estimated(self, git_wiki):
+        _write(
+            git_wiki, "raw/dated.md",
+            "---\ntitle: Dated\ningested: 2026-07-01T10:00:00Z\n---\nRaw.\n",
+        )
+        event = wiki_api.wiki_events(wiki_path=str(git_wiki))["events"][0]
+        assert event["timestamp"] == "2026-07-01T10:00:00Z"
+        assert event["time_estimated"] is False
+
+    @pytest.mark.parametrize(
+        "written",
+        [
+            "2026-07-20T12:00:00Z",         # strict RFC3339
+            "2026-07-20T12:00:00+00:00",    # explicit UTC offset
+            "2026-07-20T12:00:00",          # bare datetime.isoformat()
+            "2026-07-20T12:00:00.123456",   # ...with microseconds
+            "2026-07-20 12:00:00",          # space separator
+            "  2026-07-20T12:00:00Z  ",     # padded
+        ],
+    )
+    def test_ingested_is_normalized_to_one_wire_format(self, git_wiki, written):
+        # `ingested` is written by whatever ingested the source, sometimes by
+        # hand, so it is not reliably strict RFC3339. Every one of these denotes
+        # the same instant and must reach the client as the same string — a
+        # client that has to guess the format will get it wrong, which is how
+        # dated events ended up unplotted.
+        _write(
+            git_wiki, "raw/a.md",
+            f"---\ntitle: A\ningested: {written}\n---\nRaw.\n",
+        )
+        event = wiki_api.wiki_events(wiki_path=str(git_wiki))["events"][0]
+        assert event["timestamp"] == "2026-07-20T12:00:00Z"
+        assert event["time_estimated"] is False
+
+    def test_a_non_utc_offset_is_converted_not_truncated(self, git_wiki):
+        # 05:00-07:00 is 12:00Z. Dropping the offset would misplace the event by
+        # seven hours and could push it out of the requested window.
+        _write(
+            git_wiki, "raw/a.md",
+            "---\ntitle: A\ningested: 2026-07-20T05:00:00-07:00\n---\nRaw.\n",
+        )
+        event = wiki_api.wiki_events(wiki_path=str(git_wiki))["events"][0]
+        assert event["timestamp"] == "2026-07-20T12:00:00Z"
+
+    def test_an_unparseable_ingested_falls_back_to_mtime_and_is_flagged(self, git_wiki):
+        # Same treatment as a missing field: an unusable value tells us nothing
+        # about when the event happened, so the mtime stands in and is marked
+        # estimated. What must NOT happen is passing "whenever" through as a
+        # timestamp, or inventing a precise time nobody recorded.
+        _write(git_wiki, "raw/a.md", "---\ntitle: A\ningested: whenever\n---\nRaw.\n")
+        event = wiki_api.wiki_events(wiki_path=str(git_wiki))["events"][0]
+        assert event["timestamp"] != "whenever"
+        assert event["time_estimated"] is True
+        # And it's a real, parseable instant rather than a passed-through string.
+        assert wiki_api._parse_event_time(event["timestamp"]) is not None
+
+    @pytest.mark.parametrize(
+        "written",
+        [
+            "2026-07-20T12:00:00Z",
+            "2026-07-20 12:00:00",      # a space sorts BELOW "T" lexically
+            "2026-07-20",               # sorts below every stamp on its own day
+            "2026-07-20T05:00:00-07:00",  # doesn't sort by real time at all
+        ],
+    )
+    def test_the_window_keeps_events_inside_it_whatever_the_format(
+        self, git_wiki, written
+    ):
+        # The bug this pins: bounds were compared as STRINGS, so an event that
+        # was genuinely inside the window got dropped whenever its timestamp was
+        # written in a shape that sorts oddly against the bound. The plot then
+        # came up empty while the event sat right there in the feed.
+        _write(
+            git_wiki, "raw/a.md",
+            f"---\ntitle: A\ningested: {written}\n---\nRaw.\n",
+        )
+        result = wiki_api.wiki_events(
+            wiki_path=str(git_wiki),
+            since="2026-07-20T00:00:00Z",
+            until="2026-07-21T00:00:00Z",
+        )
+        assert [e["title"] for e in result["events"]] == ["A"]
+
+    def test_the_window_still_excludes_events_outside_it(self, git_wiki):
+        for name, ingested in [
+            ("before", "2019-01-01T00:00:00Z"),
+            ("inside", "2026-07-20T12:00:00Z"),
+            ("after", "2031-01-01T00:00:00Z"),
+        ]:
+            _write(
+                git_wiki, f"raw/{name}.md",
+                f"---\ntitle: {name}\ningested: {ingested}\n---\nRaw.\n",
+            )
+        result = wiki_api.wiki_events(
+            wiki_path=str(git_wiki),
+            since="2026-07-20T00:00:00Z",
+            until="2026-07-21T00:00:00Z",
+        )
+        assert [e["title"] for e in result["events"]] == ["inside"]
+
+    def test_a_non_utc_bound_is_compared_as_an_instant(self, git_wiki):
+        # until = 05:00-07:00 = 12:00Z, so a 13:00Z event is after it. Compared
+        # as strings, "2026-07-20T13:00:00Z" > "2026-07-20T05:00:00-07:00" only
+        # by luck of the digits — the point is that the instant decides.
+        _write(
+            git_wiki, "raw/late.md",
+            "---\ntitle: late\ningested: 2026-07-20T13:00:00Z\n---\nRaw.\n",
+        )
+        _write(
+            git_wiki, "raw/early.md",
+            "---\ntitle: early\ningested: 2026-07-20T11:00:00Z\n---\nRaw.\n",
+        )
+        result = wiki_api.wiki_events(
+            wiki_path=str(git_wiki), until="2026-07-20T05:00:00-07:00"
+        )
+        assert [e["title"] for e in result["events"]] == ["early"]
+
+    def test_an_unparseable_bound_widens_rather_than_empties(self, git_wiki):
+        # A malformed bound that silently matched nothing would look exactly
+        # like an empty wiki. Treat it as absent instead.
+        _write(
+            git_wiki, "raw/a.md",
+            "---\ntitle: A\ningested: 2026-07-20T12:00:00Z\n---\nRaw.\n",
+        )
+        result = wiki_api.wiki_events(wiki_path=str(git_wiki), since="garbage")
+        assert [e["title"] for e in result["events"]] == ["A"]
+
+    def test_an_estimated_time_still_participates_in_the_window(self, git_wiki):
+        # A source with no usable `ingested` gets its mtime, and that estimate is
+        # a real time, so the window applies to it like any other. The estimate
+        # is the best available answer to "when"; excluding such events from
+        # every window instead would make them appear in windows they have no
+        # evidence of belonging to.
+        _write(git_wiki, "raw/a.md", "---\ntitle: A\ningested: nonsense\n---\nRaw.\n")
+        # The file was written just now, so a window over last year excludes it…
+        past = wiki_api.wiki_events(
+            wiki_path=str(git_wiki),
+            since="2019-01-01T00:00:00Z",
+            until="2019-12-31T00:00:00Z",
+        )
+        assert past["events"] == []
+        # …and an unbounded query still finds it, flagged as estimated.
+        allof = wiki_api.wiki_events(wiki_path=str(git_wiki))
+        assert [e["title"] for e in allof["events"]] == ["A"]
+        assert allof["events"][0]["time_estimated"] is True
 
     def test_kind_filter_matches_the_declared_kind(self, git_wiki):
         _write(git_wiki, "raw/a.md", "---\ntitle: A\nevent_kind: github_pr\n---\nRaw.\n")
