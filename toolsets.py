@@ -60,7 +60,7 @@ _HERMES_CORE_TOOLS = [
     # Text-to-speech
     "text_to_speech",
     # Planning & memory
-    "todo", "memory",
+    "todo", "memory", "learning",
     # NOTE: the desktop Project tools (project_list/create/switch) are
     # deliberately NOT here. They only make sense where a GUI can follow the
     # move, so they live in the `project` toolset and are enabled solely by the
@@ -245,6 +245,11 @@ TOOLSETS = {
         "includes": []
     },
 
+    "learning": {
+        "description": "Learning library: gateway-persisted courses and flashcard decks built incrementally, streamed live to clients",
+        "tools": ["learning"],
+        "includes": []
+    },
     "feed": {
         "description": "Publish curated articles to the user's news feed (HermesNative feed view)",
         "tools": ["feed_publish"],
@@ -423,7 +428,7 @@ TOOLSETS = {
             "browser_press", "browser_get_images",
             "browser_vision", "browser_console", "browser_cdp", "browser_dialog",
             "browser_exec",
-            "todo", "memory",
+            "todo", "memory", "learning",
             "session_search", "clarify",
             "execute_code", "delegate_task",
         ],
@@ -456,7 +461,7 @@ TOOLSETS = {
             "browser_press", "browser_get_images",
             "browser_vision", "browser_console", "browser_cdp", "browser_dialog",
             "browser_exec",
-            "todo", "memory",
+            "todo", "memory", "learning",
             "session_search",
             "execute_code", "delegate_task",
         ],
@@ -487,7 +492,7 @@ TOOLSETS = {
             "browser_vision", "browser_console", "browser_cdp", "browser_dialog",
             "browser_exec",
             # Planning & memory
-            "todo", "memory",
+            "todo", "memory", "learning",
             # Session history search
             "session_search",
             # Code execution + delegation

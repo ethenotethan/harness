@@ -14418,6 +14418,7 @@ from . import (  # noqa: E402
     methods_session as _methods_session,
     methods_tools as _methods_tools,
     methods_harness as _methods_harness,
+    methods_learning as _methods_learning,
 )
 
 for _m in (
@@ -14427,6 +14428,7 @@ for _m in (
     _methods_complete,
     _methods_tools,
     _methods_harness,
+    _methods_learning,
 ):
     _m.register(sys.modules[__name__])
 del _m
