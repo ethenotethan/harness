@@ -791,6 +791,10 @@ def _(rid, params: dict) -> dict:
             "wiki.list",
             "wiki.changesets",
             "wiki.events",
+            "learning.course",
+            "learning.deck",
+            "learning.progress",
+            "learning.review",
         ],
     })
 
