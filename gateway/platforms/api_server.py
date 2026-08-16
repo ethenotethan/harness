@@ -77,11 +77,17 @@ def _approval_event_choices(*, smart_denied: bool, allow_permanent: bool) -> lis
 
 
 try:
-    from aiohttp import web
+    from aiohttp import web, WSMsgType
     AIOHTTP_AVAILABLE = True
 except ImportError:
     AIOHTTP_AVAILABLE = False
     web = None  # type: ignore[assignment]
+    WSMsgType = None  # type: ignore[assignment,misc]
+
+try:
+    from aiohttp.web_ws import WebSocketResponse
+except ImportError:  # pragma: no cover
+    WebSocketResponse = None  # type: ignore[assignment,misc]
 
 from gateway.config import Platform, PlatformConfig
 from gateway.platforms.base import (
@@ -118,6 +124,11 @@ def _get_scoped_secret(name, default=None):
         val = os.getenv(name)
     return val if val is not None else default
 
+
+try:
+    from tui_gateway import server as _tui_server
+except ImportError:  # pragma: no cover - tui_gateway may not be available in all builds
+    _tui_server = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -2092,6 +2103,7 @@ class APIServerAdapter(BasePlatformAdapter):
             ("GET", "/v1/runs/{run_id}/events", self._handle_run_events),
             ("POST", "/v1/runs/{run_id}/approval", self._handle_run_approval),
             ("POST", "/v1/runs/{run_id}/stop", self._handle_stop_run),
+            ("GET", "/v1/ws", self._handle_ws),
         ]
         if _CRON_AVAILABLE:
             # Chronos managed-cron fire webhook (NAS → agent). Authenticated
@@ -7071,6 +7083,169 @@ class APIServerAdapter(BasePlatformAdapter):
             )
 
         return web.json_response({"run_id": run_id, "status": "stopping"})
+
+    # ------------------------------------------------------------------
+    # WebSocket JSON-RPC endpoint (TUI parity for native clients)
+    # ------------------------------------------------------------------
+
+    async def _handle_ws(self, request: "web.Request") -> "web.StreamResponse":
+        """WebSocket upgrade at /v1/ws — full TUI gateway parity for HermesNative.
+
+        aiohttp upgrades GET requests automatically when the handler returns
+        a :class:`aiohttp.web.WebSocketResponse`.  After the handshake we
+        drop into a read loop that feeds JSON-RPC into
+        :func:`tui_gateway.server.dispatch` and writes responses/events back
+        over the same socket.
+        """
+        if WebSocketResponse is None or WSMsgType is None:
+            raise web.HTTPNotImplemented(text="WebSocket support unavailable")
+
+        # Auth check must happen BEFORE ws.prepare() so we can return a normal
+        # HTTP response on failure. Once prepare() is called the connection is
+        # upgraded and we can only close the socket.
+        auth_err = self._check_auth(request)
+        if auth_err:
+            return auth_err
+
+        ws = WebSocketResponse()
+        await ws.prepare(request)
+
+        # Build a transport that satisfies tui_gateway.server.dispatch
+        _loop = asyncio.get_running_loop()
+
+        class _AiohttpWSTransport:
+            __slots__ = ("_ws", "_loop", "_closed")
+
+            def __init__(self, ws_: "WebSocketResponse", loop_: asyncio.AbstractEventLoop) -> None:
+                self._ws = ws_
+                self._loop = loop_
+                self._closed = False
+
+            def write(self, obj: dict) -> bool:
+                if self._closed:
+                    return False
+                line = json.dumps(obj, ensure_ascii=False)
+                try:
+                    on_loop = asyncio.get_running_loop() is self._loop
+                except RuntimeError:
+                    on_loop = False
+                if on_loop:
+                    self._loop.create_task(self._safe_send(line))
+                    return True
+                try:
+                    from agent.async_utils import safe_schedule_threadsafe
+                    fut = safe_schedule_threadsafe(self._safe_send(line), self._loop)
+                    if fut is None:
+                        self._closed = True
+                        return False
+                    fut.result(timeout=10.0)
+                    return not self._closed
+                except Exception:
+                    self._closed = True
+                    return False
+
+            async def write_async(self, obj: dict) -> bool:
+                if self._closed:
+                    return False
+                await self._safe_send(json.dumps(obj, ensure_ascii=False))
+                return not self._closed
+
+            async def _safe_send(self, line: str) -> None:
+                try:
+                    await self._ws.send_str(line)
+                except Exception:
+                    self._closed = True
+
+            def close(self) -> None:
+                self._closed = True
+
+        transport = _AiohttpWSTransport(ws, _loop)
+
+        # Emit gateway.ready so the client knows the protocol version
+        try:
+            await ws.send_str(
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "event",
+                        "params": {
+                            "type": "gateway.ready",
+                            "payload": {"skin": "ios"},
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        except Exception:
+            logger.debug("[api_server] ws closed before gateway.ready")
+            return ws
+
+        try:
+            async for msg in ws:
+                if msg.type == WSMsgType.TEXT:
+                    line = msg.data.strip()
+                    if not line:
+                        continue
+                    try:
+                        req = json.loads(line)
+                    except json.JSONDecodeError:
+                        try:
+                            await ws.send_str(
+                                json.dumps(
+                                    {
+                                        "jsonrpc": "2.0",
+                                        "error": {"code": -32700, "message": "parse error"},
+                                        "id": None,
+                                    },
+                                    ensure_ascii=False,
+                                )
+                            )
+                        except Exception:
+                            break
+                        continue
+
+                    if _tui_server is not None:
+                        resp = await asyncio.to_thread(
+                            _tui_server.dispatch, req, transport
+                        )
+                    else:
+                        resp = {
+                            "jsonrpc": "2.0",
+                            "error": {
+                                "code": -32603,
+                                "message": "tui gateway unavailable",
+                            },
+                            "id": req.get("id"),
+                        }
+
+                    if resp is not None:
+                        try:
+                            await ws.send_str(json.dumps(resp, ensure_ascii=False))
+                        except Exception:
+                            break
+                elif msg.type == WSMsgType.ERROR:
+                    logger.debug("[api_server] ws error: %s", ws.exception())
+                    break
+                elif msg.type == WSMsgType.CLOSE:
+                    break
+        finally:
+            transport.close()
+            # Detach transport from sessions so later events don't crash into
+            # a closed socket.
+            if _tui_server is not None:
+                for _, sess in list(_tui_server._sessions.items()):
+                    if sess.get("transport") is transport:
+                        sess["transport"] = _tui_server._stdio_transport
+            try:
+                await ws.close()
+            except Exception:
+                pass
+
+        return ws
+
+    # ------------------------------------------------------------------
+    # File serving for TUI gateway clients (HermesNative)
+    # ------------------------------------------------------------------
 
     async def _sweep_orphaned_runs(self) -> None:
         """Periodically expire transport buffers and terminal status records."""
