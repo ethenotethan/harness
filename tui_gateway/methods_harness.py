@@ -2,9 +2,108 @@
 
 from .method_ctx import HandlerRegistry
 
+# The wiki handlers below were carried into this module during the upstream
+# rebase's handler split WITHOUT their imports — every wiki RPC (wiki.scan,
+# wiki.page, wiki.list, wiki.taxonomy, wiki.expand_links, wiki.changesets)
+# died with `NameError: name 'resolve_wiki' is not defined`, which the
+# desktop rendered as "Failed to load page" on every wiki page. NameError,
+# not ImportError, because Python resolves function-body names at CALL time —
+# so the module imported cleanly and the break was invisible until the first
+# wiki call. tests/gateway/test_methods_harness_imports.py now pins every
+# name these handlers reference to an actual import.
+from tui_gateway.wiki_api import (
+    resolve_wiki,
+    wiki_changesets,
+    wiki_expand_links,
+    wiki_flatten_taxonomy,
+    wiki_list,
+    wiki_page,
+    wiki_scan,
+    wiki_taxonomy,
+)
+
 _registry = HandlerRegistry()
 method = _registry.method
 _profile_scoped = _registry.profile_scoped
+
+
+# Skills helpers recovered from the pre-rebase server.py (60b71f5a6) — the
+# handler split carried their callers here but dropped the definitions, so
+# the skills.* handlers NameError'd on first call, same class as the wiki
+# import loss above.
+def _find_local_skill_md(skill_name: str) -> Optional[Path]:
+    """Find a locally installed skill's SKILL.md file by name.
+
+    Searches ~/.hermes/skills/ recursively for a SKILL.md whose YAML
+    frontmatter ``name`` field matches *skill_name*.  Returns the
+    absolute Path or None.
+    """
+    import yaml
+
+    skills_dir = Path(get_hermes_home()) / "skills"
+    if not skills_dir.is_dir():
+        return None
+    for candidate in sorted(skills_dir.rglob("SKILL.md")):
+        try:
+            raw = candidate.read_text(encoding="utf-8")[:4096]
+        except (OSError, UnicodeDecodeError):
+            continue
+        # Extract YAML frontmatter between --- markers
+        if not raw.startswith("---"):
+            continue
+        end = raw.find("---", 3)
+        if end == -1:
+            continue
+        try:
+            fm = yaml.safe_load(raw[3:end])
+        except Exception:
+            continue
+        if isinstance(fm, dict) and fm.get("name") == skill_name:
+            return candidate
+    return None
+
+
+def _parse_skill_frontmatter(content: str) -> dict[str, Any]:
+    """Parse YAML frontmatter from a SKILL.md string."""
+    import yaml
+
+    if not content.startswith("---"):
+        return {}
+    end = content.find("---", 3)
+    if end == -1:
+        return {}
+    try:
+        return yaml.safe_load(content[3:end]) or {}
+    except Exception:
+        return {}
+
+
+def _skill_info_from_path(skill_md: Path, fm: dict[str, Any]) -> dict[str, Any]:
+    """Build a skill info dict consumable by HermesNative's SkillInfo."""
+    category = skill_md.parent.name if skill_md.parent.parent != skill_md.parent.parent.parent else "general"
+    # Use the relative path from skills/ dir as the category path
+    try:
+        skills_dir = Path(get_hermes_home()) / "skills"
+        rel = skill_md.parent.relative_to(skills_dir)
+        # category is the top-level directory name
+        parts = rel.parts
+        if parts:
+            category = parts[0] if len(parts) >= 1 else "general"
+    except ValueError:
+        category = "general"
+
+    info: dict[str, Any] = {
+        "name": fm.get("name", skill_md.parent.name),
+        "description": fm.get("description", ""),
+        "category": category,
+        "source": "local",
+        "id": fm.get("name", skill_md.parent.name),
+        "identifier": fm.get("name", skill_md.parent.name),
+        "tags": fm.get("metadata", {}).get("hermes", {}).get("tags", []) if isinstance(fm.get("metadata"), dict) else [],
+        "path": str(skill_md),
+        "skill_md_preview": "",  # populated by caller after reading content
+    }
+    return info
 
 @method("session.prompt_breakdown")
 def _(rid, params: dict) -> dict:
@@ -900,26 +999,7 @@ def _(rid, params: dict) -> dict:
     except Exception as e:
         logger.exception("push.unregister failed")
         return _err(rid, 5211, str(e))
-    """Read a single wiki page by relative path.
 
-    Params:
-        - ``path`` (str, required): relative path inside the wiki root
-          (e.g. ``entities/dflash-mlx.md``).
-        - ``wiki_root`` (str, optional): override the wiki root directory.
-
-    Returns:
-        ``{"id": "...", "frontmatter": {...}, "body": "...", "path": "..."}``
-    """
-    rel = str(params.get("path", "") or "").strip()
-    if not rel:
-        return _err(rid, 5101, "path required")
-    try:
-        result = _wiki_mod.page(rel, params.get("wiki_root"))
-    except Exception as e:
-        return _err(rid, 5103, f"wiki.page error: {e}")
-    if result is None:
-        return _err(rid, 5102, "page not found or access denied")
-    return _ok(rid, result)
 
 def register(server) -> None:
     _registry.install(server)
