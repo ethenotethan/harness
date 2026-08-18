@@ -1301,6 +1301,36 @@ atexit.register(_shutdown_sessions)
 _start_idle_reaper()
 
 
+def _start_wiki_watcher() -> None:
+    """Programmatic wiki-event enforcement: capture changesets for page
+    writes that bypass wiki.update (agent file tools, humans, scripts) and
+    emit wiki.changed so the desktop feed updates without relying on the
+    agent being prompted to run the capture CLI. See wiki_watch.py."""
+    try:
+        from tui_gateway import wiki_api, wiki_watch
+
+        def _roots() -> list:
+            roots = set()
+            try:
+                roots.add(wiki_api.resolve_wiki(None))
+            except Exception:
+                pass
+            try:
+                for w in wiki_api.wiki_list().get("wikis", []):
+                    if w.get("path"):
+                        roots.add(w["path"])
+            except Exception:
+                pass
+            return sorted(roots)
+
+        wiki_watch.start_wiki_watcher(emit=_emit, wiki_roots=_roots)
+    except Exception:
+        logger.debug("wiki watcher failed to start", exc_info=True)
+
+
+_start_wiki_watcher()
+
+
 # ── Plumbing ──────────────────────────────────────────────────────────
 
 
