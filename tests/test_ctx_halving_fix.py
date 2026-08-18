@@ -284,3 +284,55 @@ class TestContextNotHalvedOnOutputCapError:
         safe_out = max(1, available_out - 64)
         assert safe_out == 9_936
 
+# ---------------------------------------------------------------------------
+# Bedrock Converse consumes the ephemeral output-cap boost too
+# ---------------------------------------------------------------------------
+
+class TestBedrockEphemeralMaxTokens:
+    """The bedrock_converse branch of build_api_kwargs hardcoded
+    ``agent.max_tokens or 4096`` and never consulted
+    ``_ephemeral_max_output_tokens`` — so the length-continuation and
+    truncated-tool-call boosts (whose comments promise they apply to all
+    providers) were silently ignored on Bedrock. Every continuation re-ran
+    at the same 4096 default and long responses died with "Response
+    truncated due to output length limit" after 4 futile retries.
+    """
+
+    def _make_agent(self):
+        from run_agent import AIAgent
+        from agent.transports.bedrock import BedrockTransport
+
+        agent = object.__new__(AIAgent)
+        agent.api_mode = "bedrock_converse"
+        agent.model = "global.anthropic.claude-sonnet-4-6"
+        agent.tools = []
+        agent.max_tokens = None
+        agent._ephemeral_max_output_tokens = None
+        agent._bedrock_region = "us-east-1"
+        agent._bedrock_guardrail_config = None
+        agent._get_transport = lambda: BedrockTransport()
+        return agent
+
+    def _build(self, agent):
+        from agent.chat_completion_helpers import build_api_kwargs
+        return build_api_kwargs(agent, [{"role": "user", "content": "hi"}])
+
+    def test_default_cap_without_boost(self):
+        agent = self._make_agent()
+        kwargs = self._build(agent)
+        assert kwargs["inferenceConfig"]["maxTokens"] == 4096
+
+    def test_ephemeral_boost_reaches_the_converse_request(self):
+        agent = self._make_agent()
+        agent._ephemeral_max_output_tokens = 16_384
+        kwargs = self._build(agent)
+        assert kwargs["inferenceConfig"]["maxTokens"] == 16_384
+
+    def test_ephemeral_boost_is_consumed_after_one_call(self):
+        agent = self._make_agent()
+        agent._ephemeral_max_output_tokens = 16_384
+        self._build(agent)
+        assert agent._ephemeral_max_output_tokens is None
+        kwargs = self._build(agent)
+        assert kwargs["inferenceConfig"]["maxTokens"] == 4096
+

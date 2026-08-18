@@ -1366,11 +1366,24 @@ def build_api_kwargs(agent, api_messages: list, tools_for_api: list | None = Non
         _bt = agent._get_transport()
         region = getattr(agent, "_bedrock_region", None) or "us-east-1"
         guardrail = getattr(agent, "_bedrock_guardrail_config", None)
+        # Consume the one-shot output-cap boost, exactly like the
+        # anthropic_messages branch above. The length-continuation and
+        # truncated-tool-call retry paths escalate
+        # _ephemeral_max_output_tokens (2×, 4×, … capped at 32768) and their
+        # comments promise it "applies to all providers" — but this branch
+        # hardcoded `agent.max_tokens or 4096`, so on Bedrock every
+        # continuation re-ran at the same 4096 default and a genuinely long
+        # response died with "Response truncated due to output length limit"
+        # after 4 futile retries. Sonnet-class models on Bedrock can emit
+        # 64K tokens; the boost is the mechanism that reaches them.
+        ephemeral_out = getattr(agent, "_ephemeral_max_output_tokens", None)
+        if ephemeral_out is not None:
+            agent._ephemeral_max_output_tokens = None  # consume immediately
         return _bt.build_kwargs(
             model=agent.model,
             messages=api_messages,
             tools=tools_for_api,
-            max_tokens=agent.max_tokens or 4096,
+            max_tokens=ephemeral_out if ephemeral_out is not None else (agent.max_tokens or 4096),
             region=region,
             guardrail_config=guardrail,
         )
