@@ -497,8 +497,8 @@ def _(rid, params: dict) -> dict:
         - ``wiki`` (str, optional): wiki name (omit for default).
     """
     try:
+        from tui_gateway.wiki_api import resolve_wiki, wiki_events
         wiki_path = resolve_wiki(params.get("wiki"))
-        from tui_gateway.wiki_api import wiki_events
 
         result = wiki_events(
             wiki_path=wiki_path,
@@ -529,8 +529,8 @@ def _(rid, params: dict) -> dict:
         changeset_id = params.get("id")
         if not changeset_id or not isinstance(changeset_id, str):
             return _err(rid, 4001, "id must be a non-empty string")
+        from tui_gateway.wiki_api import resolve_wiki, wiki_changeset_diff
         wiki_path = resolve_wiki(params.get("wiki"))
-        from tui_gateway.wiki_api import wiki_changeset_diff
 
         result = wiki_changeset_diff(changeset_id, wiki_path=wiki_path)
         if "error" in result:
@@ -591,9 +591,10 @@ def _(rid, params: dict) -> dict:
         summary = params.get("summary")
         if summary is not None and not isinstance(summary, str):
             return _err(rid, 4001, "summary must be a string")
-        wiki_path = resolve_wiki(params.get("wiki"))
 
-        from tui_gateway.wiki_api import wiki_update
+        from tui_gateway.wiki_api import resolve_wiki, wiki_update
+
+        wiki_path = resolve_wiki(params.get("wiki"))
 
         result = wiki_update(
             page_path,
