@@ -361,6 +361,49 @@ def _(rid, params: dict) -> dict:
     except Exception as e:
         return _err(rid, 5024, str(e))
 
+@method("files.list")
+def _(rid, params: dict) -> dict:
+    """List a browsable root's file tree (the repo checkout or ~/.hermes).
+
+    With no ``root`` param, returns the set of available root names so the
+    desktop can render the top level; with a ``root``, returns that root's
+    bounded, containment-checked tree. All logic lives in the pure
+    tui_gateway.files_browse module (locally imported so it resolves against
+    the real import system regardless of the handler's rebound globals)."""
+    try:
+        from tui_gateway.files_browse import FileBrowseError, file_roots, list_tree
+
+        root = params.get("root")
+        if not root:
+            return _ok(rid, {"roots": sorted(file_roots().keys())})
+        try:
+            return _ok(rid, list_tree(root, params.get("path", "") or ""))
+        except FileBrowseError as fe:
+            return _err(rid, fe.code, fe.message)
+    except Exception as e:
+        logger.exception("files.list failed")
+        return _err(rid, 5060, str(e))
+
+
+@method("files.read")
+def _(rid, params: dict) -> dict:
+    """Read one file (read-only, UTF-8 text) from a browsable root."""
+    try:
+        from tui_gateway.files_browse import FileBrowseError, read_file
+
+        root = params.get("root")
+        path = params.get("path")
+        if not root:
+            return _err(rid, 4001, "root is required")
+        try:
+            return _ok(rid, read_file(root, path))
+        except FileBrowseError as fe:
+            return _err(rid, fe.code, fe.message)
+    except Exception as e:
+        logger.exception("files.read failed")
+        return _err(rid, 5061, str(e))
+
+
 @method("session.set_prompt")
 def _(rid, params: dict) -> dict:
     """Set an ephemeral system prompt append on the live agent.
