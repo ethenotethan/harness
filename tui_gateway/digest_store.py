@@ -60,15 +60,24 @@ def append_digest(source: str, articles: list[dict]) -> int:
     existing_ids = {a["id"] for a in feed}
     new_articles = []
     for a in articles:
-        aid = _article_id(source, a.get("title", ""), now)
+        # published_ts = when the SOURCE published it (real event date, may be
+        # historical). ts = ingestion time (when it entered the feed) — kept for
+        # stable sort/`since` semantics the client already relies on. Dedup keys
+        # off published date so backdated re-runs don't create duplicates.
+        published_ts = (a.get("published_ts") or "").strip() or now
+        aid = _article_id(source, a.get("title", ""), published_ts)
         if aid in existing_ids:
             continue
+        # content_type distinguishes papers from blog posts (client can badge/filter).
+        content_type = (a.get("content_type") or "article").strip().lower()
         new_articles.append({
             "id": aid, "source": source,
             "title": a.get("title", ""), "url": a.get("url", ""),
             "summary": a.get("summary", "")[:500],
             "tags": a.get("tags", []), "image_url": a.get("image_url", ""),
             "ts": now,
+            "published_ts": published_ts,
+            "content_type": content_type,
         })
     feed[:0] = new_articles
     feed = feed[:MAX_ARTICLES]
