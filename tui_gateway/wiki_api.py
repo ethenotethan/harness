@@ -622,20 +622,23 @@ def wiki_events(
 ) -> dict:
     """The ingestion event log — every event that caused a wiki update.
 
-    No new storage. An event is a file already on disk under ``raw/``, whose
-    frontmatter carries ``source_url`` / ``ingested`` / ``sha256``; the changeset
-    index already records which events caused which page writes. This is a join
-    over both, which is why it can be added without a migration and why it is
-    accurate for history that predates it.
+    Reads the **materialized event log** (``changesets/events.json``), the
+    write-time store populated by ``wiki_record_event`` and
+    ``wiki_capture_changeset``. Events are captured when they happen, not
+    reconstructed by scanning ``raw/`` after the fact — the old derivation
+    assumed top-level ``.md`` files with frontmatter and silently returned
+    nothing for the JSON snapshots the real pipeline writes under
+    ``raw/snapshots/`` and ``raw/mpp/``.
 
     Each event reports the changesets it caused, so a client can navigate
-    event → changeset → page as well as the reverse.
+    event → changeset → page as well as the reverse. The raw-scan derivation
+    survives only as ``_wiki_events_from_raw_scan`` — a one-time backfill seed,
+    never the live read.
 
     Args:
         wiki_path: Wiki root path override
-        kind: Filter by event kind (the ``event_kind`` / ``type`` frontmatter
-            value). Kinds are defined by ``type: event-type`` wiki pages, not
-            by a fixed list here — the taxonomy belongs to the wiki.
+        kind: Filter by event kind (the recorded ``kind``). Kinds are defined
+            by ``type: event-type`` wiki pages, not by a fixed list here.
         limit: Max results (default 200, max 1000)
         offset: Pagination offset
         since: ISO timestamp, only events at or after this
@@ -644,12 +647,48 @@ def wiki_events(
     Returns:
         {"events": [...], "total": N, "limit": L, "offset": O}
 
-        Each event's ``timestamp`` is strict RFC3339 UTC
-        (``2026-08-04T16:55:58Z``) regardless of how ``ingested`` was written, or
-        ``""`` when no time could be established at all. ``time_estimated`` is
-        True when the timestamp came from the file's mtime rather than from
-        ``ingested``. Bounds are compared as instants, so a window means the same
-        thing whatever format the wiki used.
+        Each event's ``timestamp`` is strict RFC3339 UTC, or ``""`` when no
+        time could be established. ``time_estimated`` is True when the
+        timestamp came from the record's ``recorded_at`` (when it was first
+        materialized) rather than the source's own ``ingested_at``. Bounds are
+        compared as instants.
+    """
+    try:
+        module = _load_wiki_changeset_module("wiki_query_events")
+    except ImportError:
+        # A gateway whose bundled wiki_changeset predates the materialized log
+        # still has the derivable events in raw/ — fall back to the scan so an
+        # un-migrated wiki isn't blank. This is the ONLY live use of the scan.
+        logger.warning(
+            "wiki.events: materialized log unavailable, deriving from raw/ scan",
+            exc_info=True,
+        )
+        return _wiki_events_from_raw_scan(
+            wiki_path=wiki_path, kind=kind, limit=limit,
+            offset=offset, since=since, until=until,
+        )
+    wiki = Path(wiki_path or _default_wiki_path())
+    return module.wiki_query_events(
+        wiki_path=str(wiki), kind=kind, limit=limit,
+        offset=offset, since=since, until=until,
+    )
+
+
+def _wiki_events_from_raw_scan(
+    wiki_path: Optional[str] = None,
+    kind: Optional[str] = None,
+    limit: int = 200,
+    offset: int = 0,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+) -> dict:
+    """DERIVED event log — reconstruct events by scanning ``raw/*.md``.
+
+    Retained only as the backfill seed and the fallback for a gateway whose
+    ``wiki_changeset`` module predates the materialized log. NOT the live read
+    path: it sees only top-level ``.md`` files with frontmatter and misses the
+    JSON snapshots in ``raw/`` subdirs that the real pipeline writes, which is
+    exactly the fragility this refactor removes.
     """
     wiki = Path(wiki_path or _default_wiki_path())
     raw_dir = wiki / RAW_SUBDIR

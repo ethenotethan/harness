@@ -197,6 +197,7 @@ def cmd_capture(a):
             "error: could not import wiki_changeset — ensure scripts/wiki_changeset.py "
             "is on the path (~/.hermes/scripts or a repo checkout)."
         )
+    wiki_path = _resolve(a)
     res = wiki_changeset.wiki_capture_changeset(
         page_path=a.path,
         action=a.action,
@@ -204,16 +205,45 @@ def cmd_capture(a):
         trigger=a.trigger,
         source=a.source,
         source_events=getattr(a, "source_events", None),
-        wiki_path=_resolve(a),
+        wiki_path=wiki_path,
     )
     if isinstance(res, dict) and res.get("error"):
         sys.exit(f"error: {res['error']}")
     cid = res.get("id") if isinstance(res, dict) else None
     keys = res.get("source_event_keys") or [] if isinstance(res, dict) else []
+    # Domain metadata the write path can't infer (an opaque `article:<hash>`
+    # key carries no url on its own). The ingester supplies it here and we fill
+    # it onto each event record the capture just materialized — idempotent, so
+    # it enriches without clobbering anything an earlier call recorded.
+    event_kind = getattr(a, "event_kind", None)
+    event_url = getattr(a, "event_url", None)
+    if (event_kind or event_url) and hasattr(wiki_changeset, "wiki_record_event"):
+        for key in keys:
+            wiki_changeset.wiki_record_event(
+                key, kind=event_kind, source_url=event_url,
+                trigger=a.trigger, wiki_path=wiki_path,
+            )
     # Say when provenance is missing. A silent capture is how a KB accumulates
     # unknowns nobody notices until the whole log is untrustworthy.
     provenance = f" ← {', '.join(keys)}" if keys else "  [provenance: unknown]"
     print(f"captured changeset {cid or ''}: {a.action} {a.path}{provenance}".rstrip())
+
+
+def cmd_backfill_events(a):
+    if wiki_changeset is None or not hasattr(wiki_changeset, "wiki_backfill_events"):
+        sys.exit(
+            "error: wiki_changeset.wiki_backfill_events unavailable — the bundled "
+            "wiki_changeset.py may predate the materialized event log."
+        )
+    res = wiki_changeset.wiki_backfill_events(wiki_path=_resolve(a))
+    if getattr(a, "json", False):
+        print(json.dumps(res, indent=2, ensure_ascii=False))
+    else:
+        print(
+            f"backfill-events: scanned {res.get('scanned_changesets', 0)} changesets, "
+            f"{res.get('distinct_keys', 0)} distinct source keys "
+            f"({res.get('created', 0)} created, {res.get('already_present', 0)} already present)"
+        )
 
 
 def _resolve(a):
@@ -270,7 +300,17 @@ def main(argv=None):
                    metavar="RAW_PATH",
                    help="event that caused this change (repeatable) — "
                         "e.g. --source-event raw/articles/src.md")
+    # Domain metadata the write path can't infer from an opaque event key.
+    # Threaded onto the materialized event record for each --source-event.
+    s.add_argument("--event-kind", default=None,
+                   help="kind for the caused event(s), e.g. github_pr | arxiv | snapshot")
+    s.add_argument("--event-url", default=None,
+                   help="source URL for the caused event(s)")
     s.set_defaults(func=cmd_capture)
+
+    s = sub.add_parser("backfill-events",
+                       help="materialize an event record per source key across all changesets (idempotent)")
+    s.add_argument("--json", action="store_true"); s.set_defaults(func=cmd_backfill_events)
 
     a = p.parse_args(argv)
     a.func(a)
