@@ -123,24 +123,115 @@ class TestReadTimeMigration:
         assert wiki_changeset._with_provenance(recorded)["source_event_keys"] == ["raw/b.md"]
 
 
-class TestWikiEvents:
-    def test_events_join_the_changesets_they_caused(self, git_wiki):
-        _write(
-            git_wiki, "raw/article.md",
-            "---\ntitle: Release notes\ntype: ingest\n"
-            "source_url: https://example.invalid/x\n"
-            "ingested: 2026-07-01T10:00:00Z\nsha256: abc123\n---\nRaw text.\n",
+class TestRecordEvent:
+    """The materialized event log — events captured at write-time, not derived.
+
+    The identity is the key; first write creates, later writes are idempotent
+    fill-forward (never clobbering a richer earlier value).
+    """
+
+    def test_record_creates_an_event(self, git_wiki):
+        rec = wiki_changeset.wiki_record_event(
+            "raw/snapshots/2026-08-18.json",
+            kind="snapshot",
+            source_url="https://example.invalid/s",
+            sha256="abc123",
+            ingested_at="2026-08-18T06:00:00Z",
+            trigger="ingest",
         )
+        assert rec["key"] == "raw/snapshots/2026-08-18.json"
+        assert rec["kind"] == "snapshot"
+        assert rec["source_url"] == "https://example.invalid/s"
+        assert rec["sha256"] == "abc123"
+        assert rec["ingested_at"] == "2026-08-18T06:00:00Z"
+
+    def test_a_blank_key_is_refused(self, git_wiki):
+        assert "error" in wiki_changeset.wiki_record_event("   ")
+
+    def test_second_write_with_same_key_is_idempotent(self, git_wiki):
+        wiki_changeset.wiki_record_event("raw/mpp/a.json", kind="mpp")
+        again = wiki_changeset.wiki_record_event("raw/mpp/a.json", kind="mpp")
+        events = wiki_changeset._load_events()
+        # One event, not two — the key is the identity.
+        assert list(events.keys()) == ["raw/mpp/a.json"]
+        assert again["kind"] == "mpp"
+
+    def test_later_write_fills_blanks_but_never_clobbers(self, git_wiki):
+        # A capture records only the key + trigger; a later enriching call adds
+        # the url it learned. But a value already recorded is never overwritten.
+        wiki_changeset.wiki_record_event("raw/x.json", trigger="ingest")
+        enriched = wiki_changeset.wiki_record_event(
+            "raw/x.json", source_url="https://example.invalid/x", kind="snapshot"
+        )
+        assert enriched["source_url"] == "https://example.invalid/x"
+        assert enriched["kind"] == "snapshot"
+        assert enriched["trigger"] == "ingest"
+        # A conflicting later kind must not clobber the recorded one.
+        again = wiki_changeset.wiki_record_event("raw/x.json", kind="OTHER")
+        assert again["kind"] == "snapshot"
+
+
+class TestCaptureEmitsEvents:
+    """The write path emits events, so one snapshot → many pages is one event."""
+
+    def test_capture_materializes_an_event_per_source(self, git_wiki):
+        _write(git_wiki, "entities/x.md", "---\ntitle: X\n---\nBody.\n")
+        wiki_changeset.wiki_capture_changeset(
+            "entities/x.md", "create", "synthesized",
+            trigger="ingest", source_events=["raw/one.json", "raw/two.json"],
+        )
+        events = wiki_changeset._load_events()
+        assert set(events.keys()) == {"raw/one.json", "raw/two.json"}
+        assert events["raw/one.json"]["trigger"] == "ingest"
+
+    def test_one_snapshot_causing_many_pages_is_one_event(self, git_wiki):
+        # 3 page writes all caused by the same snapshot must record ONE event,
+        # not three — the upsert dedupes by key.
+        for i in range(3):
+            _write(git_wiki, f"entities/p{i}.md", f"---\ntitle: P{i}\n---\nB.\n")
+            wiki_changeset.wiki_capture_changeset(
+                f"entities/p{i}.md", "create", "from the snapshot",
+                trigger="ingest", source_events=["raw/snapshots/day.json"],
+            )
+        events = wiki_changeset._load_events()
+        assert list(events.keys()) == ["raw/snapshots/day.json"]
+
+    def test_capture_with_no_source_emits_no_event(self, git_wiki):
+        # A hand edit with no provenance records no event — the log stays a
+        # record of ingestion, not of every keystroke.
+        _write(git_wiki, "entities/y.md", "---\ntitle: Y\n---\nBody.\n")
+        wiki_changeset.wiki_capture_changeset("entities/y.md", "create", "no source")
+        assert wiki_changeset._load_events() == {}
+
+
+class TestWikiEvents:
+    """wiki.events reads the MATERIALIZED log and joins the changesets caused.
+
+    These pin the emitted-event contract (not the old raw/ derivation) while
+    preserving the invariants the derivation legitimately had: window/since/
+    until as instants, RFC3339 normalization, newest-first sort, pagination,
+    kind filter, and the caused-nothing view.
+    """
+
+    def test_events_join_the_changesets_they_caused(self, git_wiki):
+        # An ingester records the event with its domain metadata (the write
+        # path can't infer a url from an opaque key)…
+        wiki_changeset.wiki_record_event(
+            "raw/article.json", kind="ingest",
+            source_url="https://example.invalid/x", sha256="abc123",
+            ingested_at="2026-07-01T10:00:00Z",
+        )
+        # …and a capture declares it as the cause of a page write.
         _write(git_wiki, "entities/x.md", "---\ntitle: X\n---\nBody.\n")
         wiki_changeset.wiki_capture_changeset(
             "entities/x.md", "create", "from the article",
-            trigger="ingest", source_events=["raw/article.md"],
+            trigger="ingest", source_events=["raw/article.json"],
         )
 
         result = wiki_api.wiki_events(wiki_path=str(git_wiki))
         assert result["total"] == 1
         event = result["events"][0]
-        assert event["key"] == "raw/article.md"
+        assert event["key"] == "raw/article.json"
         assert event["kind"] == "ingest"
         assert event["source_url"] == "https://example.invalid/x"
         assert event["sha256"] == "abc123"
@@ -148,13 +239,15 @@ class TestWikiEvents:
         assert [c["page"] for c in event["changesets"]] == ["entities/x.md"]
 
     def test_an_event_that_caused_nothing_still_appears(self, git_wiki):
-        # An ingested source nobody synthesized from is exactly the gap worth
-        # seeing in the feed, so it must not be filtered out.
-        _write(
-            git_wiki, "raw/unused.md",
-            "---\ntitle: Unused\ntype: ingest\ningested: 2026-07-02T10:00:00Z\n---\nRaw.\n",
+        # An ingester fetched a source but hasn't synthesized from it yet. It
+        # records the event directly (wiki_record_event is public/standalone),
+        # and it must show in the feed as caused-nothing — that's the work
+        # queue, not an error.
+        wiki_changeset.wiki_record_event(
+            "raw/unused.json", kind="ingest", ingested_at="2026-07-02T10:00:00Z"
         )
         result = wiki_api.wiki_events(wiki_path=str(git_wiki))
+        assert result["total"] == 1
         assert result["events"][0]["changesets"] == []
 
     def test_events_are_newest_first(self, git_wiki):
@@ -162,29 +255,24 @@ class TestWikiEvents:
             ("old", "2026-07-01T10:00:00Z"),
             ("new", "2026-07-03T10:00:00Z"),
         ]:
-            _write(
-                git_wiki, f"raw/{name}.md",
-                f"---\ntitle: {name}\ningested: {ingested}\n---\nRaw.\n",
-            )
-
+            wiki_changeset.wiki_record_event(f"raw/{name}.json", ingested_at=ingested)
         events = wiki_api.wiki_events(wiki_path=str(git_wiki))["events"]
-        assert [e["title"] for e in events] == ["new", "old"]
+        assert [e["key"] for e in events] == ["raw/new.json", "raw/old.json"]
 
-    def test_a_source_with_no_ingested_falls_back_to_mtime_and_says_so(self, git_wiki):
-        # An event with no time can't be plotted at all, so the file's own mtime
-        # is better than nothing — but it is NOT the event's time (a fresh clone
-        # rewrites every mtime), so it must be flagged rather than presented as
-        # precise. This is what the client draws as an estimated-time mark.
-        _write(git_wiki, "raw/nostamp.md", "---\ntitle: No stamp\n---\nRaw.\n")
-
+    def test_an_event_with_no_ingested_at_falls_back_to_recorded_at_and_says_so(
+        self, git_wiki
+    ):
+        # An event captured with no source ingest time still has a real instant
+        # to plot — when it was first materialized — but that is NOT the source's
+        # own time, so it is flagged rather than presented as precise.
+        wiki_changeset.wiki_record_event("raw/nostamp.json")
         event = wiki_api.wiki_events(wiki_path=str(git_wiki))["events"][0]
         assert event["timestamp"] != ""
         assert event["time_estimated"] is True
 
-    def test_a_dated_source_is_not_marked_estimated(self, git_wiki):
-        _write(
-            git_wiki, "raw/dated.md",
-            "---\ntitle: Dated\ningested: 2026-07-01T10:00:00Z\n---\nRaw.\n",
+    def test_a_dated_event_is_not_marked_estimated(self, git_wiki):
+        wiki_changeset.wiki_record_event(
+            "raw/dated.json", ingested_at="2026-07-01T10:00:00Z"
         )
         event = wiki_api.wiki_events(wiki_path=str(git_wiki))["events"][0]
         assert event["timestamp"] == "2026-07-01T10:00:00Z"
@@ -201,40 +289,30 @@ class TestWikiEvents:
             "  2026-07-20T12:00:00Z  ",     # padded
         ],
     )
-    def test_ingested_is_normalized_to_one_wire_format(self, git_wiki, written):
-        # `ingested` is written by whatever ingested the source, sometimes by
+    def test_ingested_at_is_normalized_to_one_wire_format(self, git_wiki, written):
+        # ingested_at is supplied by whatever recorded the event, sometimes by
         # hand, so it is not reliably strict RFC3339. Every one of these denotes
-        # the same instant and must reach the client as the same string — a
-        # client that has to guess the format will get it wrong, which is how
-        # dated events ended up unplotted.
-        _write(
-            git_wiki, "raw/a.md",
-            f"---\ntitle: A\ningested: {written}\n---\nRaw.\n",
-        )
+        # the same instant and must reach the client as the same string.
+        wiki_changeset.wiki_record_event("raw/a.json", ingested_at=written)
         event = wiki_api.wiki_events(wiki_path=str(git_wiki))["events"][0]
         assert event["timestamp"] == "2026-07-20T12:00:00Z"
         assert event["time_estimated"] is False
 
     def test_a_non_utc_offset_is_converted_not_truncated(self, git_wiki):
-        # 05:00-07:00 is 12:00Z. Dropping the offset would misplace the event by
-        # seven hours and could push it out of the requested window.
-        _write(
-            git_wiki, "raw/a.md",
-            "---\ntitle: A\ningested: 2026-07-20T05:00:00-07:00\n---\nRaw.\n",
+        # 05:00-07:00 is 12:00Z. Dropping the offset would misplace the event.
+        wiki_changeset.wiki_record_event(
+            "raw/a.json", ingested_at="2026-07-20T05:00:00-07:00"
         )
         event = wiki_api.wiki_events(wiki_path=str(git_wiki))["events"][0]
         assert event["timestamp"] == "2026-07-20T12:00:00Z"
 
-    def test_an_unparseable_ingested_falls_back_to_mtime_and_is_flagged(self, git_wiki):
-        # Same treatment as a missing field: an unusable value tells us nothing
-        # about when the event happened, so the mtime stands in and is marked
-        # estimated. What must NOT happen is passing "whenever" through as a
-        # timestamp, or inventing a precise time nobody recorded.
-        _write(git_wiki, "raw/a.md", "---\ntitle: A\ningested: whenever\n---\nRaw.\n")
+    def test_an_unparseable_ingested_at_falls_back_and_is_flagged(self, git_wiki):
+        # An unusable value tells us nothing about when the event happened, so
+        # recorded_at stands in and is marked estimated — never passed through.
+        wiki_changeset.wiki_record_event("raw/a.json", ingested_at="whenever")
         event = wiki_api.wiki_events(wiki_path=str(git_wiki))["events"][0]
         assert event["timestamp"] != "whenever"
         assert event["time_estimated"] is True
-        # And it's a real, parseable instant rather than a passed-through string.
         assert wiki_api._parse_event_time(event["timestamp"]) is not None
 
     @pytest.mark.parametrize(
@@ -249,20 +327,15 @@ class TestWikiEvents:
     def test_the_window_keeps_events_inside_it_whatever_the_format(
         self, git_wiki, written
     ):
-        # The bug this pins: bounds were compared as STRINGS, so an event that
-        # was genuinely inside the window got dropped whenever its timestamp was
-        # written in a shape that sorts oddly against the bound. The plot then
-        # came up empty while the event sat right there in the feed.
-        _write(
-            git_wiki, "raw/a.md",
-            f"---\ntitle: A\ningested: {written}\n---\nRaw.\n",
-        )
+        # Bounds are compared as INSTANTS, so an event genuinely inside the
+        # window is kept whatever shape its timestamp was written in.
+        wiki_changeset.wiki_record_event("raw/a.json", ingested_at=written)
         result = wiki_api.wiki_events(
             wiki_path=str(git_wiki),
             since="2026-07-20T00:00:00Z",
             until="2026-07-21T00:00:00Z",
         )
-        assert [e["title"] for e in result["events"]] == ["A"]
+        assert [e["key"] for e in result["events"]] == ["raw/a.json"]
 
     def test_the_window_still_excludes_events_outside_it(self, git_wiki):
         for name, ingested in [
@@ -270,74 +343,56 @@ class TestWikiEvents:
             ("inside", "2026-07-20T12:00:00Z"),
             ("after", "2031-01-01T00:00:00Z"),
         ]:
-            _write(
-                git_wiki, f"raw/{name}.md",
-                f"---\ntitle: {name}\ningested: {ingested}\n---\nRaw.\n",
-            )
+            wiki_changeset.wiki_record_event(f"raw/{name}.json", ingested_at=ingested)
         result = wiki_api.wiki_events(
             wiki_path=str(git_wiki),
             since="2026-07-20T00:00:00Z",
             until="2026-07-21T00:00:00Z",
         )
-        assert [e["title"] for e in result["events"]] == ["inside"]
+        assert [e["key"] for e in result["events"]] == ["raw/inside.json"]
 
     def test_a_non_utc_bound_is_compared_as_an_instant(self, git_wiki):
-        # until = 05:00-07:00 = 12:00Z, so a 13:00Z event is after it. Compared
-        # as strings, "2026-07-20T13:00:00Z" > "2026-07-20T05:00:00-07:00" only
-        # by luck of the digits — the point is that the instant decides.
-        _write(
-            git_wiki, "raw/late.md",
-            "---\ntitle: late\ningested: 2026-07-20T13:00:00Z\n---\nRaw.\n",
+        # until = 05:00-07:00 = 12:00Z, so a 13:00Z event is after it.
+        wiki_changeset.wiki_record_event(
+            "raw/late.json", ingested_at="2026-07-20T13:00:00Z"
         )
-        _write(
-            git_wiki, "raw/early.md",
-            "---\ntitle: early\ningested: 2026-07-20T11:00:00Z\n---\nRaw.\n",
+        wiki_changeset.wiki_record_event(
+            "raw/early.json", ingested_at="2026-07-20T11:00:00Z"
         )
         result = wiki_api.wiki_events(
             wiki_path=str(git_wiki), until="2026-07-20T05:00:00-07:00"
         )
-        assert [e["title"] for e in result["events"]] == ["early"]
+        assert [e["key"] for e in result["events"]] == ["raw/early.json"]
 
     def test_an_unparseable_bound_widens_rather_than_empties(self, git_wiki):
-        # A malformed bound that silently matched nothing would look exactly
-        # like an empty wiki. Treat it as absent instead.
-        _write(
-            git_wiki, "raw/a.md",
-            "---\ntitle: A\ningested: 2026-07-20T12:00:00Z\n---\nRaw.\n",
+        wiki_changeset.wiki_record_event(
+            "raw/a.json", ingested_at="2026-07-20T12:00:00Z"
         )
         result = wiki_api.wiki_events(wiki_path=str(git_wiki), since="garbage")
-        assert [e["title"] for e in result["events"]] == ["A"]
+        assert [e["key"] for e in result["events"]] == ["raw/a.json"]
 
     def test_an_estimated_time_still_participates_in_the_window(self, git_wiki):
-        # A source with no usable `ingested` gets its mtime, and that estimate is
-        # a real time, so the window applies to it like any other. The estimate
-        # is the best available answer to "when"; excluding such events from
-        # every window instead would make them appear in windows they have no
-        # evidence of belonging to.
-        _write(git_wiki, "raw/a.md", "---\ntitle: A\ningested: nonsense\n---\nRaw.\n")
-        # The file was written just now, so a window over last year excludes it…
+        # An event with no usable ingested_at gets recorded_at (now), a real
+        # time the window applies to like any other.
+        wiki_changeset.wiki_record_event("raw/a.json", ingested_at="nonsense")
         past = wiki_api.wiki_events(
             wiki_path=str(git_wiki),
             since="2019-01-01T00:00:00Z",
             until="2019-12-31T00:00:00Z",
         )
         assert past["events"] == []
-        # …and an unbounded query still finds it, flagged as estimated.
         allof = wiki_api.wiki_events(wiki_path=str(git_wiki))
-        assert [e["title"] for e in allof["events"]] == ["A"]
+        assert [e["key"] for e in allof["events"]] == ["raw/a.json"]
         assert allof["events"][0]["time_estimated"] is True
 
     def test_kind_filter_matches_the_declared_kind(self, git_wiki):
-        _write(git_wiki, "raw/a.md", "---\ntitle: A\nevent_kind: github_pr\n---\nRaw.\n")
-        _write(git_wiki, "raw/b.md", "---\ntitle: B\ntype: ingest\n---\nRaw.\n")
-
+        wiki_changeset.wiki_record_event("raw/a.json", kind="github_pr")
+        wiki_changeset.wiki_record_event("raw/b.json", kind="ingest")
         prs = wiki_api.wiki_events(wiki_path=str(git_wiki), kind="github_pr")
-        assert [e["title"] for e in prs["events"]] == ["A"]
-        # event_kind wins over type, so a raw page can be a wiki page of one
-        # type and an event of another.
+        assert [e["key"] for e in prs["events"]] == ["raw/a.json"]
         assert prs["events"][0]["kind"] == "github_pr"
 
-    def test_a_wiki_without_raw_has_an_empty_log_not_an_error(self, tmp_path):
+    def test_a_wiki_without_events_has_an_empty_log_not_an_error(self, tmp_path):
         bare = tmp_path / "bare"
         (bare / "entities").mkdir(parents=True)
         result = wiki_api.wiki_events(wiki_path=str(bare))
@@ -345,14 +400,62 @@ class TestWikiEvents:
 
     def test_pagination_reports_the_full_total(self, git_wiki):
         for i in range(5):
-            _write(
-                git_wiki, f"raw/s{i}.md",
-                f"---\ntitle: S{i}\ningested: 2026-07-0{i + 1}T10:00:00Z\n---\nRaw.\n",
+            wiki_changeset.wiki_record_event(
+                f"raw/s{i}.json", ingested_at=f"2026-07-0{i + 1}T10:00:00Z"
             )
         result = wiki_api.wiki_events(wiki_path=str(git_wiki), limit=2, offset=1)
         assert result["total"] == 5
         assert len(result["events"]) == 2
-        assert [e["title"] for e in result["events"]] == ["S3", "S2"]
+        assert [e["key"] for e in result["events"]] == ["raw/s3.json", "raw/s2.json"]
+
+
+class TestBackfillEvents:
+    """Backfill materializes one event per distinct source key, idempotently."""
+
+    def test_backfill_materializes_events_for_existing_changesets(self, git_wiki):
+        # Simulate a wiki whose changesets carry source keys but whose event
+        # log was never populated (the pre-refactor state): capture, then wipe
+        # the event store the capture emitted.
+        _write(git_wiki, "entities/x.md", "---\ntitle: X\n---\nBody.\n")
+        wiki_changeset.wiki_capture_changeset(
+            "entities/x.md", "create", "s", trigger="ingest",
+            source_events=["raw/one.json", "raw/two.json"],
+        )
+        (git_wiki / "changesets" / "events.json").unlink()
+
+        res = wiki_changeset.wiki_backfill_events(wiki_path=str(git_wiki))
+        assert res["distinct_keys"] == 2
+        assert res["created"] == 2
+        assert set(wiki_changeset._load_events(str(git_wiki)).keys()) == {
+            "raw/one.json", "raw/two.json"
+        }
+
+    def test_backfill_is_idempotent_on_rerun(self, git_wiki):
+        _write(git_wiki, "entities/x.md", "---\ntitle: X\n---\nBody.\n")
+        wiki_changeset.wiki_capture_changeset(
+            "entities/x.md", "create", "s", trigger="ingest",
+            source_events=["raw/one.json"],
+        )
+        first = wiki_changeset.wiki_backfill_events(wiki_path=str(git_wiki))
+        second = wiki_changeset.wiki_backfill_events(wiki_path=str(git_wiki))
+        # The events already existed (emitted at capture), so re-running never
+        # creates duplicates.
+        assert second["created"] == 0
+        assert second["already_present"] == first["distinct_keys"]
+        assert list(wiki_changeset._load_events(str(git_wiki)).keys()) == ["raw/one.json"]
+
+    def test_backfill_dates_an_event_by_its_earliest_caused_changeset(self, git_wiki):
+        _write(git_wiki, "entities/x.md", "---\ntitle: X\n---\nBody.\n")
+        wiki_changeset.wiki_capture_changeset(
+            "entities/x.md", "create", "s", trigger="ingest",
+            source_events=["raw/one.json"],
+        )
+        (git_wiki / "changesets" / "events.json").unlink()
+        wiki_changeset.wiki_backfill_events(wiki_path=str(git_wiki))
+        # The backfilled event carries a real timestamp (the changeset's), so
+        # it's plottable rather than dumped at "now".
+        event = wiki_api.wiki_events(wiki_path=str(git_wiki))["events"][0]
+        assert event["timestamp"] != ""
 
 
 class TestScanForwardsSources:

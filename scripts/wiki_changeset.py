@@ -71,6 +71,110 @@ def _save_index(index: list, wiki_path: Optional[str] = None):
     os.replace(tmp, ip)
 
 
+def _events_path(wiki_path: Optional[str] = None) -> Path:
+    """Location of the materialized event log (a machine-layer store).
+
+    Lives alongside the changeset index so the two provenance halves — what
+    changed (index.json) and what caused it (events.json) — sit together and
+    are backed up, git-tracked, and reasoned about as one unit.
+    """
+    return _changesets_dir(wiki_path) / "events.json"
+
+
+def _load_events(wiki_path: Optional[str] = None) -> dict:
+    """Load the event store as a {key: record} map, or an empty map.
+
+    Keyed by the event key (the raw source path / opaque source id) because
+    the key IS the event's identity: the same source ingested twice is one
+    event, not two, so a map dedupes for free and makes upsert O(1).
+    """
+    ep = _events_path(wiki_path)
+    if not ep.exists():
+        return {}
+    try:
+        with open(ep, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _save_events(events: dict, wiki_path: Optional[str] = None):
+    """Persist the event store atomically (temp file + os.replace)."""
+    ep = _events_path(wiki_path)
+    tmp = ep.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(events, f, indent=2, sort_keys=True)
+    os.replace(tmp, ep)
+
+
+def wiki_record_event(
+    key: str,
+    kind: Optional[str] = None,
+    source_url: Optional[str] = None,
+    sha256: Optional[str] = None,
+    ingested_at: Optional[str] = None,
+    trigger: Optional[str] = None,
+    wiki_path: Optional[str] = None,
+) -> dict:
+    """Upsert an ingestion event into the materialized event log.
+
+    An event is a thing the wiki ingested — a raw snapshot, an article, an
+    MPP dump — identified by ``key`` (its raw path or opaque source id). This
+    is the write-time counterpart to ``wiki_capture_changeset``: instead of
+    reconstructing events after the fact by scanning ``raw/`` (fragile — it
+    assumed top-level ``.md`` files with frontmatter, and missed the JSON
+    snapshots the real pipeline writes), the ingester declares each event as
+    it happens.
+
+    ``key`` is the identity. The first write with a given key CREATES the
+    record; later writes are idempotent — they only fill in fields that were
+    previously empty, and never clobber a value already recorded. So one
+    snapshot that causes 40 page writes records ONE event (upserted 40 times),
+    not 40. Re-running a backfill is safe for the same reason.
+
+    Fields other than ``key`` are optional because the write path often can't
+    infer them (an ``article:<hash>`` key carries no url on its own); an
+    ingester that knows them passes them, and a later call that learns them
+    fills the blanks.
+
+    Returns the stored record, or ``{"error": ...}`` for a blank key.
+    """
+    k = (key or "").strip()
+    if not k:
+        return {"error": "event key is required"}
+
+    events = _load_events(wiki_path)
+    existing = events.get(k)
+    if not isinstance(existing, dict):
+        existing = {}
+
+    def _pick(new, old):
+        # Idempotent fill-forward: a non-empty new value only when there is no
+        # non-empty old value. Keeps re-runs and re-emits from clobbering
+        # richer data recorded earlier.
+        new_s = new.strip() if isinstance(new, str) else (new or "")
+        old_s = old.strip() if isinstance(old, str) else (old or "")
+        return new_s if not old_s and new_s else (old or "")
+
+    record = {
+        "key": k,
+        "kind": _pick(kind, existing.get("kind")),
+        "source_url": _pick(source_url, existing.get("source_url")),
+        "sha256": _pick(sha256, existing.get("sha256")),
+        "ingested_at": _pick(ingested_at, existing.get("ingested_at")),
+        "trigger": _pick(trigger, existing.get("trigger")),
+        # First time this key was recorded, so a genuinely undated event still
+        # has a real instant to sort by (distinct from ingested_at, which is
+        # when the SOURCE says it was ingested).
+        "recorded_at": existing.get("recorded_at")
+        or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    events[k] = record
+    _save_events(events, wiki_path)
+    return record
+
+
 def _sha256_file(path: Path) -> str:
     """Compute SHA256 of a file's contents."""
     h = hashlib.sha256()
@@ -353,6 +457,22 @@ def wiki_capture_changeset(
     index.insert(0, index_entry)
     _save_index(index, wiki_path)
 
+    # Emit an event record for each source that caused this change (create-if-
+    # absent, idempotent). This is the write-time capture that replaces the
+    # old after-the-fact raw/ scan: one snapshot causing 40 page writes
+    # upserts ONE event 40 times, not 40 events. The write path can't infer an
+    # event's kind/url from an opaque key, so it records only what it knows —
+    # the key and the trigger — and leaves an ingester (or a later call with
+    # --event-kind/--event-url) to enrich the rest.
+    for event_key in changeset["source_event_keys"]:
+        try:
+            wiki_record_event(event_key, trigger=trigger, wiki_path=wiki_path)
+        except Exception:
+            # A capture that succeeded must not fail because the event log
+            # hiccuped; the changeset is the source of truth and a backfill
+            # can reconstruct any missed event from it.
+            pass
+
     return changeset
 
 
@@ -515,6 +635,195 @@ def wiki_query_changesets(
     }
 
 
+def _parse_event_time(value: str) -> Optional["datetime"]:
+    """Parse a timestamp into an aware UTC datetime, or None if unparseable.
+
+    Accepts strict RFC3339, a bare ``datetime.isoformat()`` (no zone), a space
+    separator, microseconds, a plain date, and a trailing ``Z``. A value with
+    no zone is read as UTC. This mirrors the tolerance the raw-scan path needed
+    for hand-written ``ingested`` fields, kept here so an event's timestamp is
+    normalized the same way whether it came from an ingester or a backfill.
+    """
+    text = (value or "").strip()
+    if not text:
+        return None
+    candidate = text[:-1] + "+00:00" if text.endswith(("Z", "z")) else text
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
+
+
+def _normalize_event_time(value: str) -> str:
+    """Render a timestamp as strict RFC3339 UTC, or "" if unparseable."""
+    parsed = _parse_event_time(value)
+    if parsed is None:
+        return ""
+    return parsed.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _caused_by_key(wiki_path: Optional[str] = None) -> dict:
+    """Map each event key → the list of changesets that declared it as a cause.
+
+    Built once from the changeset index (paging past the 200-per-call cap) so
+    the event→changeset join stays linear. Each caused entry is a compact
+    changeset summary the client can navigate to.
+    """
+    caused: dict = {}
+    offset = 0
+    while True:
+        page = wiki_query_changesets(wiki_path=wiki_path, limit=200, offset=offset)
+        rows = page.get("changesets", [])
+        for changeset in rows:
+            for key in changeset.get("source_event_keys") or []:
+                caused.setdefault(key, []).append(
+                    {
+                        "id": changeset.get("id", ""),
+                        "page": changeset.get("page", ""),
+                        "title": changeset.get("title", ""),
+                        "action": changeset.get("action", ""),
+                        "timestamp": changeset.get("timestamp", ""),
+                    }
+                )
+        offset += len(rows)
+        if not rows or offset >= page.get("total", 0):
+            break
+    return caused
+
+
+def wiki_query_events(
+    wiki_path: Optional[str] = None,
+    kind: Optional[str] = None,
+    limit: int = 200,
+    offset: int = 0,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+) -> dict:
+    """Read the materialized event log, joined to the changesets each caused.
+
+    This is the live read path: it serves the emitted event records (written
+    at tool-call time by ``wiki_record_event`` / ``wiki_capture_changeset``),
+    NOT a reconstruction by scanning ``raw/``. The raw scan is kept only as a
+    one-time backfill seed, because the real pipeline writes JSON snapshots in
+    subdirs that the scan never saw.
+
+    Each event's ``timestamp`` is strict RFC3339 UTC, taken from
+    ``ingested_at`` when present and falling back to ``recorded_at`` (the
+    instant the event was first materialized), which is flagged with
+    ``time_estimated``. Window bounds are compared as instants. Newest first.
+
+    Returns ``{"events": [...], "total": N, "limit": L, "offset": O}``.
+    """
+    events_map = _load_events(wiki_path)
+    caused = _caused_by_key(wiki_path)
+
+    since_dt = _parse_event_time(since or "")
+    until_dt = _parse_event_time(until or "")
+
+    rows: list[dict] = []
+    for key, rec in events_map.items():
+        if not isinstance(rec, dict):
+            continue
+        event_kind = str(rec.get("kind", "") or "").strip()
+        if kind and event_kind != kind:
+            continue
+
+        ingested = str(rec.get("ingested_at", "") or "")
+        event_dt = _parse_event_time(ingested)
+        time_estimated = False
+        if event_dt is None:
+            # Fall back to when the event was first recorded — a real instant,
+            # but not the source's own ingest time, so flag it as estimated.
+            event_dt = _parse_event_time(str(rec.get("recorded_at", "") or ""))
+            time_estimated = event_dt is not None
+
+        if since_dt and event_dt and event_dt < since_dt:
+            continue
+        if until_dt and event_dt and event_dt > until_dt:
+            continue
+
+        timestamp = (
+            event_dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            if event_dt
+            else ""
+        )
+        rows.append(
+            {
+                "key": rec.get("key", key),
+                "kind": event_kind,
+                "title": str(rec.get("title", "") or key),
+                "timestamp": timestamp,
+                "time_estimated": time_estimated,
+                "source_url": str(rec.get("source_url", "") or ""),
+                "sha256": str(rec.get("sha256", "") or ""),
+                "trigger": str(rec.get("trigger", "") or ""),
+                "changesets": caused.get(key, []),
+            }
+        )
+
+    # Newest first; an empty timestamp sorts last under reverse ordering, so a
+    # genuinely undated event lands at the end rather than dated to now.
+    rows.sort(key=lambda e: e["timestamp"], reverse=True)
+
+    total = len(rows)
+    window = rows[offset : offset + min(max(limit, 0), 1000)]
+    return {"events": window, "total": total, "limit": limit, "offset": offset}
+
+
+def wiki_backfill_events(wiki_path: Optional[str] = None) -> dict:
+    """Materialize an event record per distinct source key across all changesets.
+
+    A one-time (idempotent) migration for a wiki whose events were previously
+    only *derivable* from the changeset index. Walks every changeset — paging
+    past the 200-per-call cap — collects each distinct ``source_event_keys``
+    entry, and upserts it via ``wiki_record_event`` (create-if-absent, so
+    re-running never duplicates or clobbers). The write path can't infer a
+    key's kind/url, so backfilled records carry only key + trigger; an
+    ingester enriches the rest on its next real write.
+
+    Returns ``{"scanned_changesets": N, "distinct_keys": K, "created": C,
+    "already_present": P}``.
+    """
+    caused = _caused_by_key(wiki_path)
+    before = set(_load_events(wiki_path).keys())
+
+    scanned = 0
+    offset = 0
+    while True:
+        page = wiki_query_changesets(wiki_path=wiki_path, limit=200, offset=offset)
+        rows = page.get("changesets", [])
+        scanned += len(rows)
+        offset += len(rows)
+        if not rows or offset >= page.get("total", 0):
+            break
+
+    created = 0
+    already = 0
+    for key, changesets in caused.items():
+        # The earliest changeset that names this key gives a plausible ingest
+        # time when nothing better is known — better than the backfill's own
+        # clock, since it reflects when the effect actually landed.
+        stamps = [c.get("timestamp", "") for c in changesets if c.get("timestamp")]
+        earliest = min(stamps) if stamps else None
+        if key in before:
+            already += 1
+        else:
+            created += 1
+        wiki_record_event(
+            key,
+            ingested_at=earliest,
+            wiki_path=wiki_path,
+        )
+
+    return {
+        "scanned_changesets": scanned,
+        "distinct_keys": len(caused),
+        "created": created,
+        "already_present": already,
+    }
+
+
 # ── CLI entry point for testing ────────────────────────────────────────
 if __name__ == "__main__":
     import sys
@@ -544,6 +853,28 @@ if __name__ == "__main__":
             page=sys.argv[2] if len(sys.argv) > 2 else None,
             limit=int(sys.argv[3]) if len(sys.argv) > 3 else 50,
         )
+        print(json.dumps(result, indent=2))
+    elif cmd == "record":
+        # wiki-changeset.py record <key> [kind] [source_url] [sha256] [ingested_at] [trigger]
+        if len(sys.argv) < 3:
+            print("usage: wiki-changeset.py record <key> [kind] [source_url] [sha256] [ingested_at] [trigger]")
+            sys.exit(1)
+        result = wiki_record_event(
+            key=sys.argv[2],
+            kind=sys.argv[3] if len(sys.argv) > 3 else None,
+            source_url=sys.argv[4] if len(sys.argv) > 4 else None,
+            sha256=sys.argv[5] if len(sys.argv) > 5 else None,
+            ingested_at=sys.argv[6] if len(sys.argv) > 6 else None,
+            trigger=sys.argv[7] if len(sys.argv) > 7 else None,
+        )
+        print(json.dumps(result, indent=2))
+    elif cmd == "events":
+        result = wiki_query_events(
+            limit=int(sys.argv[2]) if len(sys.argv) > 2 else 200,
+        )
+        print(json.dumps(result, indent=2))
+    elif cmd == "backfill-events":
+        result = wiki_backfill_events()
         print(json.dumps(result, indent=2))
     else:
         print(f"unknown command: {cmd}")
