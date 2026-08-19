@@ -1,5 +1,13 @@
 """Harness-specific JSON-RPC handlers preserved across upstream rebases."""
 
+import json
+import os
+import sys
+from pathlib import Path
+from typing import Any, Optional
+
+from hermes_constants import get_hermes_home
+
 from .method_ctx import HandlerRegistry
 
 # The wiki handlers below were carried into this module during the upstream
@@ -381,6 +389,7 @@ def _(rid, params: dict) -> dict:
 @method("wiki.scan")
 def _(rid, params: dict) -> dict:
     try:
+        from tui_gateway.wiki_api import resolve_wiki, wiki_scan
         wiki_name = params.get("wiki") or params.get("path")
         wiki_path = resolve_wiki(wiki_name)
         result = wiki_scan(wiki_path)
@@ -392,6 +401,7 @@ def _(rid, params: dict) -> dict:
 @method("wiki.page")
 def _(rid, params: dict) -> dict:
     try:
+        from tui_gateway.wiki_api import resolve_wiki, wiki_page
         page_path = params.get("path")
         if not page_path:
             return _err(rid, 4001, "path is required")
@@ -418,6 +428,7 @@ def _(rid, params: dict) -> dict:
 def _(rid, params: dict) -> dict:
     """Return the hierarchical taxonomy tree from taxonomy.yaml."""
     try:
+        from tui_gateway.wiki_api import resolve_wiki, wiki_taxonomy, wiki_flatten_taxonomy
         wiki_name = params.get("wiki")
         wiki_path = resolve_wiki(wiki_name)
         tax = wiki_taxonomy(wiki_path)
@@ -433,6 +444,7 @@ def _(rid, params: dict) -> dict:
 def _(rid, params: dict) -> dict:
     """Expand integration_links for a wiki page to live status objects."""
     try:
+        from tui_gateway.wiki_api import resolve_wiki, wiki_expand_links
         slug = params.get("slug")
         if not slug:
             return _err(rid, 4001, "slug is required")
@@ -450,6 +462,7 @@ def _(rid, params: dict) -> dict:
 def _(rid, params: dict) -> dict:
     """Return paginated wiki changesets (timeline view)."""
     try:
+        from tui_gateway.wiki_api import resolve_wiki, wiki_changesets
         wiki_name = params.get("wiki")
         wiki_path = resolve_wiki(wiki_name)
         result = wiki_changesets(
@@ -484,8 +497,8 @@ def _(rid, params: dict) -> dict:
         - ``wiki`` (str, optional): wiki name (omit for default).
     """
     try:
+        from tui_gateway.wiki_api import resolve_wiki, wiki_events
         wiki_path = resolve_wiki(params.get("wiki"))
-        from tui_gateway.wiki_api import wiki_events
 
         result = wiki_events(
             wiki_path=wiki_path,
@@ -516,8 +529,8 @@ def _(rid, params: dict) -> dict:
         changeset_id = params.get("id")
         if not changeset_id or not isinstance(changeset_id, str):
             return _err(rid, 4001, "id must be a non-empty string")
+        from tui_gateway.wiki_api import resolve_wiki, wiki_changeset_diff
         wiki_path = resolve_wiki(params.get("wiki"))
-        from tui_gateway.wiki_api import wiki_changeset_diff
 
         result = wiki_changeset_diff(changeset_id, wiki_path=wiki_path)
         if "error" in result:
@@ -578,9 +591,10 @@ def _(rid, params: dict) -> dict:
         summary = params.get("summary")
         if summary is not None and not isinstance(summary, str):
             return _err(rid, 4001, "summary must be a string")
-        wiki_path = resolve_wiki(params.get("wiki"))
 
-        from tui_gateway.wiki_api import wiki_update
+        from tui_gateway.wiki_api import resolve_wiki, wiki_update
+
+        wiki_path = resolve_wiki(params.get("wiki"))
 
         result = wiki_update(
             page_path,
