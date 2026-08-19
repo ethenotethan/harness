@@ -113,7 +113,43 @@ def _parse_frontmatter(content: str) -> tuple[dict, str]:
     metadata = {}
     current_key = None
     current_list = None
-    for line in parts[1].split("\n"):
+    # Nested mapping support: `tags:` with indented `key: value` children is a
+    # real YAML shape used by controlled-taxonomy wikis. The flat parser
+    # hoisted those children to top level and left `tags` itself None, so every
+    # page reported `tags: []` — the graph had nothing to colour nodes by and
+    # the taxonomy filter was empty. Children are now BOTH kept nested under
+    # their parent (as a dict) and flattened into "parent.child"/bare-key
+    # aliases, so existing readers of e.g. fm["maturity"] keep working.
+    nested_parent = None
+    nested_map: dict = {}
+
+    def _flush_nested():
+        nonlocal nested_parent, nested_map
+        if nested_parent and nested_map:
+            metadata[nested_parent] = dict(nested_map)
+            # flat list of "key:value" strings for clients expecting a sequence
+            metadata[f"{nested_parent}_flat"] = [
+                f"{k}:{v}" for k, v in nested_map.items()
+            ]
+        nested_parent, nested_map = None, {}
+
+    for raw_line in parts[1].split("\n"):
+        line = raw_line
+        # Indented `key: value` under a parent mapping (2+ spaces, not a list item)
+        if nested_parent and re.match(r"^\s+[^\s-][^:]*:", line):
+            k, v = line.split(":", 1)
+            k, v = k.strip(), v.strip()
+            if len(v) >= 2 and v[0] == v[-1] and v[0] in ('"', "'"):
+                v = v[1:-1]
+            nested_map[k] = v
+            # also expose bare key at top level (back-compat for fm["maturity"])
+            metadata.setdefault(k, v)
+            continue
+        if nested_parent and not line.strip():
+            continue
+        if nested_parent and not line.startswith((" ", "\t")):
+            _flush_nested()
+
         # Check for indented list item (YAML list)
         if line.startswith("  - ") and current_key:
             if current_list is None:
@@ -142,14 +178,20 @@ def _parse_frontmatter(content: str) -> tuple[dict, str]:
                 val = val[1:-1]
             if val:  # scalar value
                 metadata[key] = val
-            else:  # starts a list on next lines
+            else:
+                # An empty value opens either a YAML list ("- item" lines) or a
+                # nested mapping ("  child: value" lines). We can't know which
+                # until the next line, so arm both and let the line shape decide.
                 current_key = key
                 current_list = None
-    
-    # Flush final key's list
+                nested_parent = key
+                nested_map = {}
+
+    # Flush final key's list / nested mapping
     if current_key and current_list is not None:
         metadata[current_key] = current_list
-    
+    _flush_nested()
+
     return metadata, parts[2]
 
 
@@ -158,6 +200,48 @@ def _extract_wikilinks(body: str) -> list[str]:
     pattern = r'\[\[([^\]|]+)(?:\|[^\]]+)?\]\]'
     matches = re.findall(pattern, body)
     return [m.strip().lower().replace(" ", "-") for m in matches]
+
+
+#: Typed relation predicates (wiki SCHEMA §3.3). Structural edges are written as
+#: "- <predicate>: [[target]]" inside a generated RELATIONS fence, so the graph
+#: can label an edge with what it MEANS instead of a generic "wikilink".
+RELATION_PREDICATES = (
+    "settles_through",
+    "implements",
+    "deployed_on",
+    "listed_in",
+    "operates",
+    "routes_to",
+)
+
+_TYPED_RELATION_RX = re.compile(
+    r"^\s*-\s+(" + "|".join(RELATION_PREDICATES) + r")\s*:\s*\[\[([^\]|]+)(?:\|[^\]]+)?\]\]",
+    re.MULTILINE,
+)
+
+
+def _extract_typed_relations(body: str) -> list[tuple]:
+    """Yield (predicate, target) for typed relation lines in a page body."""
+    return [
+        (m.group(1), m.group(2).strip().lower().replace(" ", "-"))
+        for m in _TYPED_RELATION_RX.finditer(body)
+    ]
+
+
+def _resolve_link_target(target: str, page_ids: set) -> Optional[str]:
+    """Resolve a wikilink target to a page id, or None if it names no page.
+
+    Accepts bare slugs ("coinbase") and path-style targets
+    ("entities/protocol/mpp", "queries/x402-market"). Path-style links are
+    written by the projectors and by hand; matching them only against bare ids
+    meant they resolved to nothing and disappeared from the graph.
+    """
+    if target in page_ids:
+        return target
+    tail = target.rstrip("/").rsplit("/", 1)[-1]
+    if tail.endswith(".md"):
+        tail = tail[:-3]
+    return tail if tail in page_ids else None
 
 
 #: Content subdirectories scanned for wiki pages. Root-level *.md files
@@ -172,12 +256,23 @@ def _iter_page_files(wiki: Path):
     Covers the content subdirectories plus root-level pages (subdir "" —
     e.g. index.md, log.md), which previously never appeared in wiki.scan
     and were therefore invisible in graph clients.
+
+    RECURSES into nested subdirectories. Real taxonomies are two levels deep
+    (``entities/org/foo.md``, ``entities/protocol/x402.md``,
+    ``events/capital/snapshot.md``), and a non-recursive ``iterdir()`` silently
+    dropped every one of them: a 971-page wiki scanned as 5 pages (3 root + 2
+    queries) because nothing lives directly in ``entities/``. The reported
+    subdir stays the TOP-LEVEL bucket so taxonomy filters keep working, while
+    ``rel`` (added by the caller) carries the full relative path.
     """
     for subdir in [""] + WIKI_SUBDIRS:
         dir_path = wiki / subdir if subdir else wiki
         if not dir_path.exists():
             continue
-        for file in sorted(dir_path.iterdir()):
+        # Root level is deliberately NOT recursive: its children are the
+        # taxonomy buckets themselves, which are walked on their own pass.
+        files = sorted(dir_path.glob("*.md")) if not subdir else sorted(dir_path.rglob("*.md"))
+        for file in files:
             if file.suffix != ".md" or not file.is_file():
                 continue
             yield subdir, file
@@ -201,13 +296,37 @@ def wiki_scan(wiki_path: Optional[str] = None) -> dict:
             continue
         fm, _ = _parse_frontmatter(content)
         slug = file.stem
-        rel_path = f"{subdir}/{file.name}" if subdir else file.name
+        # Path must be the FULL path relative to the wiki root. Joining only the
+        # top-level bucket (f"{subdir}/{file.name}") advertised
+        # "entities/stableenrich.md" for a file at "entities/org/stableenrich.md",
+        # so every nested page 404'd in wiki.page ("Failed to load page") the
+        # moment the scan started recursing.
+        try:
+            rel_path = file.relative_to(wiki).as_posix()
+        except ValueError:
+            rel_path = f"{subdir}/{file.name}" if subdir else file.name
 
-        # Parse tags (handles "[tag1, tag2]" or "tag1, tag2")
+        # Parse tags. Two shapes are supported:
+        #   tags: [a, b]            → flat list (legacy / simple wikis)
+        #   tags:                   → nested controlled taxonomy
+        #     protocol: [x402]
+        #     maturity: deployed
+        # The nested form is returned by _parse_frontmatter as a dict; flatten
+        # it to "axis:value" strings so clients get one uniform list to colour
+        # and filter by (previously this called .strip() on the dict's absence
+        # and every page reported no tags at all).
         raw_tags = fm.get("tags", "")
         tags: list[str] = []
-        if raw_tags:
-            cleaned = raw_tags.strip().strip("[]").replace("'", "").replace('"', "")
+        if isinstance(raw_tags, dict):
+            for axis, val in raw_tags.items():
+                cleaned = str(val).strip().strip("[]").replace("'", "").replace('"', "")
+                for v in (x.strip() for x in cleaned.split(",")):
+                    if v:
+                        tags.append(f"{axis}:{v}")
+        elif isinstance(raw_tags, list):
+            tags = [str(t).strip() for t in raw_tags if str(t).strip()]
+        elif raw_tags:
+            cleaned = str(raw_tags).strip().strip("[]").replace("'", "").replace('"', "")
             tags = [t.strip() for t in cleaned.split(",") if t.strip()]
 
         # Root-level pages (index/log) are meta pages unless frontmatter
@@ -236,7 +355,13 @@ def wiki_scan(wiki_path: Optional[str] = None) -> dict:
         )
         page_ids.add(slug)
 
-    # Second pass: extract wikilinks (only link to existing pages)
+    # Second pass: extract links. Typed relations (SCHEMA §3.3) are emitted
+    # with their PREDICATE as the edge type so clients can style/filter by
+    # relationship kind; everything else stays a plain "wikilink".
+    #
+    # Also resolves path-style targets ([[entities/protocol/mpp]]) to their
+    # slug, which previously matched no page id and so silently vanished from
+    # the graph — dropping every cross-protocol edge on the floor.
     for _subdir, file in _iter_page_files(wiki):
         try:
             content = file.read_text(encoding="utf-8")
@@ -244,9 +369,20 @@ def wiki_scan(wiki_path: Optional[str] = None) -> dict:
             continue
         _, body = _parse_frontmatter(content)
         slug = file.stem
+        typed: set[tuple] = set()
+        for pred, target in _extract_typed_relations(body):
+            resolved = _resolve_link_target(target, page_ids)
+            if resolved and resolved != slug:
+                typed.add((resolved, pred))
+                links.append({"source": slug, "target": resolved, "type": pred})
         for target in _extract_wikilinks(body):
-            if target in page_ids:
-                links.append({"source": slug, "target": target, "type": "wikilink"})
+            resolved = _resolve_link_target(target, page_ids)
+            if not resolved or resolved == slug:
+                continue
+            # don't duplicate an edge already emitted with its real predicate
+            if any((resolved, p) in typed for p in RELATION_PREDICATES):
+                continue
+            links.append({"source": slug, "target": resolved, "type": "wikilink"})
 
     return {"pages": pages, "links": links}
 
