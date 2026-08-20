@@ -336,3 +336,150 @@ class TestValidateStore:
 
         issues = validate_store()
         assert any("cycle" in i for i in issues)
+
+
+class TestBuildCronGraph:
+    def test_empty_store(self, cron_env):
+        from cron.jobs import build_cron_graph
+
+        graph = build_cron_graph()
+        assert graph == {"nodes": [], "edges": []}
+
+    def test_cron_node_shape(self, cron_env):
+        from cron.jobs import build_cron_graph, create_job
+
+        job = create_job(name="collector", prompt="x", schedule="every 1h")
+        graph = build_cron_graph()
+        cron_nodes = [n for n in graph["nodes"] if n["kind"] == "cron"]
+        assert len(cron_nodes) == 1
+        node = cron_nodes[0]
+        assert node["id"] == job["id"]
+        assert node["type"] == "cron"
+        assert node["label"] == "collector"
+        assert node["uses_llm"] is True
+
+    def test_no_agent_job_marks_uses_llm_false(self, cron_env):
+        import os
+
+        from cron.jobs import build_cron_graph, create_job
+
+        script_dir = cron_env / "scripts"
+        script_dir.mkdir(parents=True, exist_ok=True)
+        (script_dir / "w.sh").write_text("echo hi\n")
+        os.chmod(script_dir / "w.sh", 0o755)
+        create_job(prompt="", schedule="every 1h", no_agent=True, script="w.sh")
+        graph = build_cron_graph()
+        cron_nodes = [n for n in graph["nodes"] if n["kind"] == "cron"]
+        assert cron_nodes[0]["uses_llm"] is False
+
+    def test_source_node_and_reads_edge(self, cron_env):
+        from cron.jobs import build_cron_graph, create_job
+
+        job = create_job(
+            prompt="x", schedule="every 1h", inputs=["https://api.example.com"]
+        )
+        graph = build_cron_graph()
+        source = [n for n in graph["nodes"] if n["kind"] == "source"]
+        assert source == [
+            {
+                "id": "https://api.example.com",
+                "kind": "source",
+                "type": "https",
+                "label": "//api.example.com",
+            }
+        ]
+        assert {
+            "source": "https://api.example.com",
+            "target": job["id"],
+            "type": "reads",
+        } in graph["edges"]
+
+    def test_artifact_links_producer_to_consumer(self, cron_env):
+        # A writes wiki:reports/daily; B reads it → shared artifact node with a
+        # writes edge in and a reads edge out (outputs make edges).
+        from cron.jobs import build_cron_graph, create_job
+
+        a = create_job(prompt="a", schedule="every 1h", outputs=["wiki:reports/daily"])
+        b = create_job(prompt="b", schedule="every 2h", inputs=["wiki:reports/daily"])
+        graph = build_cron_graph()
+
+        artifacts = [n for n in graph["nodes"] if n["kind"] == "artifact"]
+        assert [n["id"] for n in artifacts] == ["wiki:reports/daily"]
+
+        edges = graph["edges"]
+        assert {"source": a["id"], "target": "wiki:reports/daily", "type": "writes"} in edges
+        assert {"source": "wiki:reports/daily", "target": b["id"], "type": "reads"} in edges
+
+    def test_cron_output_input_makes_feeds_edge(self, cron_env):
+        from cron.jobs import build_cron_graph, create_job
+
+        a = create_job(prompt="a", schedule="every 1h")
+        b = create_job(
+            prompt="b", schedule="every 1h", inputs=[f"cron-output:{a['id']}"]
+        )
+        graph = build_cron_graph()
+        assert {"source": a["id"], "target": b["id"], "type": "feeds"} in graph["edges"]
+        # cron-output does not spawn a resource node — it's a direct cron→cron edge.
+        assert all(n["kind"] == "cron" for n in graph["nodes"])
+
+    def test_side_effect_makes_sink_and_scheme_typed_edge(self, cron_env):
+        from cron.jobs import build_cron_graph, create_job
+
+        job = create_job(
+            prompt="x",
+            schedule="every 1h",
+            deliver="telegram",
+            side_effects=["telegram:me"],
+        )
+        graph = build_cron_graph()
+        sinks = [n for n in graph["nodes"] if n["kind"] == "sink"]
+        assert sinks == [
+            {"id": "telegram:me", "kind": "sink", "type": "telegram", "label": "me"}
+        ]
+        assert {
+            "source": job["id"],
+            "target": "telegram:me",
+            "type": "telegram",
+        } in graph["edges"]
+
+    def test_produced_resource_outranks_source(self, cron_env):
+        # If a ref is both read (by one job) and written (by another), the node
+        # is an artifact, not a source.
+        from cron.jobs import build_cron_graph, create_job
+
+        create_job(prompt="reader", schedule="every 1h", inputs=["file:/data/x"])
+        create_job(prompt="writer", schedule="every 2h", outputs=["file:/data/x"])
+        graph = build_cron_graph()
+        res = [n for n in graph["nodes"] if n["id"] == "file:/data/x"]
+        assert len(res) == 1
+        assert res[0]["kind"] == "artifact"
+
+
+class TestCronGraphRPC:
+    def test_handler_returns_ok_envelope(self, cron_env):
+        from cron.jobs import create_job
+
+        create_job(prompt="x", schedule="every 1h", side_effects=["notify:desktop"])
+
+        # Invoke the registered handler directly with a stubbed _ok/_err.
+        import tui_gateway.methods_tools as mt
+
+        handler = dict(mt._registry._pending)["cron.graph"]
+        captured = {}
+
+        def _ok(rid, result):
+            captured["rid"] = rid
+            captured["result"] = result
+            return {"result": result}
+
+        def _err(rid, code, msg):  # pragma: no cover - failure path
+            raise AssertionError(f"handler errored: {code} {msg}")
+
+        handler.__globals__["_ok"] = _ok
+        handler.__globals__["_err"] = _err
+        handler.__globals__.setdefault("logger", __import__("logging").getLogger("t"))
+
+        handler(7, {})
+        assert captured["rid"] == 7
+        assert set(captured["result"].keys()) == {"nodes", "edges"}
+        assert any(n["kind"] == "cron" for n in captured["result"]["nodes"])

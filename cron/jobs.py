@@ -1820,6 +1820,115 @@ def validate_store() -> List[str]:
     return issues
 
 
+def build_cron_graph(
+    jobs: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Assemble the cron interflow dataflow graph as ``{nodes, edges}``.
+
+    Crons never dispatch to each other — they communicate through data — so this
+    is a dataflow graph. Edges use the wiki graph's typed-edge shape
+    (``{source, target, type}``) so Portal's typed-edge renderer can be reused.
+
+    Node kinds:
+      - ``cron``     one per job (node id = job id).
+      - ``source``   a resource READ by ≥1 cron and written by none — an
+                     external/upstream input (url/http/https/file/wiki).
+      - ``artifact`` a resource WRITTEN by ≥1 cron (consumable output). When
+                     another cron reads the same ref, that shared node IS the
+                     cron→cron link (outputs make edges).
+      - ``sink``     a side_effect target — a terminal action (side effects make
+                     sinks, never edges onward).
+
+    Edge types:
+      - ``reads``     source/artifact → cron
+      - ``writes``    cron → artifact
+      - ``feeds``     cron → cron — a ``cron-output:<id>`` input; the explicit
+                      dependency backbone (mirrors ``context_from``).
+      - ``<scheme>``  cron → sink — the delivered action kind (telegram/pr/…).
+
+    Resource/sink node ids are the ``scheme:value`` ref itself (always contains
+    a colon); cron node ids are the bare job id — so the two id spaces never
+    collide, and a shared data ref naturally dedupes to one node.
+    """
+    if jobs is None:
+        jobs = [_normalize_job_record(job) for job in load_jobs()]
+
+    job_ids = {job.get("id") for job in jobs if job.get("id")}
+
+    # A resource written by any cron is an artifact even if also read elsewhere.
+    produced: Set[str] = set()
+    for job in jobs:
+        for ref in job.get("outputs") or []:
+            produced.add(ref)
+
+    resource_kind: Dict[str, str] = {}
+
+    def _ensure_resource(ref: str, kind: str) -> None:
+        existing = resource_kind.get(ref)
+        if existing is None:
+            resource_kind[ref] = kind
+        elif existing == "source" and kind == "artifact":
+            # A produced resource outranks a bare read: promote source→artifact.
+            resource_kind[ref] = "artifact"
+
+    nodes: List[Dict[str, Any]] = []
+    edges: List[Dict[str, Any]] = []
+
+    for job in jobs:
+        jid = job.get("id")
+        if not jid:
+            continue
+        nodes.append(
+            {
+                "id": jid,
+                "kind": "cron",
+                "type": "cron",
+                "label": job.get("name") or jid,
+                "schedule": job.get("schedule_display"),
+                "enabled": bool(job.get("enabled", True)),
+                "state": job.get("state"),
+                "uses_llm": not bool(job.get("no_agent")),
+                "last_status": job.get("last_status"),
+                "deliver": job.get("deliver"),
+            }
+        )
+
+        for ref in job.get("inputs") or []:
+            if ref.startswith("cron-output:"):
+                upstream = ref.split(":", 1)[1].strip()
+                if upstream in job_ids:
+                    edges.append(
+                        {"source": upstream, "target": jid, "type": "feeds"}
+                    )
+                # A dangling upstream is surfaced by validate_store(), not drawn.
+            else:
+                _ensure_resource(ref, "artifact" if ref in produced else "source")
+                edges.append({"source": ref, "target": jid, "type": "reads"})
+
+        for ref in job.get("outputs") or []:
+            _ensure_resource(ref, "artifact")
+            edges.append({"source": jid, "target": ref, "type": "writes"})
+
+        for ref in job.get("side_effects") or []:
+            _ensure_resource(ref, "sink")
+            edges.append(
+                {"source": jid, "target": ref, "type": ref.split(":", 1)[0]}
+            )
+
+    for ref in sorted(resource_kind):
+        scheme, _, value = ref.partition(":")
+        nodes.append(
+            {
+                "id": ref,
+                "kind": resource_kind[ref],
+                "type": scheme,
+                "label": value or ref,
+            }
+        )
+
+    return {"nodes": nodes, "edges": edges}
+
+
 def _validate_job_mode_invariants(
     monitor_script: Optional[str],
     monitor_url: Optional[str],
