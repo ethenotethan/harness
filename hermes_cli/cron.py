@@ -206,6 +206,26 @@ def cron_tick():
     tick(verbose=True)
 
 
+def cron_doctor() -> int:
+    """Store-wide dataflow consistency sweep. Returns a nonzero exit on issues.
+
+    Catches drift that per-job create/update validation can't — a producer
+    deleted after consumers referenced it, a cycle formed across independent
+    edits, or a malformed stored ref from a hand-edited jobs.json. Intended for
+    CI and manual checks.
+    """
+    from cron.jobs import validate_store
+
+    issues = validate_store()
+    if not issues:
+        print("cron doctor: dataflow OK — no inconsistencies found.")
+        return 0
+    print(f"cron doctor: found {len(issues)} dataflow issue(s):")
+    for issue in issues:
+        print(f"  - {issue}")
+    return 1
+
+
 def cron_runs(job_id: Optional[str] = None, limit: int = 20):
     """Show indexed durable cron execution history."""
     from cron.executions import list_executions
@@ -562,6 +582,9 @@ def cron_command(args):
         cron_tick()
         return 0
 
+    if subcmd == "doctor":
+        return cron_doctor()
+
     if subcmd in {"runs", "history"}:
         cron_runs(getattr(args, "job_id", None), getattr(args, "limit", 20))
         return 0
@@ -588,5 +611,5 @@ def cron_command(args):
         return _job_action("remove", args.job_id, "Removed")
 
     print(f"Unknown cron command: {subcmd}")
-    print("Usage: hermes cron [list|create|edit|pause|resume|run|remove|status|runs|tick]")
+    print("Usage: hermes cron [list|create|edit|pause|resume|run|remove|status|runs|tick|doctor]")
     sys.exit(1)
