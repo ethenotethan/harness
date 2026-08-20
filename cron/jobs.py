@@ -476,6 +476,12 @@ def _normalize_job_record(job: Dict[str, Any]) -> Dict[str, Any]:
     # "paused" while the fleet is still live. See effective_job_state().
     normalized["state"] = effective_job_state(normalized)
 
+    # Backfill dataflow metadata for records written before these fields existed
+    # so graph/API consumers can read them unconditionally.
+    for df_field in ("inputs", "outputs", "side_effects"):
+        value = normalized.get(df_field)
+        normalized[df_field] = value if isinstance(value, list) else []
+
     return normalized
 
 
@@ -1536,6 +1542,393 @@ def _normalized_inference_axes(job: Dict[str, Any]) -> Tuple[Optional[str], Opti
     )
 
 
+# ---------------------------------------------------------------------------
+# Dataflow metadata (interflow graph)
+#
+# Crons never dispatch to each other — they communicate through data: one job
+# writes an artifact, a later job wakes and reads it. So the cron graph is a
+# *dataflow* graph, and cron→cron edges are INFERRED by matching one job's
+# `cron-output:<id>` input to the producing job. Each job declares three typed
+# `scheme:value` lists (the creating agent fills them — the mechanism can't see
+# semantic reads/writes):
+#   inputs       — what it reads (external sources + upstream cron output). Edges IN.
+#   outputs      — consumable data it writes (join keys). Edges OUT.
+#   side_effects — terminal actions (telegram/pr/…). Sink leaves, never edges.
+# The output-vs-side-effect split keeps the graph readable: outputs make edges,
+# side effects make sinks.
+_INPUT_SCHEMES = frozenset({"url", "http", "https", "file", "wiki", "cron-output"})
+_OUTPUT_SCHEMES = frozenset({"wiki", "file"})
+_SIDE_EFFECT_SCHEMES = frozenset(
+    {"telegram", "slack", "email", "notify", "pr", "github", "webhook"}
+)
+
+# `deliver` values that are genuine EXTERNAL side effects (vs local/origin
+# in-band delivery, which is not a graph sink). Maps a deliver target to the
+# side-effect scheme it mechanically implies, for the declared-vs-derived
+# cross-check in _validate_dataflow_shape.
+_DELIVER_SIDE_EFFECT_SCHEME = {
+    "telegram": "telegram",
+    "slack": "slack",
+    "email": "email",
+}
+
+
+def _normalize_resource_list(
+    values: Any,
+    *,
+    allowed_schemes: Collection[str],
+    field_name: str,
+) -> List[str]:
+    """Normalize a dataflow resource list to sorted, deduped ``scheme:value``.
+
+    Accepts a single string or a list of strings; ``None``/empty → ``[]``. Each
+    entry is a typed reference whose scheme is lowercased and must be drawn from
+    ``allowed_schemes``. Raises ValueError on malformed / out-of-vocabulary refs
+    so bad declarations never reach storage.
+    """
+    if values is None:
+        return []
+    if isinstance(values, str):
+        raw: List[Any] = [values]
+    elif isinstance(values, (list, tuple)):
+        raw = list(values)
+    else:
+        raise ValueError(
+            f"{field_name} must be a string or list of 'scheme:value' strings, "
+            f"got {type(values).__name__}."
+        )
+
+    seen: Set[str] = set()
+    out: List[str] = []
+    allowed_sorted = sorted(allowed_schemes)
+    for item in raw:
+        if not isinstance(item, str):
+            raise ValueError(
+                f"{field_name} entries must be 'scheme:value' strings, got "
+                f"{type(item).__name__}."
+            )
+        text = item.strip()
+        if not text:
+            continue
+        if ":" not in text:
+            raise ValueError(
+                f"{field_name} entry '{text}' is not a typed reference — expected "
+                f"'scheme:value' with scheme in {allowed_sorted}."
+            )
+        scheme, value = text.split(":", 1)
+        scheme = scheme.strip().lower()
+        value = value.strip()
+        if scheme not in allowed_schemes:
+            raise ValueError(
+                f"{field_name} entry '{text}' has unknown scheme '{scheme}' — "
+                f"allowed schemes: {allowed_sorted}."
+            )
+        if not value:
+            raise ValueError(
+                f"{field_name} entry '{text}' is missing a value after '{scheme}:'."
+            )
+        canonical = f"{scheme}:{value}"
+        if canonical not in seen:
+            seen.add(canonical)
+            out.append(canonical)
+    return sorted(out)
+
+
+def _cron_output_input_ids(inputs: Any) -> List[str]:
+    """Job IDs referenced by ``cron-output:<id>`` inputs (the inferred edges)."""
+    if not isinstance(inputs, list):
+        return []
+    ids: List[str] = []
+    for ref in inputs:
+        if isinstance(ref, str) and ref.startswith("cron-output:"):
+            job_id = ref.split(":", 1)[1].strip()
+            if job_id:
+                ids.append(job_id)
+    return ids
+
+
+def _validate_dataflow_shape(deliver: Optional[str], side_effects: List[str]) -> None:
+    """Cross-check declared side_effects against the derivable delivery sink.
+
+    ``deliver`` mechanically implies an external side effect for the recognized
+    external channels (telegram/slack/email). When the job both delivers through
+    one of those AND declares side effects, the declaration must include the
+    matching ``scheme:`` entry so the graph's sinks match reality. Only enforced
+    when side_effects is declared — an empty declaration is the legacy/undeclared
+    path left to the tool-layer prompt and the store-wide doctor sweep.
+    """
+    if not deliver or not side_effects:
+        return
+    implied = _DELIVER_SIDE_EFFECT_SCHEME.get(str(deliver).strip().lower())
+    if not implied:
+        return
+    declared_schemes = {ref.split(":", 1)[0] for ref in side_effects}
+    if implied not in declared_schemes:
+        raise ValueError(
+            f"deliver='{deliver}' is an external side effect but side_effects "
+            f"declares no '{implied}:' entry. Add e.g. '{implied}:<target>' to "
+            f"side_effects so the dataflow graph's sinks match delivery."
+        )
+
+
+def _validate_dataflow_context(
+    context_from: Optional[List[str]],
+    inputs: List[str],
+) -> None:
+    """Require every hard dep (``context_from``) to appear as a declared input.
+
+    ``context_from`` is the mechanical hard dependency; the declared ``inputs``
+    should be a superset, so the derived backbone is a subset of the declared
+    dataflow. Only enforced when inputs is declared (non-empty).
+    """
+    if not context_from or not inputs:
+        return
+    declared_ids = set(_cron_output_input_ids(inputs))
+    missing = [cid for cid in context_from if cid not in declared_ids]
+    if missing:
+        raise ValueError(
+            "context_from job(s) not declared as inputs: "
+            f"{', '.join(sorted(missing))}. Add 'cron-output:<id>' entries to "
+            "inputs so the dataflow graph reflects the context dependency."
+        )
+
+
+def _dataflow_dependency_edges(jobs: List[Dict[str, Any]]) -> Dict[str, List[str]]:
+    """Map job id → upstream job ids it consumes via ``cron-output`` inputs."""
+    edges: Dict[str, List[str]] = {}
+    for job in jobs:
+        jid = job.get("id")
+        if not jid:
+            continue
+        edges[jid] = _cron_output_input_ids(job.get("inputs"))
+    return edges
+
+
+def _find_dependency_cycle(edges: Dict[str, List[str]]) -> Optional[List[str]]:
+    """Return one cron-output dependency cycle as an id path, or None if acyclic."""
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color: Dict[str, int] = {node: WHITE for node in edges}
+    stack: List[str] = []
+
+    def visit(node: str) -> Optional[List[str]]:
+        color[node] = GRAY
+        stack.append(node)
+        for dep in edges.get(node, []):
+            if dep not in edges:
+                continue  # dangling target — reported by referential check
+            if color.get(dep) == GRAY:
+                return stack[stack.index(dep):] + [dep]
+            if color.get(dep, WHITE) == WHITE:
+                found = visit(dep)
+                if found:
+                    return found
+        stack.pop()
+        color[node] = BLACK
+        return None
+
+    for node in list(edges):
+        if color.get(node, WHITE) == WHITE:
+            found = visit(node)
+            if found:
+                return found
+    return None
+
+
+def _reaches(start: str, target: str, edges: Dict[str, List[str]]) -> bool:
+    """True if ``target`` is reachable from ``start`` by following edges."""
+    seen: Set[str] = set()
+    stack: List[str] = list(edges.get(start, []))
+    while stack:
+        node = stack.pop()
+        if node == target:
+            return True
+        if node in seen:
+            continue
+        seen.add(node)
+        stack.extend(edges.get(node, []))
+    return False
+
+
+def _validate_candidate_dataflow(
+    candidate: Dict[str, Any],
+    jobs: List[Dict[str, Any]],
+) -> None:
+    """Referential integrity + acyclicity for a single created/updated job.
+
+    ``jobs`` is the current store (for create, ``candidate`` is not yet in it;
+    for update, the stale record is still at its index and is overridden here).
+    Every ``cron-output:<id>`` input must point at an existing job, and the
+    candidate's edges must not close a cycle. Run inside ``_jobs_lock()``.
+    """
+    cid = candidate.get("id")
+    dep_ids = _cron_output_input_ids(candidate.get("inputs"))
+    if not dep_ids:
+        return
+    known_ids = {j.get("id") for j in jobs if j.get("id")}
+    known_ids.add(cid)
+    missing = [d for d in dep_ids if d not in known_ids]
+    if missing:
+        raise ValueError(
+            f"cron job declares cron-output input(s) for unknown job(s): "
+            f"{', '.join(sorted(missing))}. Use cronjob(action='list') to see "
+            "available jobs."
+        )
+    edges = _dataflow_dependency_edges(jobs)
+    edges[cid] = dep_ids  # reflect the candidate's (possibly new) edges
+    if _reaches(cid, cid, edges):
+        raise ValueError(
+            "cron dataflow dependency cycle: this job's cron-output inputs would "
+            "form a cycle (a job cannot transitively depend on its own output)."
+        )
+
+
+def validate_store() -> List[str]:
+    """Store-wide dataflow consistency sweep for ``hermes cron doctor`` / CI.
+
+    Non-raising: returns a list of human-readable issue strings (empty = clean).
+    Catches drift that per-job create/update validation can't — a producer
+    deleted after consumers referenced it, a cycle formed across independent
+    edits, or a malformed stored ref from a hand-edited jobs.json.
+    """
+    jobs = load_jobs()
+    issues: List[str] = []
+    known_ids = {j.get("id") for j in jobs if j.get("id")}
+    edges: Dict[str, List[str]] = {}
+    for job in jobs:
+        jid = job.get("id") or "<no-id>"
+        for field, schemes in (
+            ("inputs", _INPUT_SCHEMES),
+            ("outputs", _OUTPUT_SCHEMES),
+            ("side_effects", _SIDE_EFFECT_SCHEMES),
+        ):
+            try:
+                _normalize_resource_list(
+                    job.get(field), allowed_schemes=schemes, field_name=field
+                )
+            except ValueError as exc:
+                issues.append(f"job '{jid}': {exc}")
+        dep_ids = _cron_output_input_ids(job.get("inputs"))
+        edges[jid] = dep_ids
+        for dep in dep_ids:
+            if dep not in known_ids:
+                issues.append(
+                    f"job '{jid}': cron-output input references unknown job '{dep}'."
+                )
+    cycle = _find_dependency_cycle(edges)
+    if cycle:
+        issues.append("cron dataflow dependency cycle: " + " → ".join(cycle))
+    return issues
+
+
+def build_cron_graph(
+    jobs: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Assemble the cron interflow dataflow graph as ``{nodes, edges}``.
+
+    Crons never dispatch to each other — they communicate through data — so this
+    is a dataflow graph. Edges use the wiki graph's typed-edge shape
+    (``{source, target, type}``) so Portal's typed-edge renderer can be reused.
+
+    Node kinds:
+      - ``cron``     one per job (node id = job id).
+      - ``source``   a resource READ by ≥1 cron and written by none — an
+                     external/upstream input (url/http/https/file/wiki).
+      - ``artifact`` a resource WRITTEN by ≥1 cron (consumable output). When
+                     another cron reads the same ref, that shared node IS the
+                     cron→cron link (outputs make edges).
+      - ``sink``     a side_effect target — a terminal action (side effects make
+                     sinks, never edges onward).
+
+    Edge types:
+      - ``reads``     source/artifact → cron
+      - ``writes``    cron → artifact
+      - ``feeds``     cron → cron — a ``cron-output:<id>`` input; the explicit
+                      dependency backbone (mirrors ``context_from``).
+      - ``<scheme>``  cron → sink — the delivered action kind (telegram/pr/…).
+
+    Resource/sink node ids are the ``scheme:value`` ref itself (always contains
+    a colon); cron node ids are the bare job id — so the two id spaces never
+    collide, and a shared data ref naturally dedupes to one node.
+    """
+    if jobs is None:
+        jobs = [_normalize_job_record(job) for job in load_jobs()]
+
+    job_ids = {job.get("id") for job in jobs if job.get("id")}
+
+    # A resource written by any cron is an artifact even if also read elsewhere.
+    produced: Set[str] = set()
+    for job in jobs:
+        for ref in job.get("outputs") or []:
+            produced.add(ref)
+
+    resource_kind: Dict[str, str] = {}
+
+    def _ensure_resource(ref: str, kind: str) -> None:
+        existing = resource_kind.get(ref)
+        if existing is None:
+            resource_kind[ref] = kind
+        elif existing == "source" and kind == "artifact":
+            # A produced resource outranks a bare read: promote source→artifact.
+            resource_kind[ref] = "artifact"
+
+    nodes: List[Dict[str, Any]] = []
+    edges: List[Dict[str, Any]] = []
+
+    for job in jobs:
+        jid = job.get("id")
+        if not jid:
+            continue
+        nodes.append(
+            {
+                "id": jid,
+                "kind": "cron",
+                "type": "cron",
+                "label": job.get("name") or jid,
+                "schedule": job.get("schedule_display"),
+                "enabled": bool(job.get("enabled", True)),
+                "state": job.get("state"),
+                "uses_llm": not bool(job.get("no_agent")),
+                "last_status": job.get("last_status"),
+                "deliver": job.get("deliver"),
+            }
+        )
+
+        for ref in job.get("inputs") or []:
+            if ref.startswith("cron-output:"):
+                upstream = ref.split(":", 1)[1].strip()
+                if upstream in job_ids:
+                    edges.append(
+                        {"source": upstream, "target": jid, "type": "feeds"}
+                    )
+                # A dangling upstream is surfaced by validate_store(), not drawn.
+            else:
+                _ensure_resource(ref, "artifact" if ref in produced else "source")
+                edges.append({"source": ref, "target": jid, "type": "reads"})
+
+        for ref in job.get("outputs") or []:
+            _ensure_resource(ref, "artifact")
+            edges.append({"source": jid, "target": ref, "type": "writes"})
+
+        for ref in job.get("side_effects") or []:
+            _ensure_resource(ref, "sink")
+            edges.append(
+                {"source": jid, "target": ref, "type": ref.split(":", 1)[0]}
+            )
+
+    for ref in sorted(resource_kind):
+        scheme, _, value = ref.partition(":")
+        nodes.append(
+            {
+                "id": ref,
+                "kind": resource_kind[ref],
+                "type": scheme,
+                "label": value or ref,
+            }
+        )
+
+    return {"nodes": nodes, "edges": edges}
+
+
 def _validate_job_mode_invariants(
     monitor_script: Optional[str],
     monitor_url: Optional[str],
@@ -1586,6 +1979,9 @@ def create_job(
     attach_to_session: Optional[bool] = None,
     monitor_script: Optional[str] = None,
     monitor_url: Optional[str] = None,
+    inputs: Optional[Union[str, List[str]]] = None,
+    outputs: Optional[Union[str, List[str]]] = None,
+    side_effects: Optional[Union[str, List[str]]] = None,
 ) -> Dict[str, Any]:
     """
     Create a new cron job.
@@ -1643,6 +2039,14 @@ def create_job(
         monitor_url: Optional http(s) URL used as the monitor source instead
                 of a script — fetched with a bounded GET each tick. Same
                 hash-suppression semantics as ``monitor_script``.
+        inputs: Optional dataflow declaration — typed ``scheme:value`` refs for
+                what the job reads (schemes: url/http/https/file/wiki/cron-output).
+                ``cron-output:<id>`` inputs form the inferred cron→cron edges.
+        outputs: Optional typed refs for consumable data the job writes
+                (schemes: wiki/file) — the join keys another job's input matches.
+        side_effects: Optional typed refs for terminal actions the job performs
+                (schemes: telegram/slack/email/notify/pr/github/webhook) — graph
+                sink leaves, not edges. See the dataflow metadata block above.
 
     Returns:
         The created job dict
@@ -1701,6 +2105,21 @@ def create_job(
     else:
         context_from = None
 
+    # Normalize + validate dataflow metadata (interflow graph). Shape and the
+    # declared-vs-derived cross-checks are pure per-job invariants; referential
+    # integrity + acyclicity need the whole store and run inside the lock below.
+    normalized_inputs = _normalize_resource_list(
+        inputs, allowed_schemes=_INPUT_SCHEMES, field_name="inputs"
+    )
+    normalized_outputs = _normalize_resource_list(
+        outputs, allowed_schemes=_OUTPUT_SCHEMES, field_name="outputs"
+    )
+    normalized_side_effects = _normalize_resource_list(
+        side_effects, allowed_schemes=_SIDE_EFFECT_SCHEMES, field_name="side_effects"
+    )
+    _validate_dataflow_shape(deliver, normalized_side_effects)
+    _validate_dataflow_context(context_from, normalized_inputs)
+
     prompt_text = _coerce_job_text(prompt)
 
     # Reject cron jobs that schedule gateway-lifecycle commands. Prevents
@@ -1756,6 +2175,11 @@ def create_job(
         # "last_changed_at": ...}. None until the first monitor tick.
         "monitor_state": None,
         "context_from": context_from,
+        # Dataflow metadata (interflow graph). Typed scheme:value lists; see the
+        # dataflow block near _validate_dataflow_shape.
+        "inputs": normalized_inputs,
+        "outputs": normalized_outputs,
+        "side_effects": normalized_side_effects,
         "schedule": parsed_schedule,
         "schedule_display": parsed_schedule.get("display", schedule),
         "repeat": {
@@ -1786,6 +2210,7 @@ def create_job(
 
     with _jobs_lock():
         jobs = load_jobs()
+        _validate_candidate_dataflow(job, jobs)
         jobs.append(job)
         save_jobs(jobs)
 
@@ -1908,6 +2333,36 @@ def update_job(job_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]
                     bool(updated.get("no_agent")),
                     _upd_script or None,
                 )
+            # Normalize + re-validate dataflow metadata so create-time
+            # invariants can't be bypassed through the update door. Normalize
+            # any dataflow field present in this update; re-run the shape /
+            # context cross-checks when a dataflow field OR its derived source
+            # (deliver / context_from) changes.
+            _dataflow_fields = {"inputs", "outputs", "side_effects"}
+            for _df_field, _df_schemes in (
+                ("inputs", _INPUT_SCHEMES),
+                ("outputs", _OUTPUT_SCHEMES),
+                ("side_effects", _SIDE_EFFECT_SCHEMES),
+            ):
+                if _df_field in updates:
+                    updated[_df_field] = _normalize_resource_list(
+                        updates[_df_field],
+                        allowed_schemes=_df_schemes,
+                        field_name=_df_field,
+                    )
+            if _dataflow_fields.intersection(updates) or {
+                "context_from",
+                "deliver",
+            }.intersection(updates):
+                _validate_dataflow_shape(
+                    updated.get("deliver"), updated.get("side_effects") or []
+                )
+                _validate_dataflow_context(
+                    updated.get("context_from") or None, updated.get("inputs") or []
+                )
+            if "inputs" in updates:
+                _validate_candidate_dataflow(updated, jobs)
+
             schedule_changed = "schedule" in updates
             inference_fields_changed = bool(
                 {"provider", "model", "base_url", "no_agent"}.intersection(updates)

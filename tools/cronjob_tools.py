@@ -1052,6 +1052,9 @@ def cronjob(
     attach_to_session: Optional[bool] = None,
     monitor_script: Optional[str] = None,
     monitor_url: Optional[str] = None,
+    inputs: Optional[Union[str, List[str]]] = None,
+    outputs: Optional[Union[str, List[str]]] = None,
+    side_effects: Optional[Union[str, List[str]]] = None,
     task_id: str = None,
     session_id: Optional[str] = None,
 ) -> str:
@@ -1140,6 +1143,9 @@ def cronjob(
                     attach_to_session=attach_to_session,
                     monitor_script=_normalize_optional_job_value(monitor_script),
                     monitor_url=_normalize_optional_job_value(monitor_url),
+                    inputs=inputs,
+                    outputs=outputs,
+                    side_effects=side_effects,
                 )
             except CronSchedulerRegistrationError as exc:
                 _partial = exc.to_dict()
@@ -1391,6 +1397,16 @@ def cronjob(
                                 success=False,
                             )
                 updates["context_from"] = refs or None
+            # Dataflow metadata: pass raw through to update_job(), which
+            # normalizes + validates (shape, context, referential, acyclicity).
+            # An empty string / empty list clears the field.
+            for _df_field, _df_value in (
+                ("inputs", inputs),
+                ("outputs", outputs),
+                ("side_effects", side_effects),
+            ):
+                if _df_value is not None:
+                    updates[_df_field] = _df_value
             if enabled_toolsets is not None:
                 updates["enabled_toolsets"] = enabled_toolsets or None
             if attach_to_session is not None:
@@ -1458,6 +1474,8 @@ On update, passing skills=[] clears attached skills.
 NOTE: The agent's final response is auto-delivered to the target. Put the primary
 user-facing content in the final response. Cron jobs run autonomously with no user
 present — they cannot ask questions or request clarification.
+
+On create, DECLARE the job's dataflow so it appears correctly in the cron interflow graph: `inputs` (what it reads), `outputs` (consumable data it writes for other crons), and `side_effects` (terminal actions like telegram/pr). These are typed 'scheme:value' lists — see each field's description. Crons never call each other; they communicate through data, so a `cron-output:<id>` input is what links this job to an upstream producer.
 
 Important safety rule: cron-run sessions should not recursively schedule more cron jobs.""",
     "parameters": {
@@ -1539,6 +1557,45 @@ Important safety rule: cron-run sessions should not recursively schedule more cr
                     "On update, pass an empty array to clear."
                 ),
             },
+            "inputs": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Dataflow declaration — what this job READS, as typed 'scheme:value' refs. "
+                    "Powers the cron interflow graph (crons ⇄ data sources) rendered in Portal. "
+                    "Allowed schemes: 'url'/'http'/'https' (an external endpoint, e.g. "
+                    "'https:api.github.com/repos/x/y'), 'file' (a path it reads), 'wiki' (a wiki "
+                    "page/section), and 'cron-output:<job_id>' (the most-recent output of an "
+                    "UPSTREAM cron — this is what creates a cron→cron edge). Declare EVERY source "
+                    "the job depends on. If you set context_from, add a matching "
+                    "'cron-output:<id>' input for each entry. On update, pass an empty array to clear."
+                ),
+            },
+            "outputs": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Dataflow declaration — consumable DATA this job WRITES that a LATER cron can "
+                    "read, as typed 'scheme:value' refs. Allowed schemes: 'wiki' (a page it "
+                    "updates, e.g. 'wiki:reports/daily') and 'file' (a path it writes). These are "
+                    "the join keys: another job listing the same ref under `inputs` becomes a "
+                    "downstream edge. Do NOT list terminal deliveries here (those go in "
+                    "side_effects). On update, pass an empty array to clear."
+                ),
+            },
+            "side_effects": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Dataflow declaration — TERMINAL actions this job performs (graph sink leaves, "
+                    "not edges), as typed 'scheme:value' refs. Allowed schemes: telegram/slack/"
+                    "email/notify/pr/github/webhook (e.g. 'telegram:me', 'pr:owner/repo', "
+                    "'email:team@x.com'). If the job delivers to an external channel (deliver="
+                    "'telegram'/'slack'/'email'), declare the matching side effect here. Use "
+                    "`outputs` for data other crons consume; use side_effects for actions that "
+                    "leave the system. On update, pass an empty array to clear."
+                ),
+            },
             "enabled_toolsets": {
                 "type": "array",
                 "items": {"type": "string"},
@@ -1611,6 +1668,9 @@ registry.register(
         no_agent=args.get("no_agent"),
         monitor_script=args.get("monitor_script"),
         monitor_url=args.get("monitor_url"),
+        inputs=args.get("inputs"),
+        outputs=args.get("outputs"),
+        side_effects=args.get("side_effects"),
         task_id=kw.get("task_id"),
         session_id=kw.get("session_id"),
     ),

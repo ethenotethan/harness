@@ -1653,6 +1653,19 @@ def _(rid, params: dict) -> dict:
         return _err(rid, 5023, str(e))
 
 
+@method("cron.graph")
+def _(rid, params: dict) -> dict:
+    """Cron interflow dataflow graph — nodes (crons/sources/artifacts/sinks) +
+    typed edges — for Portal to render. Same edge shape as ``wiki.scan``."""
+    try:
+        from cron.jobs import build_cron_graph
+
+        return _ok(rid, build_cron_graph())
+    except Exception as e:
+        logger.exception("cron.graph failed")
+        return _err(rid, 5024, str(e))
+
+
 @method("learning.frames")
 def _(rid, params: dict) -> dict:
     """Pre-render the learning timeline for the TUI ``/journey`` overlay.
