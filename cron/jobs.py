@@ -1556,8 +1556,10 @@ def _normalized_inference_axes(job: Dict[str, Any]) -> Tuple[Optional[str], Opti
 #   side_effects — terminal actions (telegram/pr/…). Sink leaves, never edges.
 # The output-vs-side-effect split keeps the graph readable: outputs make edges,
 # side effects make sinks.
-_INPUT_SCHEMES = frozenset({"url", "http", "https", "file", "wiki", "cron-output"})
-_OUTPUT_SCHEMES = frozenset({"wiki", "file"})
+_INPUT_SCHEMES = frozenset(
+    {"url", "http", "https", "file", "wiki", "postgres", "cron-output"}
+)
+_OUTPUT_SCHEMES = frozenset({"wiki", "file", "postgres"})
 _SIDE_EFFECT_SCHEMES = frozenset(
     {"telegram", "slack", "email", "notify", "pr", "github", "webhook"}
 )
