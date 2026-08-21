@@ -442,6 +442,40 @@ class TestBuildCronGraph:
             "type": "telegram",
         } in graph["edges"]
 
+    def test_postgres_output_links_writer_to_reader(self, cron_env):
+        # A cron that writes a postgres table and another that reads it share one
+        # artifact node — postgres is a first-class data store like wiki/file.
+        from cron.jobs import build_cron_graph, create_job
+
+        w = create_job(
+            prompt="ingest", schedule="every 1h", outputs=["postgres:analytics.events"]
+        )
+        r = create_job(
+            prompt="report", schedule="every 2h", inputs=["postgres:analytics.events"]
+        )
+        graph = build_cron_graph()
+
+        artifacts = [n for n in graph["nodes"] if n["kind"] == "artifact"]
+        assert artifacts == [
+            {
+                "id": "postgres:analytics.events",
+                "kind": "artifact",
+                "type": "postgres",
+                "label": "analytics.events",
+            }
+        ]
+        edges = graph["edges"]
+        assert {
+            "source": w["id"],
+            "target": "postgres:analytics.events",
+            "type": "writes",
+        } in edges
+        assert {
+            "source": "postgres:analytics.events",
+            "target": r["id"],
+            "type": "reads",
+        } in edges
+
     def test_produced_resource_outranks_source(self, cron_env):
         # If a ref is both read (by one job) and written (by another), the node
         # is an artifact, not a source.
