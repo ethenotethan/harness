@@ -1661,15 +1661,24 @@ def _(rid, params: dict) -> dict:
         from cron.jobs import build_cron_graph
 
         # Overlay live long-running services (dashboards, APIs) that self-declared
-        # their dataflow — they meet crons on shared resource nodes. Best-effort:
-        # a registry hiccup must never sink the cron graph itself.
+        # their dataflow — they meet crons on shared resource nodes. Two liveness
+        # providers feed the same merge: tracked background processes (the process
+        # IS the lease) and Docker containers (labels + `docker ps` liveness, for
+        # detached deps that escape the process lease). Best-effort per provider —
+        # a hiccup in either must never sink the cron graph itself.
         services = []
         try:
             from tools.process_registry import process_registry
 
-            services = process_registry.collect_service_declarations()
+            services += process_registry.collect_service_declarations()
         except Exception:
-            logger.exception("cron.graph: service overlay unavailable")
+            logger.exception("cron.graph: process service overlay unavailable")
+        try:
+            from tools.docker_services import collect_docker_services
+
+            services += collect_docker_services()
+        except Exception:
+            logger.exception("cron.graph: docker service overlay unavailable")
 
         return _ok(rid, build_cron_graph(services=services))
     except Exception as e:
