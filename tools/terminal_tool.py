@@ -2541,6 +2541,11 @@ def terminal_tool(
     pty: bool = False,
     notify_on_complete: bool = False,
     watch_patterns: Optional[List[str]] = None,
+    service_name: Optional[str] = None,
+    service_description: Optional[str] = None,
+    service_inputs: Optional[List[str]] = None,
+    service_outputs: Optional[List[str]] = None,
+    service_side_effects: Optional[List[str]] = None,
 ) -> str:
     """
     Execute a command in the configured terminal environment.
@@ -2556,6 +2561,9 @@ def terminal_tool(
         pty: If True, use pseudo-terminal for interactive CLI tools (local backend only)
         notify_on_complete: If True and background=True, you'll be notified exactly once when the process exits. The right choice for almost every long task. MUTUALLY EXCLUSIVE with watch_patterns.
         watch_patterns: List of strings to watch for in background output. HARD rate limit: 1 notification per 15s per process. After 3 strike windows in a row, watch_patterns is disabled and the session is auto-promoted to notify_on_complete. Use ONLY for rare, one-shot mid-process signals on long-lived processes (server readiness, migration-done markers). NEVER use in loops/batch jobs — error patterns there will hit the strike limit and get disabled. MUTUALLY EXCLUSIVE with notify_on_complete — set one, not both.
+        service_name: If set, registers this background process as a long-running SERVICE (a dashboard, an API, anything that outlives the turn) so it appears in the cron interflow dataflow graph. REQUIRES background=true. When you set this you MUST also set service_description. The tracked process is the lease — the service shows as live for exactly as long as it runs.
+        service_description: REQUIRED whenever service_name is set. Markdown, human-readable — surfaced in the graph's node detail card so expanding the node answers "what is this and what does it do". A bare name is rejected.
+        service_inputs/service_outputs/service_side_effects: The service's dataflow, as typed 'scheme:value' lists in the SAME vocabulary as a cron's inputs/outputs/side_effects (e.g. service_inputs=["postgres:analytics.events"] for a dashboard that reads that table). Inputs/outputs meet crons on shared resource nodes, so a dashboard reading a table a cron writes links up automatically.
 
     Returns:
         str: JSON string with output, exit_code, and error fields
@@ -2583,6 +2591,20 @@ def terminal_tool(
                 "output": "",
                 "exit_code": -1,
                 "error": f"Invalid command: expected string, got {type(command).__name__}",
+                "status": "error",
+            }, ensure_ascii=False)
+
+        # A service is a long-running process — it only makes sense in the
+        # background. Reject a foreground service declaration up front rather
+        # than silently dropping the metadata.
+        if service_name and not background:
+            return json.dumps({
+                "output": "",
+                "exit_code": -1,
+                "error": (
+                    "service_name requires background=true — a service is a "
+                    "long-running process. Re-send with background=true."
+                ),
                 "status": "error",
             }, ensure_ascii=False)
 
@@ -2995,6 +3017,29 @@ def terminal_tool(
                 session_key=session_key,
                 env_type=env_type,
             )
+
+            # Validate a service declaration BEFORE spawning so a rejected
+            # declaration never leaves an orphaned background process behind.
+            service_decl = None
+            if service_name:
+                try:
+                    from cron.jobs import normalize_service_declaration
+
+                    service_decl = normalize_service_declaration(
+                        name=service_name,
+                        description=service_description,
+                        inputs=service_inputs,
+                        outputs=service_outputs,
+                        side_effects=service_side_effects,
+                    )
+                except ValueError as exc:
+                    return json.dumps({
+                        "output": "",
+                        "exit_code": -1,
+                        "error": f"service declaration rejected: {exc}",
+                        "status": "error",
+                    }, ensure_ascii=False)
+
             try:
                 if env_type == "local":
                     proc_session = process_registry.spawn_local(
@@ -3013,6 +3058,15 @@ def terminal_tool(
                         task_id=effective_task_id,
                         session_key=session_key,
                     )
+
+                # Register the service on the live session — it now surfaces in
+                # the cron interflow graph for as long as this process runs.
+                if service_decl is not None:
+                    proc_session.service_name = service_decl["name"]
+                    proc_session.service_description = service_decl["description"]
+                    proc_session.service_inputs = service_decl["inputs"]
+                    proc_session.service_outputs = service_decl["outputs"]
+                    proc_session.service_side_effects = service_decl["side_effects"]
 
                 result_data = {
                     "output": "Background process started",
@@ -3778,6 +3832,29 @@ TERMINAL_SCHEMA = {
                 "type": "array",
                 "items": {"type": "string"},
                 "description": "Strings to watch for in background output. ONLY for rare one-shot mid-process signals on processes that never exit (e.g. ['Application startup complete'] on a server). NOT for end-of-run markers (use notify_on_complete) and NOT for per-iteration patterns like 'ERROR' in loops — rate-limited to 1 notification/15s; repeated over-firing auto-disables it and falls back to notify-on-exit. When in doubt, use notify_on_complete. MUTUALLY EXCLUSIVE with notify_on_complete."
+            },
+            "service_name": {
+                "type": "string",
+                "description": "Register this background process as a long-running SERVICE (a dashboard, an API — anything that outlives the turn) so it shows up in the cron interflow dataflow graph. REQUIRES background=true, and you MUST also pass service_description. The tracked process is the lease: the service is 'live' for exactly as long as it runs."
+            },
+            "service_description": {
+                "type": "string",
+                "description": "REQUIRED with service_name. Markdown, human-readable — shown in the graph node's detail card so expanding it explains what the service is and does. A bare name with no description is rejected."
+            },
+            "service_inputs": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "The service's dataflow reads, as typed 'scheme:value' refs in the SAME vocabulary as a cron's inputs (url/http/https/file/wiki/postgres/cron-output). A dashboard reading a table a cron writes (service_inputs=['postgres:analytics.events']) links to that cron on the shared store node."
+            },
+            "service_outputs": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "The service's dataflow writes, as typed 'scheme:value' refs (wiki/file/postgres). A ref another cron reads becomes a downstream edge."
+            },
+            "service_side_effects": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "The service's terminal actions, as typed 'scheme:value' refs (telegram/slack/email/notify/pr/github/webhook). Sink leaves, not edges onward."
             }
         },
         "required": ["command"]
@@ -3807,6 +3884,11 @@ def _handle_terminal(args, **kw):
         pty=args.get("pty", False),
         notify_on_complete=args.get("notify_on_complete", False),
         watch_patterns=args.get("watch_patterns"),
+        service_name=args.get("service_name"),
+        service_description=args.get("service_description"),
+        service_inputs=args.get("service_inputs"),
+        service_outputs=args.get("service_outputs"),
+        service_side_effects=args.get("service_side_effects"),
     )
 
 
