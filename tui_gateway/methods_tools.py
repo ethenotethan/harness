@@ -1660,7 +1660,18 @@ def _(rid, params: dict) -> dict:
     try:
         from cron.jobs import build_cron_graph
 
-        return _ok(rid, build_cron_graph())
+        # Overlay live long-running services (dashboards, APIs) that self-declared
+        # their dataflow — they meet crons on shared resource nodes. Best-effort:
+        # a registry hiccup must never sink the cron graph itself.
+        services = []
+        try:
+            from tools.process_registry import process_registry
+
+            services = process_registry.collect_service_declarations()
+        except Exception:
+            logger.exception("cron.graph: service overlay unavailable")
+
+        return _ok(rid, build_cron_graph(services=services))
     except Exception as e:
         logger.exception("cron.graph failed")
         return _err(rid, 5024, str(e))

@@ -394,6 +394,16 @@ class ProcessSession:
     watcher_message_id: str = ""                # Triggering message id — reply anchor for topic routing
     watcher_interval: int = 0                   # 0 = no watcher configured
     notify_on_complete: bool = False             # Queue agent notification on exit
+    # Service registration — when service_name is set, this background process is
+    # a long-running SERVICE that self-declared its dataflow (see
+    # cron.jobs.normalize_service_declaration). It surfaces in the cron interflow
+    # graph as a `service` node for as long as this session is in _running; the
+    # tracked process IS the lease, so liveness needs no separate heartbeat.
+    service_name: str = ""
+    service_description: str = ""                 # markdown — shown in Portal node detail
+    service_inputs: List[str] = field(default_factory=list)
+    service_outputs: List[str] = field(default_factory=list)
+    service_side_effects: List[str] = field(default_factory=list)
     # Watch patterns — trigger agent notification when output matches any pattern
     watch_patterns: List[str] = field(default_factory=list)
     _watch_hits: int = field(default=0, repr=False)          # total matches delivered
@@ -2311,6 +2321,32 @@ class ProcessRegistry:
                 entry["detached"] = True
             result.append(entry)
         return result
+
+    def collect_service_declarations(self) -> list:
+        """Live long-running SERVICES for the cron interflow graph.
+
+        Every background session that self-declared a service (``service_name``
+        set) and is still running becomes one entry. The tracked process IS the
+        lease: a service appears here exactly while its process lives, so the
+        graph reflects reality with no separate heartbeat. The shape matches
+        ``cron.jobs.build_cron_graph(services=...)`` — id/label/description plus
+        the three ``scheme:value`` dataflow lists.
+        """
+        with self._lock:
+            live = list(self._running.values())
+        services = []
+        for s in live:
+            if s.exited or not s.service_name:
+                continue
+            services.append({
+                "id": s.id,
+                "label": s.service_name,
+                "description": s.service_description,
+                "inputs": list(s.service_inputs),
+                "outputs": list(s.service_outputs),
+                "side_effects": list(s.service_side_effects),
+            })
+        return services
 
     # ----- Session/Task Queries (for gateway integration) -----
 

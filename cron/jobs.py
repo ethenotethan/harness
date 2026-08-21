@@ -1822,8 +1822,52 @@ def validate_store() -> List[str]:
     return issues
 
 
+def normalize_service_declaration(
+    name: Any,
+    description: Any,
+    inputs: Any = None,
+    outputs: Any = None,
+    side_effects: Any = None,
+) -> Dict[str, Any]:
+    """Validate & normalize a long-running service's dataflow declaration.
+
+    A service (a dashboard, an API — anything the agent backgrounds and that
+    outlives the turn) declares itself so it appears in the cron interflow graph
+    alongside the crons it shares data with. It uses the SAME ``scheme:value``
+    vocabulary as crons, so its inputs/outputs meet crons on shared resource
+    nodes. Both a non-empty ``name`` and a non-empty ``description`` are
+    REQUIRED — the description is markdown surfaced in Portal's node detail card,
+    so expanding a service node always answers "what is this / what does it do"
+    rather than showing a bare id. Raises ValueError on any malformed field.
+    """
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("service name is required and must be a non-empty string.")
+    if not isinstance(description, str) or not description.strip():
+        raise ValueError(
+            "service description is required and must be a non-empty markdown "
+            "string — it is shown in the graph's node detail card so the service "
+            "is self-explanatory. Describe what the service is and what it does."
+        )
+    return {
+        "name": name.strip(),
+        "description": description.strip(),
+        "inputs": _normalize_resource_list(
+            inputs, allowed_schemes=_INPUT_SCHEMES, field_name="service inputs"
+        ),
+        "outputs": _normalize_resource_list(
+            outputs, allowed_schemes=_OUTPUT_SCHEMES, field_name="service outputs"
+        ),
+        "side_effects": _normalize_resource_list(
+            side_effects,
+            allowed_schemes=_SIDE_EFFECT_SCHEMES,
+            field_name="service side_effects",
+        ),
+    }
+
+
 def build_cron_graph(
     jobs: Optional[List[Dict[str, Any]]] = None,
+    services: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
     """Assemble the cron interflow dataflow graph as ``{nodes, edges}``.
 
@@ -1831,13 +1875,24 @@ def build_cron_graph(
     is a dataflow graph. Edges use the wiki graph's typed-edge shape
     (``{source, target, type}``) so Portal's typed-edge renderer can be reused.
 
+    ``services`` are long-running processes (a dashboard, an API) that are NOT
+    crons but participate in the same dataflow: each declares ``inputs`` /
+    ``outputs`` / ``side_effects`` in the identical ``scheme:value`` vocabulary,
+    so a service reading ``postgres:analytics.events`` dedupes onto the very node
+    a cron writing that ref produces — service and cron meet at the shared store.
+    Each service dict carries ``id`` (its tracked-process session id), ``label``,
+    ``description`` (markdown, for the Portal detail card) and the three dataflow
+    lists. They are rendered as ``service`` nodes; liveness is the caller's
+    concern (only currently-running services should be passed in).
+
     Node kinds:
       - ``cron``     one per job (node id = job id).
-      - ``source``   a resource READ by ≥1 cron and written by none — an
-                     external/upstream input (url/http/https/file/wiki).
-      - ``artifact`` a resource WRITTEN by ≥1 cron (consumable output). When
-                     another cron reads the same ref, that shared node IS the
-                     cron→cron link (outputs make edges).
+      - ``service``  one per live long-running process that declared dataflow.
+      - ``source``   a resource READ by ≥1 cron/service and written by none — an
+                     external/upstream input (url/http/https/file/wiki/postgres).
+      - ``artifact`` a resource WRITTEN by ≥1 cron/service (consumable output).
+                     When another cron reads the same ref, that shared node IS
+                     the cron→cron link (outputs make edges).
       - ``sink``     a side_effect target — a terminal action (side effects make
                      sinks, never edges onward).
 
@@ -1854,13 +1909,15 @@ def build_cron_graph(
     """
     if jobs is None:
         jobs = [_normalize_job_record(job) for job in load_jobs()]
+    services = services or []
 
     job_ids = {job.get("id") for job in jobs if job.get("id")}
 
-    # A resource written by any cron is an artifact even if also read elsewhere.
+    # A resource written by any cron OR service is an artifact even if also read
+    # elsewhere — a service writing postgres makes the same store a cron reads.
     produced: Set[str] = set()
-    for job in jobs:
-        for ref in job.get("outputs") or []:
+    for producer in (*jobs, *services):
+        for ref in producer.get("outputs") or []:
             produced.add(ref)
 
     resource_kind: Dict[str, str] = {}
@@ -1916,6 +1973,37 @@ def build_cron_graph(
             edges.append(
                 {"source": jid, "target": ref, "type": ref.split(":", 1)[0]}
             )
+
+    # Services join the same dataflow: a service reading/writing a ref meets the
+    # cron on the shared resource node. Same edge grammar as crons — a
+    # cron-output input becomes a feeds edge, everything else reads/writes/sink.
+    for service in services:
+        sid = service.get("id")
+        if not sid:
+            continue
+        nodes.append(
+            {
+                "id": sid,
+                "kind": "service",
+                "type": "service",
+                "label": service.get("label") or sid,
+                "description": service.get("description") or "",
+            }
+        )
+        for ref in service.get("inputs") or []:
+            if ref.startswith("cron-output:"):
+                upstream = ref.split(":", 1)[1].strip()
+                if upstream in job_ids:
+                    edges.append({"source": upstream, "target": sid, "type": "feeds"})
+            else:
+                _ensure_resource(ref, "artifact" if ref in produced else "source")
+                edges.append({"source": ref, "target": sid, "type": "reads"})
+        for ref in service.get("outputs") or []:
+            _ensure_resource(ref, "artifact")
+            edges.append({"source": sid, "target": ref, "type": "writes"})
+        for ref in service.get("side_effects") or []:
+            _ensure_resource(ref, "sink")
+            edges.append({"source": sid, "target": ref, "type": ref.split(":", 1)[0]})
 
     for ref in sorted(resource_kind):
         scheme, _, value = ref.partition(":")
