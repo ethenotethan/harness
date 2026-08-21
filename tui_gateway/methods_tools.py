@@ -1660,7 +1660,40 @@ def _(rid, params: dict) -> dict:
     try:
         from cron.jobs import build_cron_graph
 
-        return _ok(rid, build_cron_graph())
+        # Overlay live long-running services (dashboards, APIs) that self-declared
+        # their dataflow — they meet crons on shared resource nodes. Four liveness
+        # providers feed the same merge: tracked background processes (the process
+        # IS the lease), Docker containers (labels + `docker ps`), Nomad jobs
+        # (meta + running allocations), and launchd services (sidecar registry +
+        # `launchctl print` state probe). Best-effort per provider — a hiccup in
+        # any must never sink the cron graph itself.
+        services = []
+        try:
+            from tools.process_registry import process_registry
+
+            services += process_registry.collect_service_declarations()
+        except Exception:
+            logger.exception("cron.graph: process service overlay unavailable")
+        try:
+            from tools.docker_services import collect_docker_services
+
+            services += collect_docker_services()
+        except Exception:
+            logger.exception("cron.graph: docker service overlay unavailable")
+        try:
+            from tools.nomad_services import collect_nomad_services
+
+            services += collect_nomad_services()
+        except Exception:
+            logger.exception("cron.graph: nomad service overlay unavailable")
+        try:
+            from tools.launchd_services import collect_launchd_services
+
+            services += collect_launchd_services()
+        except Exception:
+            logger.exception("cron.graph: launchd service overlay unavailable")
+
+        return _ok(rid, build_cron_graph(services=services))
     except Exception as e:
         logger.exception("cron.graph failed")
         return _err(rid, 5024, str(e))

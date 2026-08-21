@@ -488,6 +488,93 @@ class TestBuildCronGraph:
         assert len(res) == 1
         assert res[0]["kind"] == "artifact"
 
+    def test_service_shares_store_node_with_cron(self, cron_env):
+        # A live service reading postgres:analytics.events meets the cron that
+        # writes it on ONE shared artifact node — service and cron converge.
+        from cron.jobs import build_cron_graph, create_job
+
+        writer = create_job(
+            prompt="ingest",
+            schedule="every 1h",
+            outputs=["postgres:analytics.events"],
+        )
+        services = [{
+            "id": "proc_dash1",
+            "label": "Analytics Dashboard",
+            "description": "# Dashboard\nRenders analytics from the events table.",
+            "inputs": ["postgres:analytics.events"],
+            "outputs": [],
+            "side_effects": [],
+        }]
+        graph = build_cron_graph(services=services)
+
+        assert [n for n in graph["nodes"] if n["kind"] == "service"] == [{
+            "id": "proc_dash1",
+            "kind": "service",
+            "type": "service",
+            "label": "Analytics Dashboard",
+            "description": "# Dashboard\nRenders analytics from the events table.",
+        }]
+        stores = [n for n in graph["nodes"] if n["id"] == "postgres:analytics.events"]
+        assert len(stores) == 1 and stores[0]["kind"] == "artifact"
+        edges = graph["edges"]
+        assert {
+            "source": writer["id"],
+            "target": "postgres:analytics.events",
+            "type": "writes",
+        } in edges
+        assert {
+            "source": "postgres:analytics.events",
+            "target": "proc_dash1",
+            "type": "reads",
+        } in edges
+
+    def test_no_services_leaves_no_service_nodes(self, cron_env):
+        from cron.jobs import build_cron_graph, create_job
+
+        create_job(prompt="x", schedule="every 1h")
+        graph = build_cron_graph(services=[])
+        assert not any(n["kind"] == "service" for n in graph["nodes"])
+
+
+class TestServiceDeclaration:
+    def test_valid_declaration_normalizes_and_dedupes(self):
+        from cron.jobs import normalize_service_declaration
+
+        decl = normalize_service_declaration(
+            name="  Analytics Dashboard  ",
+            description="  Renders analytics.  ",
+            inputs=["postgres:analytics.events", "postgres:analytics.events"],
+        )
+        assert decl == {
+            "name": "Analytics Dashboard",
+            "description": "Renders analytics.",
+            "inputs": ["postgres:analytics.events"],
+            "outputs": [],
+            "side_effects": [],
+        }
+
+    def test_description_required(self):
+        from cron.jobs import normalize_service_declaration
+
+        for bad in (None, "", "   "):
+            with pytest.raises(ValueError, match="description is required"):
+                normalize_service_declaration(name="dash", description=bad)
+
+    def test_name_required(self):
+        from cron.jobs import normalize_service_declaration
+
+        with pytest.raises(ValueError, match="name is required"):
+            normalize_service_declaration(name="   ", description="a description")
+
+    def test_bad_scheme_rejected(self):
+        from cron.jobs import normalize_service_declaration
+
+        with pytest.raises(ValueError, match="unknown scheme"):
+            normalize_service_declaration(
+                name="dash", description="d", inputs=["telegram:me"]
+            )
+
 
 class TestCronGraphRPC:
     def test_handler_returns_ok_envelope(self, cron_env):
