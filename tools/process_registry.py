@@ -2331,12 +2331,22 @@ class ProcessRegistry:
         graph reflects reality with no separate heartbeat. The shape matches
         ``cron.jobs.build_cron_graph(services=...)`` — id/label/description plus
         the three ``scheme:value`` dataflow lists.
+
+        Detached sessions (recovered from the checkpoint after a gateway
+        restart) carry no waitable handle, so ``exited`` is stale until probed —
+        ``_refresh_detached_session`` is what reconciles it against the real
+        PID. Without that probe a service whose process died while the gateway
+        was down would be reported live forever, which is precisely the
+        stale-node failure the process-lease model exists to prevent. Every
+        other read path (``list_sessions``, ``get_session``) already refreshes;
+        this one must too.
         """
         with self._lock:
             live = list(self._running.values())
         services = []
         for s in live:
-            if s.exited or not s.service_name:
+            s = self._refresh_detached_session(s)
+            if s is None or s.exited or not s.service_name:
                 continue
             services.append({
                 "id": s.id,
@@ -2555,6 +2565,19 @@ class ProcessRegistry:
                             "watcher_interval": s.watcher_interval,
                             "notify_on_complete": s.notify_on_complete,
                             "watch_patterns": s.watch_patterns,
+                            # Service declaration — without these the process
+                            # survives a gateway restart (adopted as detached)
+                            # but loses its IDENTITY: service_name comes back
+                            # empty, collect_service_declarations() skips it,
+                            # and the service silently vanishes from the cron
+                            # interflow graph while still running. The process
+                            # is the lease, so the declaration must outlive the
+                            # gateway exactly as long as the process does.
+                            "service_name": s.service_name,
+                            "service_description": s.service_description,
+                            "service_inputs": s.service_inputs,
+                            "service_outputs": s.service_outputs,
+                            "service_side_effects": s.service_side_effects,
                         })
                 if extra_entries:
                     tracked_ids = {item.get("session_id") for item in entries}
@@ -2651,6 +2674,15 @@ class ProcessRegistry:
                 watcher_interval=entry.get("watcher_interval", 0),
                 notify_on_complete=entry.get("notify_on_complete", False),
                 watch_patterns=entry.get("watch_patterns", []),
+                # Restore the service declaration so a recovered service keeps
+                # its graph identity. Defaults are empty, so a checkpoint
+                # written by an older build (no service_* keys) recovers exactly
+                # as before — a plain background process.
+                service_name=entry.get("service_name", ""),
+                service_description=entry.get("service_description", ""),
+                service_inputs=entry.get("service_inputs") or [],
+                service_outputs=entry.get("service_outputs") or [],
+                service_side_effects=entry.get("service_side_effects") or [],
             )
             with self._lock:
                 self._running[session.id] = session
