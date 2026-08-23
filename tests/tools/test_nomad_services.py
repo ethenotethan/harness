@@ -105,7 +105,9 @@ class TestCollectNomadServices:
             allocs_by_id={"honcho": [{"ClientStatus": "running"}]},
         )
         services = collect_nomad_services(runner=runner)
-        assert [s["id"] for s in services] == ["nomad:honcho"]
+        assert [s["label"] for s in services] == ["Honcho"]
+        assert services[0]["health"]["status"] == "unknown"
+        assert services[0]["health"]["probe"] == "nomad-allocation"
         assert services[0]["inputs"] == ["postgres:honcho.sessions"]
 
     def test_dead_allocation_is_not_live(self):

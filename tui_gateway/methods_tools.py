@@ -1667,31 +1667,32 @@ def _(rid, params: dict) -> dict:
         # (meta + running allocations), and launchd services (sidecar registry +
         # `launchctl print` state probe). Best-effort per provider — a hiccup in
         # any must never sink the cron graph itself.
+        # Independent provider probes run concurrently. Each collector is already
+        # bounded and fail-open; parallelism keeps Portal's 10-second health
+        # refresh near the slowest provider rather than the sum of four timeouts.
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from tools.process_registry import process_registry
+        from tools.docker_services import collect_docker_services
+        from tools.nomad_services import collect_nomad_services
+        from tools.launchd_services import collect_launchd_services
+
+        collectors = {
+            "process": process_registry.collect_service_declarations,
+            "docker": collect_docker_services,
+            "nomad": collect_nomad_services,
+            "launchd": collect_launchd_services,
+        }
         services = []
-        try:
-            from tools.process_registry import process_registry
-
-            services += process_registry.collect_service_declarations()
-        except Exception:
-            logger.exception("cron.graph: process service overlay unavailable")
-        try:
-            from tools.docker_services import collect_docker_services
-
-            services += collect_docker_services()
-        except Exception:
-            logger.exception("cron.graph: docker service overlay unavailable")
-        try:
-            from tools.nomad_services import collect_nomad_services
-
-            services += collect_nomad_services()
-        except Exception:
-            logger.exception("cron.graph: nomad service overlay unavailable")
-        try:
-            from tools.launchd_services import collect_launchd_services
-
-            services += collect_launchd_services()
-        except Exception:
-            logger.exception("cron.graph: launchd service overlay unavailable")
+        with ThreadPoolExecutor(max_workers=len(collectors)) as executor:
+            pending = {executor.submit(fn): name for name, fn in collectors.items()}
+            for future in as_completed(pending):
+                provider = pending[future]
+                try:
+                    services.extend(future.result())
+                except Exception:
+                    logger.exception(
+                        "cron.graph: %s service overlay unavailable", provider
+                    )
 
         return _ok(rid, build_cron_graph(services=services))
     except Exception as e:

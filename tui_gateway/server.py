@@ -249,6 +249,9 @@ _LONG_HANDLERS = frozenset(
         # reloads via _mcp_reload_lock.
         "reload.mcp",
         "process.list",
+        # Service collectors and application probes run subprocess/network I/O;
+        # keep graph health refreshes off the gateway reader thread.
+        "cron.graph",
         "projects.discover_repos",
         "projects.record_repos",
         "projects.for_cwd",

@@ -2546,6 +2546,7 @@ def terminal_tool(
     service_inputs: Optional[List[str]] = None,
     service_outputs: Optional[List[str]] = None,
     service_side_effects: Optional[List[str]] = None,
+    service_health: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     Execute a command in the configured terminal environment.
@@ -3021,9 +3022,18 @@ def terminal_tool(
             # Validate a service declaration BEFORE spawning so a rejected
             # declaration never leaves an orphaned background process behind.
             service_decl = None
+            health_spec = None
+            if service_health is not None and not service_name:
+                return json.dumps({
+                    "output": "",
+                    "exit_code": -1,
+                    "error": "service_health requires service_name",
+                    "status": "error",
+                }, ensure_ascii=False)
             if service_name:
                 try:
                     from cron.jobs import normalize_service_declaration
+                    from tools.service_health import normalize_service_health
 
                     service_decl = normalize_service_declaration(
                         name=service_name,
@@ -3032,6 +3042,7 @@ def terminal_tool(
                         outputs=service_outputs,
                         side_effects=service_side_effects,
                     )
+                    health_spec = normalize_service_health(service_health)
                 except ValueError as exc:
                     return json.dumps({
                         "output": "",
@@ -3049,6 +3060,8 @@ def terminal_tool(
                         session_key=session_key,
                         env_vars=env.env if hasattr(env, 'env') else None,
                         use_pty=effective_pty,
+                        service_declaration=service_decl,
+                        service_health=health_spec,
                     )
                 else:
                     proc_session = process_registry.spawn_via_env(
@@ -3057,16 +3070,50 @@ def terminal_tool(
                         cwd=effective_cwd,
                         task_id=effective_task_id,
                         session_key=session_key,
+                        service_declaration=service_decl,
+                        service_health=health_spec,
                     )
 
-                # Register the service on the live session — it now surfaces in
-                # the cron interflow graph for as long as this process runs.
-                if service_decl is not None:
-                    proc_session.service_name = service_decl["name"]
-                    proc_session.service_description = service_decl["description"]
-                    proc_session.service_inputs = service_decl["inputs"]
-                    proc_session.service_outputs = service_decl["outputs"]
-                    proc_session.service_side_effects = service_decl["side_effects"]
+                # A health-gated launch is one transaction from the caller's
+                # perspective. The process exists in PREPARING state but is
+                # invisible to the graph until readiness commits its lease.
+                health_evidence = None
+                if health_spec is not None:
+                    from tools.service_health import wait_for_service_health
+
+                    health_evidence = wait_for_service_health(health_spec)
+                    if health_evidence["status"] != "healthy":
+                        process_registry.kill_process(
+                            proc_session.id,
+                            source="service_readiness_failed",
+                        )
+                        return json.dumps({
+                            "output": "",
+                            "exit_code": -1,
+                            "error": (
+                                "service readiness probe failed: "
+                                f"{health_evidence['message']}"
+                            ),
+                            "status": "error",
+                            "health": health_evidence,
+                        }, ensure_ascii=False)
+                    try:
+                        process_registry.commit_service_lease(
+                            proc_session.id,
+                            health_evidence,
+                        )
+                    except Exception as exc:
+                        process_registry.kill_process(
+                            proc_session.id,
+                            source="service_commit_failed",
+                        )
+                        return json.dumps({
+                            "output": "",
+                            "exit_code": -1,
+                            "error": f"service lease commit failed: {exc}",
+                            "status": "error",
+                            "health": health_evidence,
+                        }, ensure_ascii=False)
 
                 result_data = {
                     "output": "Background process started",
@@ -3075,6 +3122,8 @@ def terminal_tool(
                     "exit_code": 0,
                     "error": None,
                 }
+                if health_evidence is not None:
+                    result_data["health"] = health_evidence
                 # Background spawns detached and returns exit_code 0 immediately;
                 # it never inline-polls is_interrupted(), so the stale-bit kill
                 # cannot occur here and this note never co-occurs with rc=130.
@@ -3855,6 +3904,18 @@ TERMINAL_SCHEMA = {
                 "type": "array",
                 "items": {"type": "string"},
                 "description": "The service's terminal actions, as typed 'scheme:value' refs (telegram/slack/email/notify/pr/github/webhook). Sink leaves, not edges onward."
+            },
+            "service_health": {
+                "type": "object",
+                "description": "Optional readiness gate for a declared service. Harness keeps the service out of the live graph until this probe passes; failure rolls the spawned process back. The same bounded probe is refreshed when the graph is read, so service nodes expose current application health rather than PID liveness alone.",
+                "properties": {
+                    "type": {"type": "string", "enum": ["http"]},
+                    "url": {"type": "string"},
+                    "expected_status": {"type": "integer", "minimum": 100, "maximum": 599, "default": 200},
+                    "timeout_seconds": {"type": "number", "minimum": 0.1, "maximum": 30, "default": 2},
+                    "startup_timeout_seconds": {"type": "number", "minimum": 0.1, "maximum": 300, "default": 30}
+                },
+                "required": ["type", "url"]
             }
         },
         "required": ["command"]
@@ -3889,6 +3950,7 @@ def _handle_terminal(args, **kw):
         service_inputs=args.get("service_inputs"),
         service_outputs=args.get("service_outputs"),
         service_side_effects=args.get("service_side_effects"),
+        service_health=args.get("service_health"),
     )
 
 

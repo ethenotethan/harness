@@ -172,5 +172,13 @@ def collect_nomad_services(
         ):
             continue  # desired-running but nothing actually serving — not live
 
+        decl["health"] = {
+            "status": "unknown",
+            "probe": "nomad-allocation",
+            "target": decl["id"],
+            "checked_at": "",
+            "latency_ms": 0,
+            "message": "Nomad allocation running; application health unavailable",
+        }
         services.append(decl)
     return services

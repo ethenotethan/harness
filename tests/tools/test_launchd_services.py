@@ -132,6 +132,8 @@ class TestCollectLaunchdServices:
         )
         assert [s["id"] for s in services] == ["launchd:dev.redis"]
         assert services[0]["label"] == "Redis (brew)"
+        assert services[0]["health"]["status"] == "unknown"
+        assert services[0]["health"]["probe"] == "launchctl"
 
     def test_registered_but_not_running_is_skipped(self, tmp_path):
         from tools.launchd_services import collect_launchd_services

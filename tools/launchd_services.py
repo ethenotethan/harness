@@ -178,5 +178,13 @@ def collect_launchd_services(
                 "launchd service %s not running; skipped from overlay", label
             )
             continue
+        decl["health"] = {
+            "status": "unknown",
+            "probe": "launchctl",
+            "target": decl["id"],
+            "checked_at": "",
+            "latency_ms": 0,
+            "message": "launchd lease running; application health not configured",
+        }
         services.append(decl)
     return services
