@@ -1563,6 +1563,13 @@ _OUTPUT_SCHEMES = frozenset({"wiki", "file", "postgres"})
 _SIDE_EFFECT_SCHEMES = frozenset(
     {"telegram", "slack", "email", "notify", "pr", "github", "webhook"}
 )
+# Service resources are graph metadata, not executable capabilities.  Their
+# namespace is intentionally open so a service can declare the boundary it
+# actually hosts or consumes (http, redis, kafka, s3, grpc, …) without a Harness
+# release adding that scheme to a global allowlist first.  URI/RFC 3986 scheme
+# syntax keeps refs canonical; the closed side-effect vocabulary below preserves
+# the data-vs-terminal-action boundary.
+_RESOURCE_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*$")
 
 # `deliver` values that are genuine EXTERNAL side effects (vs local/origin
 # in-band delivery, which is not a graph sink). Maps a deliver target to the
@@ -1578,15 +1585,18 @@ _DELIVER_SIDE_EFFECT_SCHEME = {
 def _normalize_resource_list(
     values: Any,
     *,
-    allowed_schemes: Collection[str],
+    allowed_schemes: Optional[Collection[str]],
     field_name: str,
+    forbidden_schemes: Collection[str] = (),
+    reserved_schemes: Collection[str] = (),
 ) -> List[str]:
     """Normalize a dataflow resource list to sorted, deduped ``scheme:value``.
 
-    Accepts a single string or a list of strings; ``None``/empty → ``[]``. Each
-    entry is a typed reference whose scheme is lowercased and must be drawn from
-    ``allowed_schemes``. Raises ValueError on malformed / out-of-vocabulary refs
-    so bad declarations never reach storage.
+    ``allowed_schemes`` supplies a closed vocabulary (used by persisted cron
+    declarations and terminal side effects). ``None`` creates an open,
+    declaration-local resource namespace (used by live services). Open schemes
+    must still follow RFC 3986 syntax and cannot cross the explicit forbidden or
+    reserved boundaries.
     """
     if values is None:
         return []
@@ -1602,7 +1612,9 @@ def _normalize_resource_list(
 
     seen: Set[str] = set()
     out: List[str] = []
-    allowed_sorted = sorted(allowed_schemes)
+    allowed_sorted = sorted(allowed_schemes) if allowed_schemes is not None else []
+    forbidden = set(forbidden_schemes)
+    reserved = set(reserved_schemes)
     for item in raw:
         if not isinstance(item, str):
             raise ValueError(
@@ -1613,14 +1625,34 @@ def _normalize_resource_list(
         if not text:
             continue
         if ":" not in text:
+            expected = (
+                f"'scheme:value' with scheme in {allowed_sorted}"
+                if allowed_schemes is not None
+                else "'scheme:value'"
+            )
             raise ValueError(
                 f"{field_name} entry '{text}' is not a typed reference — expected "
-                f"'scheme:value' with scheme in {allowed_sorted}."
+                f"{expected}."
             )
         scheme, value = text.split(":", 1)
         scheme = scheme.strip().lower()
         value = value.strip()
-        if scheme not in allowed_schemes:
+        if not _RESOURCE_SCHEME_RE.fullmatch(scheme):
+            raise ValueError(
+                f"{field_name} entry '{text}' has invalid scheme '{scheme}' — "
+                "use RFC 3986 scheme syntax (letter, then letters/digits/+.-)."
+            )
+        if scheme in forbidden:
+            raise ValueError(
+                f"{field_name} entry '{text}' uses terminal side-effect scheme "
+                f"'{scheme}'. Declare terminal actions in service_side_effects."
+            )
+        if scheme in reserved:
+            raise ValueError(
+                f"{field_name} entry '{text}' uses reserved scheme '{scheme}'; "
+                "only service inputs may reference an upstream cron output."
+            )
+        if allowed_schemes is not None and scheme not in allowed_schemes:
             raise ValueError(
                 f"{field_name} entry '{text}' has unknown scheme '{scheme}' — "
                 f"allowed schemes: {allowed_sorted}."
@@ -1833,12 +1865,15 @@ def normalize_service_declaration(
 
     A service (a dashboard, an API — anything the agent backgrounds and that
     outlives the turn) declares itself so it appears in the cron interflow graph
-    alongside the crons it shares data with. It uses the SAME ``scheme:value``
-    vocabulary as crons, so its inputs/outputs meet crons on shared resource
-    nodes. Both a non-empty ``name`` and a non-empty ``description`` are
-    REQUIRED — the description is markdown surfaced in Portal's node detail card,
-    so expanding a service node always answers "what is this / what does it do"
-    rather than showing a bare id. Raises ValueError on any malformed field.
+    alongside the crons it shares data with. Service input/output schemes are an
+    open, declaration-local namespace: any valid typed resource (HTTP, Redis,
+    Kafka, S3, a domain-specific boundary, etc.) can join graph nodes without a
+    Harness release adding it to a global vocabulary. Terminal action schemes
+    remain reserved for ``side_effects``, whose vocabulary is deliberately closed.
+    Both a non-empty ``name`` and a non-empty ``description`` are REQUIRED — the
+    description is markdown surfaced in Portal's node detail card, so expanding a
+    service node always answers "what is this / what does it do" rather than
+    showing a bare id. Raises ValueError on any malformed field.
     """
     if not isinstance(name, str) or not name.strip():
         raise ValueError("service name is required and must be a non-empty string.")
@@ -1852,10 +1887,17 @@ def normalize_service_declaration(
         "name": name.strip(),
         "description": description.strip(),
         "inputs": _normalize_resource_list(
-            inputs, allowed_schemes=_INPUT_SCHEMES, field_name="service inputs"
+            inputs,
+            allowed_schemes=None,
+            forbidden_schemes=_SIDE_EFFECT_SCHEMES,
+            field_name="service inputs",
         ),
         "outputs": _normalize_resource_list(
-            outputs, allowed_schemes=_OUTPUT_SCHEMES, field_name="service outputs"
+            outputs,
+            allowed_schemes=None,
+            forbidden_schemes=_SIDE_EFFECT_SCHEMES,
+            reserved_schemes={"cron-output"},
+            field_name="service outputs",
         ),
         "side_effects": _normalize_resource_list(
             side_effects,

@@ -2563,7 +2563,7 @@ def terminal_tool(
         watch_patterns: List of strings to watch for in background output. HARD rate limit: 1 notification per 15s per process. After 3 strike windows in a row, watch_patterns is disabled and the session is auto-promoted to notify_on_complete. Use ONLY for rare, one-shot mid-process signals on long-lived processes (server readiness, migration-done markers). NEVER use in loops/batch jobs — error patterns there will hit the strike limit and get disabled. MUTUALLY EXCLUSIVE with notify_on_complete — set one, not both.
         service_name: If set, registers this background process as a long-running SERVICE (a dashboard, an API, anything that outlives the turn) so it appears in the cron interflow dataflow graph. REQUIRES background=true. When you set this you MUST also set service_description. The tracked process is the lease — the service shows as live for exactly as long as it runs.
         service_description: REQUIRED whenever service_name is set. Markdown, human-readable — surfaced in the graph's node detail card so expanding the node answers "what is this and what does it do". A bare name is rejected.
-        service_inputs/service_outputs/service_side_effects: The service's dataflow, as typed 'scheme:value' lists in the SAME vocabulary as a cron's inputs/outputs/side_effects (e.g. service_inputs=["postgres:analytics.events"] for a dashboard that reads that table). Inputs/outputs meet crons on shared resource nodes, so a dashboard reading a table a cron writes links up automatically.
+        service_inputs/service_outputs/service_side_effects: The service's dataflow as typed 'scheme:value' lists. Input/output resource schemes are declaration-local and open (http, redis, kafka, s3, grpc, or domain-specific schemes); matching refs meet on one graph node. Terminal actions remain in the closed service_side_effects vocabulary. For example, service_outputs=["http://127.0.0.1:8081/v1"] links to a consumer declaring that exact service_input.
 
     Returns:
         str: JSON string with output, exit_code, and error fields
@@ -3844,12 +3844,12 @@ TERMINAL_SCHEMA = {
             "service_inputs": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "The service's dataflow reads, as typed 'scheme:value' refs in the SAME vocabulary as a cron's inputs (url/http/https/file/wiki/postgres/cron-output). A dashboard reading a table a cron writes (service_inputs=['postgres:analytics.events']) links to that cron on the shared store node."
+                "description": "The service's dataflow reads, as typed 'scheme:value' refs. Resource schemes are declaration-local and open: use http/https/file/wiki/postgres, infrastructure schemes such as redis/kafka/s3/grpc, or a domain-specific boundary. Matching refs share one graph node. 'cron-output:<job_id>' remains the reserved way to consume an upstream cron result."
             },
             "service_outputs": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "The service's dataflow writes, as typed 'scheme:value' refs (wiki/file/postgres). A ref another cron reads becomes a downstream edge."
+                "description": "The service's dataflow writes, as typed 'scheme:value' refs. Resource schemes are declaration-local and open, so APIs can publish exact endpoints (for example 'http://127.0.0.1:8081/v1') and services may define redis/kafka/s3/grpc or domain-specific boundaries without a Harness release. A consumer declaring the exact same ref becomes downstream. Terminal deliveries belong in service_side_effects."
             },
             "service_side_effects": {
                 "type": "array",
