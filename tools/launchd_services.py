@@ -135,7 +135,10 @@ def _launchd_label_running(
 def _uid() -> int:
     import os
 
-    return os.getuid()
+    getuid = getattr(os, "getuid", None)
+    if getuid is None:
+        raise RuntimeError("launchd service discovery requires POSIX UID support")
+    return int(getuid())
 
 
 def collect_launchd_services(
