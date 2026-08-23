@@ -567,12 +567,77 @@ class TestServiceDeclaration:
         with pytest.raises(ValueError, match="name is required"):
             normalize_service_declaration(name="   ", description="a description")
 
-    def test_bad_scheme_rejected(self):
+    def test_service_api_output_can_feed_another_service(self):
+        from cron.jobs import build_cron_graph, normalize_service_declaration
+
+        endpoint = "http://127.0.0.1:8081/v1"
+        producer = normalize_service_declaration(
+            name="MLX inference",
+            description="Hosts an OpenAI-compatible API.",
+            outputs=[endpoint],
+        )
+        consumer = normalize_service_declaration(
+            name="Meet pipeline",
+            description="Consumes local inference.",
+            inputs=[endpoint],
+        )
+        producer.update(id="svc-mlx", label=producer.pop("name"))
+        consumer.update(id="svc-meet", label=consumer.pop("name"))
+
+        graph = build_cron_graph(jobs=[], services=[producer, consumer])
+
+        assert {
+            "source": "svc-mlx",
+            "target": endpoint,
+            "type": "writes",
+        } in graph["edges"]
+        assert {
+            "source": endpoint,
+            "target": "svc-meet",
+            "type": "reads",
+        } in graph["edges"]
+        assert {
+            "id": endpoint,
+            "kind": "artifact",
+            "type": "http",
+            "label": "//127.0.0.1:8081/v1",
+        } in graph["nodes"]
+
+    def test_custom_resource_schemes_are_declaration_local(self):
         from cron.jobs import normalize_service_declaration
 
-        with pytest.raises(ValueError, match="unknown scheme"):
+        decl = normalize_service_declaration(
+            name="Event worker",
+            description="Moves events between infrastructure boundaries.",
+            inputs=["kafka:events.raw", "redis:cache/session"],
+            outputs=["s3:warehouse/events", "kafka:events.enriched"],
+        )
+
+        assert decl["inputs"] == ["kafka:events.raw", "redis:cache/session"]
+        assert decl["outputs"] == ["kafka:events.enriched", "s3:warehouse/events"]
+
+    def test_side_effect_scheme_stays_out_of_resource_fields(self):
+        from cron.jobs import normalize_service_declaration
+
+        with pytest.raises(ValueError, match="terminal side-effect scheme"):
             normalize_service_declaration(
                 name="dash", description="d", inputs=["telegram:me"]
+            )
+
+    def test_reserved_cron_output_scheme_stays_out_of_outputs(self):
+        from cron.jobs import normalize_service_declaration
+
+        with pytest.raises(ValueError, match="reserved"):
+            normalize_service_declaration(
+                name="dash", description="d", outputs=["cron-output:job-1"]
+            )
+
+    def test_malformed_custom_scheme_rejected(self):
+        from cron.jobs import normalize_service_declaration
+
+        with pytest.raises(ValueError, match="invalid scheme"):
+            normalize_service_declaration(
+                name="dash", description="d", outputs=["not a scheme:value"]
             )
 
 
