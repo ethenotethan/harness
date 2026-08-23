@@ -3053,6 +3053,12 @@ def terminal_tool(
 
             try:
                 if env_type == "local":
+                    service_kwargs = {}
+                    if service_decl is not None:
+                        service_kwargs = {
+                            "service_declaration": service_decl,
+                            "service_health": health_spec,
+                        }
                     proc_session = process_registry.spawn_local(
                         command=command,
                         cwd=effective_cwd,
@@ -3060,18 +3066,22 @@ def terminal_tool(
                         session_key=session_key,
                         env_vars=env.env if hasattr(env, 'env') else None,
                         use_pty=effective_pty,
-                        service_declaration=service_decl,
-                        service_health=health_spec,
+                        **service_kwargs,
                     )
                 else:
+                    service_kwargs = {}
+                    if service_decl is not None:
+                        service_kwargs = {
+                            "service_declaration": service_decl,
+                            "service_health": health_spec,
+                        }
                     proc_session = process_registry.spawn_via_env(
                         env=env,
                         command=command,
                         cwd=effective_cwd,
                         task_id=effective_task_id,
                         session_key=session_key,
-                        service_declaration=service_decl,
-                        service_health=health_spec,
+                        **service_kwargs,
                     )
 
                 # A health-gated launch is one transaction from the caller's
