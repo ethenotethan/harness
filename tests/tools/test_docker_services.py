@@ -14,12 +14,14 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 
-def _make_runner(ids, labels_by_id):
+def _make_runner(ids, labels_by_id, health_by_id=None):
     """Fake docker CLI: `ps` lists ids, `inspect` returns a container's labels."""
     def runner(args):
         if args[:2] == ["docker", "ps"]:
             return "\n".join(ids) + "\n"
         if args[:2] == ["docker", "inspect"]:
+            if ".State.Health.Status" in args[3]:
+                return (health_by_id or {}).get(args[-1], "")
             return json.dumps(labels_by_id.get(args[-1]))
         raise AssertionError(f"unexpected docker call: {args}")
     return runner
@@ -77,6 +79,27 @@ class TestParseLabels:
 
 
 class TestCollectDockerServices:
+    def test_exposes_native_container_health(self):
+        from tools.docker_services import collect_docker_services
+
+        services = collect_docker_services(runner=_make_runner(
+            ids=["c1"],
+            labels_by_id={"c1": {
+                "hermes.service": "API",
+                "hermes.description": "serves requests",
+            }},
+            health_by_id={"c1": "unhealthy"},
+        ))
+
+        assert services[0]["health"] == {
+            "status": "unhealthy",
+            "probe": "docker-healthcheck",
+            "target": "docker:c1",
+            "checked_at": "",
+            "latency_ms": 0,
+            "message": "Docker healthcheck: unhealthy",
+        }
+
     def test_collects_running_labeled_containers(self):
         from tools.docker_services import collect_docker_services
 

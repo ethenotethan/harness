@@ -21,7 +21,7 @@ is restored, and liveness must reflect the OS), not any particular field list.
 """
 import json
 import time
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -52,6 +52,145 @@ def _service_session(sid="proc_dash", pid=4242):
 
 
 class TestServiceDeclarationSurvivesRestart:
+    def test_fast_exit_cannot_be_reinserted_after_reader_finishes(self, registry, tmp_path):
+        """Publication precedes reader start, so running/finished never overlap."""
+        with patch("tools.process_registry.CHECKPOINT_PATH", tmp_path / "procs.json"):
+            session = registry.spawn_local(
+                "exit 0",
+                cwd="/tmp",
+                service_declaration={
+                    "name": "Fast service",
+                    "description": "Exits immediately.",
+                    "inputs": [],
+                    "outputs": [],
+                    "side_effects": [],
+                },
+            )
+            session._reader_thread.join(timeout=3)
+
+        assert session.id not in registry._running
+        assert session.id in registry._finished
+
+    def test_pty_checkpoint_failure_does_not_execute_command_twice(self, registry):
+        pty_process = MagicMock(pid=5555)
+        pty_module = MagicMock()
+        pty_module.PtyProcess.spawn.return_value = pty_process
+
+        def checkpoint(*, strict=False):
+            if strict:
+                raise RuntimeError("checkpoint failed")
+
+        with (
+            patch.dict("sys.modules", {"ptyprocess": pty_module}),
+            patch("tools.process_registry._find_shell", return_value="/bin/bash"),
+            patch("subprocess.Popen") as pipe_spawn,
+            patch.object(registry, "_write_checkpoint", side_effect=checkpoint),
+        ):
+            with pytest.raises(RuntimeError, match="checkpoint failed"):
+                registry.spawn_local("side-effecting-command", use_pty=True)
+
+        pty_module.PtyProcess.spawn.assert_called_once()
+        pty_process.terminate.assert_called_once_with(force=True)
+        pipe_spawn.assert_not_called()
+        assert not registry._running
+
+    def test_spawn_rolls_back_when_initial_checkpoint_cannot_commit(self, registry, tmp_path):
+        declaration = {
+            "name": "Durable API",
+            "description": "Must not run anonymously.",
+            "inputs": [],
+            "outputs": ["http://127.0.0.1:8764"],
+            "side_effects": [],
+        }
+        with (
+            patch("tools.process_registry.CHECKPOINT_PATH", tmp_path / "procs.json"),
+            patch("utils.atomic_json_write", side_effect=OSError("disk full")),
+        ):
+            with pytest.raises(RuntimeError, match="checkpoint"):
+                registry.spawn_local(
+                    "sleep 30",
+                    cwd="/tmp",
+                    service_declaration=declaration,
+                )
+
+        assert registry._running == {}
+
+    def test_spawn_persists_complete_service_before_returning(self, registry, tmp_path):
+        """The first durable checkpoint is already a complete service lease.
+
+        A gateway crash immediately after ``spawn_local`` returns must never
+        recover a running but anonymous process.  Registration is therefore an
+        input to spawn, not a second mutation the terminal tool performs later.
+        """
+        checkpoint = tmp_path / "procs.json"
+        declaration = {
+            "name": "Atomic API",
+            "description": "Serves the atomic registration test.",
+            "inputs": ["file:/tmp/input"],
+            "outputs": ["http://127.0.0.1:8765"],
+            "side_effects": [],
+        }
+        with patch("tools.process_registry.CHECKPOINT_PATH", checkpoint):
+            session = registry.spawn_local(
+                "sleep 30",
+                cwd="/tmp",
+                task_id="atomic-service",
+                service_declaration=declaration,
+            )
+            try:
+                entry = json.loads(checkpoint.read_text(encoding="utf-8"))[0]
+                assert entry["session_id"] == session.id
+                assert entry["service_name"] == declaration["name"]
+                assert entry["service_description"] == declaration["description"]
+                assert entry["service_inputs"] == declaration["inputs"]
+                assert entry["service_outputs"] == declaration["outputs"]
+            finally:
+                registry.kill_process(session.id)
+
+    def test_health_gated_service_is_hidden_until_lease_commit(self, registry, tmp_path):
+        checkpoint = tmp_path / "procs.json"
+        declaration = {
+            "name": "Ready API",
+            "description": "Only visible after readiness passes.",
+            "inputs": [],
+            "outputs": ["http://127.0.0.1:8766"],
+            "side_effects": [],
+        }
+        health_spec = {
+            "type": "http",
+            "url": "http://127.0.0.1:8766/health",
+            "expected_status": 200,
+            "timeout_seconds": 2.0,
+            "startup_timeout_seconds": 30.0,
+        }
+        evidence = {
+            "status": "healthy",
+            "probe": "http",
+            "target": health_spec["url"],
+            "checked_at": "2026-08-23T22:00:00Z",
+            "latency_ms": 3.2,
+            "message": "HTTP 200",
+        }
+        with patch("tools.process_registry.CHECKPOINT_PATH", checkpoint):
+            session = registry.spawn_local(
+                "sleep 30",
+                cwd="/tmp",
+                service_declaration=declaration,
+                service_health=health_spec,
+            )
+            try:
+                assert registry.collect_service_declarations() == []
+                registry.commit_service_lease(session.id, evidence)
+                services = registry.collect_service_declarations(probe_health=False)
+                assert services[0]["health"] == evidence
+
+                entry = json.loads(checkpoint.read_text(encoding="utf-8"))[0]
+                assert entry["service_lease_state"] == "active"
+                assert entry["service_health"] == health_spec
+                assert entry["service_health_evidence"] == evidence
+            finally:
+                registry.kill_process(session.id)
+
     def test_checkpoint_round_trip_preserves_declaration(self, registry, tmp_path):
         """The declaration a service registered with must be the one it comes
         back with — otherwise it vanishes from the graph on restart."""

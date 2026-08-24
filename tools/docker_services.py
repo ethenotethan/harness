@@ -137,5 +137,24 @@ def collect_docker_services(
             continue
         decl = _parse_labels_to_declaration(cid, labels)
         if decl is not None:
+            try:
+                native = runner([
+                    "docker", "inspect", "--format",
+                    "{{if .State.Health}}{{.State.Health.Status}}{{end}}", cid,
+                ]).strip().lower()
+            except Exception:
+                native = ""
+            status = native if native in {"healthy", "unhealthy", "starting"} else "unknown"
+            decl["health"] = {
+                "status": status,
+                "probe": "docker-healthcheck",
+                "target": decl["id"],
+                "checked_at": "",
+                "latency_ms": 0,
+                "message": (
+                    f"Docker healthcheck: {native}"
+                    if native else "container has no Docker HEALTHCHECK"
+                ),
+            }
             services.append(decl)
     return services

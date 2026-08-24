@@ -135,7 +135,10 @@ def _launchd_label_running(
 def _uid() -> int:
     import os
 
-    return os.getuid()
+    getuid = getattr(os, "getuid", None)
+    if getuid is None:
+        raise RuntimeError("launchd service discovery requires POSIX UID support")
+    return int(getuid())
 
 
 def collect_launchd_services(
@@ -178,5 +181,13 @@ def collect_launchd_services(
                 "launchd service %s not running; skipped from overlay", label
             )
             continue
+        decl["health"] = {
+            "status": "unknown",
+            "probe": "launchctl",
+            "target": decl["id"],
+            "checked_at": "",
+            "latency_ms": 0,
+            "message": "launchd lease running; application health not configured",
+        }
         services.append(decl)
     return services

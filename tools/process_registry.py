@@ -404,6 +404,9 @@ class ProcessSession:
     service_inputs: List[str] = field(default_factory=list)
     service_outputs: List[str] = field(default_factory=list)
     service_side_effects: List[str] = field(default_factory=list)
+    service_health: Optional[Dict[str, Any]] = None
+    service_health_evidence: Optional[Dict[str, Any]] = None
+    service_lease_state: str = "active"
     # Watch patterns — trigger agent notification when output matches any pattern
     watch_patterns: List[str] = field(default_factory=list)
     _watch_hits: int = field(default=0, repr=False)          # total matches delivered
@@ -973,6 +976,20 @@ class ProcessRegistry:
                 logger.debug("Could not resolve environment temp dir: %s", exc)
         return "/tmp"
 
+    @staticmethod
+    def _attach_service_declaration(
+        session: ProcessSession,
+        declaration: Optional[Dict[str, Any]],
+    ) -> None:
+        """Attach a pre-validated service declaration before persistence."""
+        if not declaration:
+            return
+        session.service_name = declaration["name"]
+        session.service_description = declaration["description"]
+        session.service_inputs = list(declaration.get("inputs") or [])
+        session.service_outputs = list(declaration.get("outputs") or [])
+        session.service_side_effects = list(declaration.get("side_effects") or [])
+
     def spawn_local(
         self,
         command: str,
@@ -981,6 +998,8 @@ class ProcessRegistry:
         session_key: str = "",
         env_vars: dict = None,
         use_pty: bool = False,
+        service_declaration: Optional[Dict[str, Any]] = None,
+        service_health: Optional[Dict[str, Any]] = None,
     ) -> ProcessSession:
         """
         Spawn a background process locally.
@@ -1009,6 +1028,10 @@ class ProcessRegistry:
             cwd=_resolve_safe_cwd(cwd or os.getcwd()),
             started_at=time.time(),
         )
+        self._attach_service_declaration(session, service_declaration)
+        session.service_health = service_health
+        if service_declaration and service_health:
+            session.service_lease_state = "preparing"
 
         pty_scope_attempted = False
         if use_pty:
@@ -1058,7 +1081,15 @@ class ProcessRegistry:
                 # Store the pty handle on the session for read/write
                 session._pty = pty_proc
 
-                # PTY reader thread
+                # Publish the fully declared session before its reader can
+                # observe exit. This prevents a fast child from moving itself
+                # to _finished and then being re-inserted into _running.
+                with self._lock:
+                    self._prune_if_needed()
+                    self._running[session.id] = session
+                self._write_checkpoint(strict=True)
+
+                # PTY reader starts only after atomic registry visibility.
                 reader = threading.Thread(
                     target=self._pty_reader_loop,
                     args=(session,),
@@ -1067,17 +1098,26 @@ class ProcessRegistry:
                 )
                 session._reader_thread = reader
                 reader.start()
-
-                with self._lock:
-                    self._prune_if_needed()
-                    self._running[session.id] = session
-
-                self._write_checkpoint()
                 return session
 
             except ImportError:
                 logger.warning("ptyprocess not installed, falling back to pipe mode")
             except Exception as e:
+                # Any failure after PTY launch is a failed transaction. Remove
+                # graph visibility and terminate the partial child before the
+                # pipe fallback is allowed to execute the command again.
+                with self._lock:
+                    self._running.pop(session.id, None)
+                pty_handle = session._pty
+                if pty_handle is not None:
+                    try:
+                        pty_handle.terminate(force=True)
+                    except Exception:
+                        pass
+                    session._pty = None
+                    self._write_checkpoint()
+                    raise
+                self._write_checkpoint()
                 logger.warning("PTY spawn failed (%s), falling back to pipe mode", e)
                 if pty_scope_attempted and session.systemd_unit:
                     if not _stop_systemd_unit(session.systemd_unit):
@@ -1164,7 +1204,14 @@ class ProcessRegistry:
         session.host_start_time = self._safe_host_start_time(session.pid)
 
         try:
-            # Start output reader thread
+            # Publish the complete process/service lease before a reader thread
+            # can reconcile a fast exit.
+            with self._lock:
+                self._prune_if_needed()
+                self._running[session.id] = session
+            self._write_checkpoint(strict=True)
+
+            # Start output reader only after atomic registry visibility.
             reader = threading.Thread(
                 target=self._reader_loop,
                 args=(session,),
@@ -1173,13 +1220,10 @@ class ProcessRegistry:
             )
             session._reader_thread = reader
             reader.start()
-
-            with self._lock:
-                self._prune_if_needed()
-                self._running[session.id] = session
-
-            self._write_checkpoint()
         except Exception:
+            with self._lock:
+                self._running.pop(session.id, None)
+            self._write_checkpoint()
             # Post-Popen setup failed — kill the orphaned subprocess (and any
             # descendants spawned via setsid) before re-raising so they do not
             # leak as untracked background processes.
@@ -1219,6 +1263,8 @@ class ProcessRegistry:
         task_id: str = "",
         session_key: str = "",
         timeout: int = 10,
+        service_declaration: Optional[Dict[str, Any]] = None,
+        service_health: Optional[Dict[str, Any]] = None,
     ) -> ProcessSession:
         """
         Spawn a background process through a non-local environment backend.
@@ -1241,6 +1287,10 @@ class ProcessRegistry:
             env_ref=env,
             pid_scope="sandbox",
         )
+        self._attach_service_declaration(session, service_declaration)
+        session.service_health = service_health
+        if service_declaration and service_health:
+            session.service_lease_state = "preparing"
 
         # Run the command in the sandbox with output capture
         temp_dir = self._env_temp_dir(env)
@@ -1291,7 +1341,22 @@ class ProcessRegistry:
             session.output_buffer = f"Failed to start: {e}"
 
         if not session.exited:
-            # Start a poller thread that periodically reads the log file
+            # Publish before the poller can observe completion, matching local
+            # process atomicity.
+            with self._lock:
+                self._prune_if_needed()
+                self._running[session.id] = session
+            try:
+                self._write_checkpoint(strict=True)
+            except Exception:
+                with self._lock:
+                    self._running.pop(session.id, None)
+                try:
+                    env.execute(f"kill {session.pid}", timeout=5)
+                except Exception:
+                    pass
+                raise
+
             reader = threading.Thread(
                 target=self._env_poller_loop,
                 args=(session, env, log_path, pid_path, exit_path),
@@ -1299,15 +1364,17 @@ class ProcessRegistry:
                 name=f"proc-poller-{session.id}",
             )
             session._reader_thread = reader
-            reader.start()
-
-        with self._lock:
-            self._prune_if_needed()
-            if not session.exited:
-                self._running[session.id] = session
-
-        if not session.exited:
-            self._write_checkpoint()
+            try:
+                reader.start()
+            except Exception:
+                with self._lock:
+                    self._running.pop(session.id, None)
+                self._write_checkpoint()
+                try:
+                    env.execute(f"kill {session.pid}", timeout=5)
+                except Exception:
+                    pass
+                raise
 
         return session
 
@@ -2322,7 +2389,30 @@ class ProcessRegistry:
             result.append(entry)
         return result
 
-    def collect_service_declarations(self) -> list:
+    def commit_service_lease(
+        self,
+        session_id: str,
+        health_evidence: Dict[str, Any],
+    ) -> None:
+        """Atomically publish a health-gated service after readiness succeeds."""
+        with self._lock:
+            session = self._running.get(session_id)
+            if session is None or session.exited or not session.service_name:
+                raise ValueError(f"service process {session_id!r} is not running")
+            previous_evidence = session.service_health_evidence
+            previous_state = session.service_lease_state
+            session.service_health_evidence = dict(health_evidence)
+            session.service_lease_state = "active"
+        try:
+            self._write_checkpoint(strict=True)
+        except Exception:
+            with self._lock:
+                session.service_health_evidence = previous_evidence
+                session.service_lease_state = previous_state
+            self._write_checkpoint()
+            raise
+
+    def collect_service_declarations(self, *, probe_health: bool = True) -> list:
         """Live long-running SERVICES for the cron interflow graph.
 
         Every background session that self-declared a service (``service_name``
@@ -2346,8 +2436,25 @@ class ProcessRegistry:
         services = []
         for s in live:
             s = self._refresh_detached_session(s)
-            if s is None or s.exited or not s.service_name:
+            if (
+                s is None
+                or s.exited
+                or not s.service_name
+                or s.service_lease_state != "active"
+            ):
                 continue
+            if probe_health and s.service_health:
+                from tools.service_health import probe_service_health
+
+                s.service_health_evidence = probe_service_health(s.service_health)
+            health = s.service_health_evidence or {
+                "status": "unknown",
+                "probe": "process",
+                "target": f"pid:{s.pid}" if s.pid else "process",
+                "checked_at": "",
+                "latency_ms": 0,
+                "message": "process lease running; application health not configured",
+            }
             services.append({
                 "id": s.id,
                 "label": s.service_name,
@@ -2355,6 +2462,7 @@ class ProcessRegistry:
                 "inputs": list(s.service_inputs),
                 "outputs": list(s.service_outputs),
                 "side_effects": list(s.service_side_effects),
+                "health": health,
             })
         return services
 
@@ -2526,6 +2634,8 @@ class ProcessRegistry:
     def _write_checkpoint(
         self,
         extra_entries: Optional[List[Dict[str, Any]]] = None,
+        *,
+        strict: bool = False,
     ):
         """Write running process metadata to checkpoint file atomically."""
         try:
@@ -2578,6 +2688,9 @@ class ProcessRegistry:
                             "service_inputs": s.service_inputs,
                             "service_outputs": s.service_outputs,
                             "service_side_effects": s.service_side_effects,
+                            "service_health": s.service_health,
+                            "service_health_evidence": s.service_health_evidence,
+                            "service_lease_state": s.service_lease_state,
                         })
                 if extra_entries:
                     tracked_ids = {item.get("session_id") for item in entries}
@@ -2592,6 +2705,8 @@ class ProcessRegistry:
             atomic_json_write(CHECKPOINT_PATH, entries)
         except Exception as e:
             logger.debug("Failed to write checkpoint file: %s", e, exc_info=True)
+            if strict:
+                raise RuntimeError("process registry checkpoint commit failed") from e
 
     def recover_from_checkpoint(self) -> int:
         """
@@ -2683,6 +2798,9 @@ class ProcessRegistry:
                 service_inputs=entry.get("service_inputs") or [],
                 service_outputs=entry.get("service_outputs") or [],
                 service_side_effects=entry.get("service_side_effects") or [],
+                service_health=entry.get("service_health"),
+                service_health_evidence=entry.get("service_health_evidence"),
+                service_lease_state=entry.get("service_lease_state", "active"),
             )
             with self._lock:
                 self._running[session.id] = session

@@ -538,6 +538,30 @@ class TestBuildCronGraph:
 
 
 class TestServiceDeclaration:
+    def test_service_health_evidence_is_exposed_on_graph_node(self):
+        from cron.jobs import build_cron_graph
+
+        health = {
+            "status": "unhealthy",
+            "probe": "http",
+            "target": "http://127.0.0.1:9120/health",
+            "checked_at": "2026-08-23T22:00:00Z",
+            "latency_ms": 2000.0,
+            "message": "TimeoutError: timed out",
+        }
+        graph = build_cron_graph(jobs=[], services=[{
+            "id": "svc-meet",
+            "label": "Meet pipeline",
+            "description": "Conversation service.",
+            "inputs": [],
+            "outputs": ["http://127.0.0.1:9120"],
+            "side_effects": [],
+            "health": health,
+        }])
+
+        node = next(n for n in graph["nodes"] if n["id"] == "svc-meet")
+        assert node["health"] == health
+
     def test_valid_declaration_normalizes_and_dedupes(self):
         from cron.jobs import normalize_service_declaration
 

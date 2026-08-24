@@ -2023,15 +2023,16 @@ def build_cron_graph(
         sid = service.get("id")
         if not sid:
             continue
-        nodes.append(
-            {
-                "id": sid,
-                "kind": "service",
-                "type": "service",
-                "label": service.get("label") or sid,
-                "description": service.get("description") or "",
-            }
-        )
+        node = {
+            "id": sid,
+            "kind": "service",
+            "type": "service",
+            "label": service.get("label") or sid,
+            "description": service.get("description") or "",
+        }
+        if isinstance(service.get("health"), dict):
+            node["health"] = service["health"]
+        nodes.append(node)
         for ref in service.get("inputs") or []:
             if ref.startswith("cron-output:"):
                 upstream = ref.split(":", 1)[1].strip()
