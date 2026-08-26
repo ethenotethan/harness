@@ -1543,7 +1543,15 @@ class CLICommandsMixin:
         from tools.cronjob_tools import cronjob as cronjob_tool
 
         def _cron_api(**kwargs):
-            return json.loads(cronjob_tool(**kwargs))
+            # A person typed this. The tool function attributes its own calls to
+            # the agent (tools.cronjob_tools._attribute_to_agent) because the
+            # model is its usual caller, so the interactive path has to say who
+            # is really acting before delegating — a recorded cron change that
+            # names the wrong author is worse than one that names nobody.
+            from cron.changesets import use_changeset_origin
+
+            with use_changeset_origin("human"):
+                return json.loads(cronjob_tool(**kwargs))
 
         def _normalize_skills(values):
             normalized = []
