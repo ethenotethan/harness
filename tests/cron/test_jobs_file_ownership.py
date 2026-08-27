@@ -83,7 +83,12 @@ class TestSaveJobsOwnershipPreservation:
 
         jobs.save_jobs([{"id": "seed", "prompt": "updated"}])
 
-        assert chown_calls == [(str(jobs_file), 1000, 1000)], (
+        # A save also rewrites the cron changeset log when the configuration
+        # moved, and that write preserves its own ownership for exactly the same
+        # reason (#68483 applies to every file the store owns). This contract is
+        # about jobs.json, so it is asserted about jobs.json.
+        jobs_file_chowns = [call for call in chown_calls if call[0] == str(jobs_file)]
+        assert jobs_file_chowns == [(str(jobs_file), 1000, 1000)], (
             "root rewrite must hand jobs.json back to the previous owner "
             "(uid/gid 1000) instead of leaving it root:600 (#68483)"
         )

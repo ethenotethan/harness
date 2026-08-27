@@ -5,6 +5,7 @@ Expose a single compressed action-oriented tool to avoid schema/context bloat.
 Compatibility wrappers remain for direct Python callers and legacy tests.
 """
 
+import functools
 import json
 import logging
 import re
@@ -1029,6 +1030,34 @@ def _try_dispatch_background_run(
     return result
 
 
+def _attribute_to_agent(func):
+    """Record configuration changes made through this tool as the agent's.
+
+    This function is the model's door to cron, and it is also the function the
+    gateway's ``cron.manage`` delegates to when a *person* clicks something in
+    Portal or the TUI. So the claim is made with ``if_unset=True``: an origin
+    already bound by an outer, better-informed boundary wins, and in the absence
+    of one the caller here is the model.
+
+    A decorator rather than a ``with`` inside the body purely so the attribution
+    doesn't re-indent a five-hundred-line function it has nothing to do with.
+    """
+
+    @functools.wraps(func)
+    def _attributed(*args, **kwargs):
+        try:
+            from cron.changesets import use_changeset_origin
+        except Exception:
+            return func(*args, **kwargs)
+        session_id = str(kwargs.get("session_id") or "").strip()
+        keys = (f"session/{session_id}",) if session_id else ()
+        with use_changeset_origin("agent", source_event_keys=keys, if_unset=True):
+            return func(*args, **kwargs)
+
+    return _attributed
+
+
+@_attribute_to_agent
 def cronjob(
     action: str,
     job_id: Optional[str] = None,

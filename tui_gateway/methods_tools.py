@@ -1632,23 +1632,34 @@ def _(rid, params: dict) -> dict:
     try:
         from tools.cronjob_tools import cronjob
 
-        if action == "list":
-            return _ok(rid, json.loads(cronjob(action="list")))
-        if action == "add":
-            return _ok(
-                rid,
-                json.loads(
-                    cronjob(
-                        action="create",
-                        name=jid,
-                        schedule=params.get("schedule", ""),
-                        prompt=params.get("prompt", ""),
-                    )
-                ),
-            )
-        if action in {"remove", "pause", "resume"}:
-            return _ok(rid, json.loads(cronjob(action=action, job_id=jid)))
-        return _err(rid, 4016, f"unknown cron action: {action}")
+        # This method is the UI's door to cron — Portal and the TUI call it when
+        # a person clicks. The model reaches the same code in-process through its
+        # own tool, which attributes itself to the agent, so binding the human
+        # here is what keeps the recorded actor from naming the wrong author of
+        # every change made by hand. `params.get("actor")` lets a caller that
+        # knows better say so; anything unrecognized is passed through verbatim
+        # rather than folded into "unknown".
+        from cron.changesets import use_changeset_origin
+
+        actor = str(params.get("actor") or "human").strip() or "human"
+        with use_changeset_origin(actor):
+            if action == "list":
+                return _ok(rid, json.loads(cronjob(action="list")))
+            if action == "add":
+                return _ok(
+                    rid,
+                    json.loads(
+                        cronjob(
+                            action="create",
+                            name=jid,
+                            schedule=params.get("schedule", ""),
+                            prompt=params.get("prompt", ""),
+                        )
+                    ),
+                )
+            if action in {"remove", "pause", "resume"}:
+                return _ok(rid, json.loads(cronjob(action=action, job_id=jid)))
+            return _err(rid, 4016, f"unknown cron action: {action}")
     except Exception as e:
         return _err(rid, 5023, str(e))
 
@@ -1698,6 +1709,69 @@ def _(rid, params: dict) -> dict:
     except Exception as e:
         logger.exception("cron.graph failed")
         return _err(rid, 5024, str(e))
+
+
+@method("cron.changesets")
+def _(rid, params: dict) -> dict:
+    """Recorded history of the cron configuration, newest first.
+
+    The counterpart to ``cron.graph``: that one says what the wiring is now, this
+    one says when it changed, who changed it, and which session caused it — the
+    three things a client polling ``cron.graph`` can only guess at. See
+    ``cron/changesets.py`` for what counts as a change (configuration only, never
+    liveness) and for the digest's compatibility with Portal's own.
+    """
+    try:
+        from cron.changesets import ensure_baseline, read_changesets
+
+        # Open the log on the current configuration if nothing has written to it
+        # yet, so the first recorded change has a real "before" to be compared
+        # against instead of being reported against the empty graph. Best-effort:
+        # a store that can't be written to can still be read from.
+        try:
+            ensure_baseline()
+        except Exception:
+            logger.debug("cron.changesets: baseline not established", exc_info=True)
+
+        return _ok(
+            rid,
+            read_changesets(
+                limit=max(1, min(int(params.get("limit") or 50), 500)),
+                offset=max(0, int(params.get("offset") or 0)),
+                since=params.get("since") or None,
+                until=params.get("until") or None,
+                job=params.get("job") or None,
+            ),
+        )
+    except Exception as e:
+        logger.exception("cron.changesets failed")
+        return _err(rid, 5036, str(e))
+
+
+@method("cron.changeset_diff")
+def _(rid, params: dict) -> dict:
+    """The configurations on either side of one recorded change.
+
+    Graphs, not prose. The client derives its change statements from these with
+    the same code it runs over its own observed history; a second account of
+    "what changed", written here, would drift from that one. ``before`` is
+    omitted — not empty — when the previous revision isn't in the log (the
+    baseline row, or a parent trimmed off the end), because a client that read an
+    empty graph there would report a steady-state configuration as freshly built.
+    """
+    try:
+        from cron.changesets import read_changeset_diff
+
+        changeset_id = str(params.get("id") or "").strip()
+        if not changeset_id:
+            return _err(rid, 4020, "cron.changeset_diff requires an id")
+        payload = read_changeset_diff(changeset_id)
+        if payload is None:
+            return _err(rid, 4021, f"unknown cron changeset: {changeset_id}")
+        return _ok(rid, payload)
+    except Exception as e:
+        logger.exception("cron.changeset_diff failed")
+        return _err(rid, 5037, str(e))
 
 
 @method("learning.frames")

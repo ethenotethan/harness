@@ -1252,6 +1252,28 @@ def _merge_unexpected_disk_jobs(
     return jobs + recovered
 
 
+def _record_configuration_changeset(jobs: List[Dict[str, Any]]) -> None:
+    """Record a changeset iff this save moved the dataflow *configuration*.
+
+    Every cron mutation funnels through ``_save_jobs_unlocked``, which makes this
+    the one place a history can be written from and cover the CLI, the gateway,
+    the tool and the scheduler alike. It is also why the recording has to be
+    gated: most saves reaching here are scheduler bookkeeping (``last_run_at``,
+    ``next_run_at``, preflight flags, the due-scan sweep), and a row per save
+    would be a log of the tick loop. ``cron.changesets`` compares a digest taken
+    over the configuration form only and returns None when nothing moved.
+
+    Best-effort by construction: a history that can fail a save would be a worse
+    feature than no history.
+    """
+    try:
+        from cron.changesets import record_change
+
+        record_change(jobs)
+    except Exception:
+        logger.debug("cron changeset not recorded for this save", exc_info=True)
+
+
 def _save_jobs_unlocked(
     jobs: List[Dict[str, Any]],
     *,
@@ -1356,6 +1378,7 @@ def _save_jobs_unlocked(
             # a degraded sibling landing between replace and stat. Later
             # saves in this section simply take the full merge (fail-safe).
             _record_load_stamp(None)
+            _record_configuration_changeset(jobs)
             return
 
         # Exhausted retries — last merge + write without another re-peek.
@@ -1377,6 +1400,7 @@ def _save_jobs_unlocked(
         tmp_path = None
         _secure_file(jobs_file)
         _preserve_file_ownership(jobs_file, _stat_before)
+        _record_configuration_changeset(jobs)
     except BaseException:
         if tmp_path is not None:
             try:
@@ -1399,6 +1423,35 @@ def save_jobs(
     """
     with _jobs_lock():
         _save_jobs_unlocked(jobs, removed_ids=removed_ids, replace=replace)
+
+
+def _scheduler_save(
+    jobs: List[Dict[str, Any]],
+    *,
+    note: str = "",
+    removed_ids: Optional[Collection[str]] = None,
+) -> None:
+    """``save_jobs`` for a write the *scheduler itself* makes.
+
+    Most scheduler writes are runtime bookkeeping and record no changeset at all
+    (``_record_configuration_changeset``), but a few genuinely change the
+    configuration: a finished one-shot is disabled, a wedged claim is removed, a
+    contradictory half-paused record self-disables. "The scheduler disabled this
+    job" and "someone disabled this job" are exactly the distinction a history is
+    opened to settle, and only the call site knows which one this is — so the
+    attribution is bound here rather than inferred later from the shape of the
+    change.
+
+    Attribution must never be able to block a save: an unimportable changeset
+    module falls through to a plain save.
+    """
+    try:
+        from cron.changesets import use_changeset_origin
+    except Exception:
+        save_jobs(jobs, removed_ids=removed_ids)
+        return
+    with use_changeset_origin("scheduler", note=note):
+        save_jobs(jobs, removed_ids=removed_ids)
 
 
 def _normalize_workdir(workdir: Optional[str]) -> Optional[str]:
@@ -2773,7 +2826,7 @@ def mark_job_run(job_id: str, success: bool, error: Optional[str] = None,
                         job["enabled"] = False
                         job["state"] = "completed"
                         job["next_run_at"] = None
-                        save_jobs(jobs)
+                        _scheduler_save(jobs, note="repeat limit reached")
                         return
                 
                 # Compute next run
@@ -2808,7 +2861,7 @@ def mark_job_run(job_id: str, success: bool, error: Optional[str] = None,
                 elif job.get("state") != "paused":
                     job["state"] = "scheduled"
 
-                save_jobs(jobs)
+                _scheduler_save(jobs, note="after a job run")
                 return
 
         logger.warning("mark_job_run: job_id %s not found, skipping save", job_id)
@@ -2899,7 +2952,7 @@ def claim_dispatch(job_id: str) -> bool:
                     job["enabled"] = False
                     job["state"] = "completed"
                     job["next_run_at"] = None
-                    save_jobs(jobs)
+                    _scheduler_save(jobs, note="dispatch limit reached")
                     logger.info(
                         "Job '%s': dispatch limit reached (%d/%d) — marking completed",
                         job.get("name", job.get("id", "?")),
@@ -2912,7 +2965,11 @@ def claim_dispatch(job_id: str) -> bool:
                 # it stops appearing as due, and leave an operator-visible
                 # diagnostic instead of vanishing silently.
                 jobs.pop(i)
-                save_jobs(jobs, removed_ids={job_id})
+                _scheduler_save(
+                    jobs,
+                    note="wedged one-shot removed",
+                    removed_ids={job_id},
+                )
                 _write_wedged_oneshot_diagnostic(job)
                 logger.info(
                     "Job '%s': dispatch limit reached (%d/%d) — removing",
@@ -3580,7 +3637,11 @@ def _get_due_jobs_locked() -> List[Dict[str, Any]]:
             continue
 
     if needs_save:
-        save_jobs(raw_jobs, removed_ids=intentionally_removed or None)
+        _scheduler_save(
+            raw_jobs,
+            note="due-job scan",
+            removed_ids=intentionally_removed or None,
+        )
 
     return due
 
