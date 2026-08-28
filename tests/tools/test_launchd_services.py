@@ -64,6 +64,9 @@ class TestParseSidecar:
         decl = _parse_sidecar_to_declaration(path, _sidecar(
             "dev.redis", name="Redis (brew)",
             inputs=["file:/opt/homebrew/etc/redis.conf"],
+            relationships=[
+                {"predicate": "supervised_by", "object": "scheduler:launchd"},
+            ],
         ))
         assert decl == {
             "id": "launchd:dev.redis",
@@ -72,6 +75,9 @@ class TestParseSidecar:
             "inputs": ["file:/opt/homebrew/etc/redis.conf"],
             "outputs": [],
             "side_effects": [],
+            "relationships": [
+                {"predicate": "supervised_by", "object": "scheduler:launchd"},
+            ],
         }
 
     def test_label_mismatch_is_dropped(self):

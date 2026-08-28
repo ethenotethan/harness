@@ -404,6 +404,7 @@ class ProcessSession:
     service_inputs: List[str] = field(default_factory=list)
     service_outputs: List[str] = field(default_factory=list)
     service_side_effects: List[str] = field(default_factory=list)
+    service_relationships: List[Dict[str, str]] = field(default_factory=list)
     service_health: Optional[Dict[str, Any]] = None
     service_health_evidence: Optional[Dict[str, Any]] = None
     service_lease_state: str = "active"
@@ -989,6 +990,7 @@ class ProcessRegistry:
         session.service_inputs = list(declaration.get("inputs") or [])
         session.service_outputs = list(declaration.get("outputs") or [])
         session.service_side_effects = list(declaration.get("side_effects") or [])
+        session.service_relationships = list(declaration.get("relationships") or [])
 
     def spawn_local(
         self,
@@ -2455,7 +2457,7 @@ class ProcessRegistry:
                 "latency_ms": 0,
                 "message": "process lease running; application health not configured",
             }
-            services.append({
+            service = {
                 "id": s.id,
                 "label": s.service_name,
                 "description": s.service_description,
@@ -2463,7 +2465,10 @@ class ProcessRegistry:
                 "outputs": list(s.service_outputs),
                 "side_effects": list(s.service_side_effects),
                 "health": health,
-            })
+            }
+            if s.service_relationships:
+                service["relationships"] = list(s.service_relationships)
+            services.append(service)
         return services
 
     # ----- Session/Task Queries (for gateway integration) -----
@@ -2688,6 +2693,7 @@ class ProcessRegistry:
                             "service_inputs": s.service_inputs,
                             "service_outputs": s.service_outputs,
                             "service_side_effects": s.service_side_effects,
+                            "service_relationships": s.service_relationships,
                             "service_health": s.service_health,
                             "service_health_evidence": s.service_health_evidence,
                             "service_lease_state": s.service_lease_state,
@@ -2798,6 +2804,7 @@ class ProcessRegistry:
                 service_inputs=entry.get("service_inputs") or [],
                 service_outputs=entry.get("service_outputs") or [],
                 service_side_effects=entry.get("service_side_effects") or [],
+                service_relationships=entry.get("service_relationships") or [],
                 service_health=entry.get("service_health"),
                 service_health_evidence=entry.get("service_health_evidence"),
                 service_lease_state=entry.get("service_lease_state", "active"),

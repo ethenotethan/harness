@@ -46,6 +46,9 @@ class TestParseLabels:
             "hermes.service": "Analytics Dashboard",
             "hermes.description": "# Dash\nRenders analytics.",
             "hermes.inputs": "postgres:analytics.events",
+            "hermes.relationships": json.dumps([
+                {"predicate": "runs_in", "object": "runtime:docker"},
+            ]),
         })
         assert decl == {
             "id": "docker:abcdef012345",  # truncated to 12
@@ -54,6 +57,9 @@ class TestParseLabels:
             "inputs": ["postgres:analytics.events"],
             "outputs": [],
             "side_effects": [],
+            "relationships": [
+                {"predicate": "runs_in", "object": "runtime:docker"},
+            ],
         }
 
     def test_no_service_label_is_not_a_hermes_service(self):

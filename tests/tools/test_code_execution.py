@@ -395,6 +395,7 @@ class TestStubSchemaDrift(unittest.TestCase):
         "service_inputs",
         "service_outputs",
         "service_side_effects",
+        "service_relationships",
         "service_health",
     }
 

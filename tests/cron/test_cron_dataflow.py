@@ -578,6 +578,69 @@ class TestServiceDeclaration:
             "side_effects": [],
         }
 
+    def test_relationships_emit_explicit_subject_predicate_object_edges(self):
+        from cron.jobs import build_cron_graph, normalize_service_declaration
+
+        gateway = normalize_service_declaration(
+            name="PR review gateway",
+            description="Spawns isolated review runs.",
+            relationships=[
+                {"predicate": "spawns", "object": "workflow:github-pr-review"},
+                {"predicate": "runs_in", "object": "runtime:docker"},
+                {"predicate": "spawns", "object": "workflow:github-pr-review"},
+            ],
+        )
+        gateway.update(id="nomad:pr-review-gateway", label=gateway.pop("name"))
+
+        graph = build_cron_graph(jobs=[], services=[gateway])
+
+        assert {
+            "id": "workflow:github-pr-review",
+            "kind": "object",
+            "type": "workflow",
+            "label": "github-pr-review",
+        } in graph["nodes"]
+        assert {
+            "id": "runtime:docker",
+            "kind": "object",
+            "type": "runtime",
+            "label": "docker",
+        } in graph["nodes"]
+        assert graph["edges"].count({
+            "source": "nomad:pr-review-gateway",
+            "target": "workflow:github-pr-review",
+            "type": "spawns",
+            "class": "relationship",
+        }) == 1
+        assert {
+            "source": "nomad:pr-review-gateway",
+            "target": "runtime:docker",
+            "type": "runs_in",
+            "class": "relationship",
+        } in graph["edges"]
+
+    def test_relationship_predicate_and_object_are_validated(self):
+        from cron.jobs import normalize_service_declaration
+
+        with pytest.raises(ValueError, match="predicate"):
+            normalize_service_declaration(
+                name="gateway",
+                description="review gateway",
+                relationships=[{"predicate": "Runs In", "object": "runtime:docker"}],
+            )
+        with pytest.raises(ValueError, match="typed object ref"):
+            normalize_service_declaration(
+                name="gateway",
+                description="review gateway",
+                relationships=[{"predicate": "runs_in", "object": "docker"}],
+            )
+        with pytest.raises(ValueError, match="reserved"):
+            normalize_service_declaration(
+                name="gateway",
+                description="review gateway",
+                relationships=[{"predicate": "writes", "object": "runtime:docker"}],
+            )
+
     def test_description_required(self):
         from cron.jobs import normalize_service_declaration
 

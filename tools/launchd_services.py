@@ -86,11 +86,12 @@ def _parse_sidecar_to_declaration(
             inputs=doc.get("inputs"),
             outputs=doc.get("outputs"),
             side_effects=doc.get("side_effects"),
+            relationships=doc.get("relationships"),
         )
     except ValueError as exc:
         logger.warning("launchd sidecar %s invalid: %s", path.name, exc)
         return None
-    return {
+    service = {
         # `launchd:` is not a dataflow scheme, so this id can never collide
         # with a resource ref, a cron id, or a docker:/nomad:/proc_ id.
         "id": f"launchd:{label}",
@@ -100,6 +101,9 @@ def _parse_sidecar_to_declaration(
         "outputs": decl["outputs"],
         "side_effects": decl["side_effects"],
     }
+    if decl.get("relationships"):
+        service["relationships"] = decl["relationships"]
+    return service
 
 
 def _default_runner(args: List[str]) -> str:
