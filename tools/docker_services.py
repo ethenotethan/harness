@@ -16,6 +16,7 @@ Labels (``hermes.service`` + ``hermes.description`` required; rest optional):
   hermes.inputs        comma/space-separated ``scheme:value`` reads
   hermes.outputs       comma/space-separated ``scheme:value`` writes
   hermes.side_effects  comma/space-separated ``scheme:value`` terminal actions
+  hermes.relationships JSON array of ``{predicate, object}`` topology facts
 
 Example — a dashboard that reads a table a cron writes converges with that cron
 on the shared ``postgres:analytics.events`` node:
@@ -49,6 +50,17 @@ def _split_refs(value: Any) -> List[str]:
     return [tok for tok in re.split(r"[,\s]+", value.strip()) if tok]
 
 
+def _parse_relationships(value: Any) -> Any:
+    if value in (None, ""):
+        return None
+    if not isinstance(value, str):
+        raise ValueError("hermes.relationships must be a JSON string")
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValueError("hermes.relationships must contain valid JSON") from exc
+
+
 def _parse_labels_to_declaration(
     container_id: str, labels: Optional[Dict[str, str]]
 ) -> Optional[Dict[str, Any]]:
@@ -73,6 +85,7 @@ def _parse_labels_to_declaration(
             inputs=_split_refs(labels.get("hermes.inputs")),
             outputs=_split_refs(labels.get("hermes.outputs")),
             side_effects=_split_refs(labels.get("hermes.side_effects")),
+            relationships=_parse_relationships(labels.get("hermes.relationships")),
         )
     except ValueError as exc:
         logger.warning(
@@ -81,7 +94,7 @@ def _parse_labels_to_declaration(
             exc,
         )
         return None
-    return {
+    service = {
         # `docker:` is not a dataflow scheme, so this id can never collide with a
         # resource ref (postgres:/wiki:/…), a cron id (bare), or a proc_ id.
         "id": f"docker:{container_id[:12]}",
@@ -91,6 +104,9 @@ def _parse_labels_to_declaration(
         "outputs": decl["outputs"],
         "side_effects": decl["side_effects"],
     }
+    if decl.get("relationships"):
+        service["relationships"] = decl["relationships"]
+    return service
 
 
 def _default_runner(args: List[str]) -> str:

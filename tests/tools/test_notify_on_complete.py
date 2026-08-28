@@ -175,6 +175,13 @@ class TestTerminalSchema:
         assert props["notify_on_complete"]["type"] == "boolean"
         assert props["notify_on_complete"]["default"] is False
 
+    def test_schema_has_structured_service_relationships(self):
+        from tools.terminal_tool import TERMINAL_SCHEMA
+
+        relation = TERMINAL_SCHEMA["parameters"]["properties"]["service_relationships"]
+        assert relation["type"] == "array"
+        assert relation["items"]["required"] == ["predicate", "object"]
+
     def test_handler_passes_notify(self):
         """_handle_terminal passes notify_on_complete to terminal_tool."""
         from tools.terminal_tool import _handle_terminal

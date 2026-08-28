@@ -1623,6 +1623,10 @@ _SIDE_EFFECT_SCHEMES = frozenset(
 # syntax keeps refs canonical; the closed side-effect vocabulary below preserves
 # the data-vs-terminal-action boundary.
 _RESOURCE_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*$")
+_RELATIONSHIP_PREDICATE_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_RESERVED_EDGE_PREDICATES = frozenset(
+    {"reads", "writes", "feeds", "hosts"} | set(_SIDE_EFFECT_SCHEMES)
+)
 
 # `deliver` values that are genuine EXTERNAL side effects (vs local/origin
 # in-band delivery, which is not a graph sink). Maps a deliver target to the
@@ -1719,6 +1723,56 @@ def _normalize_resource_list(
             seen.add(canonical)
             out.append(canonical)
     return sorted(out)
+
+
+def _normalize_service_relationships(values: Any) -> List[Dict[str, str]]:
+    """Normalize service subject-predicate-object relationship declarations.
+
+    The declaring service is the implicit subject. Each entry supplies a stable
+    machine predicate and a typed object ref. These are topology/control facts,
+    not data reads/writes or terminal actions.
+    """
+    if values is None:
+        return []
+    if not isinstance(values, (list, tuple)):
+        raise ValueError("service relationships must be a list of objects.")
+
+    seen: Set[tuple[str, str]] = set()
+    normalized: List[Dict[str, str]] = []
+    for item in values:
+        if not isinstance(item, dict):
+            raise ValueError("service relationship entries must be objects.")
+        predicate = item.get("predicate")
+        object_ref = item.get("object")
+        if not isinstance(predicate, str) or not _RELATIONSHIP_PREDICATE_RE.fullmatch(predicate):
+            raise ValueError(
+                "service relationship predicate must match "
+                "[a-z][a-z0-9_]{0,63}."
+            )
+        if predicate in _RESERVED_EDGE_PREDICATES:
+            raise ValueError(
+                f"service relationship predicate '{predicate}' is reserved by the "
+                "dataflow/side-effect graph vocabulary."
+            )
+        unexpected = set(item) - {"predicate", "object"}
+        if unexpected:
+            raise ValueError(
+                "service relationship entries only accept predicate and object; "
+                f"unexpected keys: {sorted(unexpected)}."
+            )
+        try:
+            objects = _normalize_resource_list(
+                [object_ref],
+                allowed_schemes=None,
+                field_name="service relationship typed object ref",
+            )
+        except ValueError as exc:
+            raise ValueError(f"invalid service relationship typed object ref: {exc}") from exc
+        key = (predicate, objects[0])
+        if key not in seen:
+            seen.add(key)
+            normalized.append({"predicate": predicate, "object": objects[0]})
+    return sorted(normalized, key=lambda relation: (relation["predicate"], relation["object"]))
 
 
 def _cron_output_input_ids(inputs: Any) -> List[str]:
@@ -1913,6 +1967,7 @@ def normalize_service_declaration(
     inputs: Any = None,
     outputs: Any = None,
     side_effects: Any = None,
+    relationships: Any = None,
 ) -> Dict[str, Any]:
     """Validate & normalize a long-running service's dataflow declaration.
 
@@ -1923,6 +1978,9 @@ def normalize_service_declaration(
     Kafka, S3, a domain-specific boundary, etc.) can join graph nodes without a
     Harness release adding it to a global vocabulary. Terminal action schemes
     remain reserved for ``side_effects``, whose vocabulary is deliberately closed.
+    ``relationships`` adds subject-predicate-object topology facts: the service is
+    the implicit subject, each machine predicate is explicit, and each object is a
+    typed ref. Relationships never imply data movement or a terminal action.
     Both a non-empty ``name`` and a non-empty ``description`` are REQUIRED — the
     description is markdown surfaced in Portal's node detail card, so expanding a
     service node always answers "what is this / what does it do" rather than
@@ -1936,7 +1994,7 @@ def normalize_service_declaration(
             "string — it is shown in the graph's node detail card so the service "
             "is self-explanatory. Describe what the service is and what it does."
         )
-    return {
+    declaration: Dict[str, Any] = {
         "name": name.strip(),
         "description": description.strip(),
         "inputs": _normalize_resource_list(
@@ -1958,6 +2016,10 @@ def normalize_service_declaration(
             field_name="service side_effects",
         ),
     }
+    normalized_relationships = _normalize_service_relationships(relationships)
+    if normalized_relationships:
+        declaration["relationships"] = normalized_relationships
+    return declaration
 
 
 def build_cron_graph(
@@ -2024,6 +2086,8 @@ def build_cron_graph(
         elif existing == "source" and kind == "artifact":
             # A produced resource outranks a bare read: promote source→artifact.
             resource_kind[ref] = "artifact"
+
+    relationship_objects: Set[str] = set()
 
     nodes: List[Dict[str, Any]] = []
     edges: List[Dict[str, Any]] = []
@@ -2100,6 +2164,15 @@ def build_cron_graph(
         for ref in service.get("side_effects") or []:
             _ensure_resource(ref, "sink")
             edges.append({"source": sid, "target": ref, "type": ref.split(":", 1)[0]})
+        for relationship in service.get("relationships") or []:
+            object_ref = relationship["object"]
+            relationship_objects.add(object_ref)
+            edges.append({
+                "source": sid,
+                "target": object_ref,
+                "type": relationship["predicate"],
+                "class": "relationship",
+            })
 
     for ref in sorted(resource_kind):
         scheme, _, value = ref.partition(":")
@@ -2111,6 +2184,16 @@ def build_cron_graph(
                 "label": value or ref,
             }
         )
+
+    existing_ids = {node["id"] for node in nodes}
+    for ref in sorted(relationship_objects - existing_ids):
+        scheme, _, value = ref.partition(":")
+        nodes.append({
+            "id": ref,
+            "kind": "object",
+            "type": scheme,
+            "label": value or ref,
+        })
 
     return {"nodes": nodes, "edges": edges}
 

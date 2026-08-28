@@ -18,6 +18,7 @@ Nomad meta keys reject dots, so the Docker label vocabulary maps
   hermes_inputs        comma/space-separated ``scheme:value`` reads
   hermes_outputs       comma/space-separated ``scheme:value`` writes
   hermes_side_effects  comma/space-separated ``scheme:value`` terminal actions
+  hermes_relationships JSON array of ``{predicate, object}`` topology facts
 
 Example — an Honcho instance that reads Postgres and serves the memory API:
 
@@ -59,6 +60,17 @@ def _split_refs(value: Any) -> List[str]:
     return [tok for tok in re.split(r"[,\s]+", value.strip()) if tok]
 
 
+def _parse_relationships(value: Any) -> Any:
+    if value in (None, ""):
+        return None
+    if not isinstance(value, str):
+        raise ValueError("hermes_relationships must be a JSON string")
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValueError("hermes_relationships must contain valid JSON") from exc
+
+
 def _parse_meta_to_declaration(
     job_id: str, meta: Optional[Dict[str, str]]
 ) -> Optional[Dict[str, Any]]:
@@ -83,11 +95,12 @@ def _parse_meta_to_declaration(
             inputs=_split_refs(meta.get("hermes_inputs")),
             outputs=_split_refs(meta.get("hermes_outputs")),
             side_effects=_split_refs(meta.get("hermes_side_effects")),
+            relationships=_parse_relationships(meta.get("hermes_relationships")),
         )
     except ValueError as exc:
         logger.warning("nomad job %s has an invalid declaration: %s", job_id, exc)
         return None
-    return {
+    service = {
         # `nomad:` is not a dataflow scheme, so this id can never collide with a
         # resource ref (postgres:/wiki:/…), a cron id (bare hex), or a docker:
         # /proc_ id.
@@ -98,6 +111,9 @@ def _parse_meta_to_declaration(
         "outputs": decl["outputs"],
         "side_effects": decl["side_effects"],
     }
+    if decl.get("relationships"):
+        service["relationships"] = decl["relationships"]
+    return service
 
 
 def _default_runner(args: List[str]) -> str:

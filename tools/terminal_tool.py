@@ -2546,6 +2546,7 @@ def terminal_tool(
     service_inputs: Optional[List[str]] = None,
     service_outputs: Optional[List[str]] = None,
     service_side_effects: Optional[List[str]] = None,
+    service_relationships: Optional[List[Dict[str, str]]] = None,
     service_health: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
@@ -2565,6 +2566,7 @@ def terminal_tool(
         service_name: If set, registers this background process as a long-running SERVICE (a dashboard, an API, anything that outlives the turn) so it appears in the cron interflow dataflow graph. REQUIRES background=true. When you set this you MUST also set service_description. The tracked process is the lease — the service shows as live for exactly as long as it runs.
         service_description: REQUIRED whenever service_name is set. Markdown, human-readable — surfaced in the graph's node detail card so expanding the node answers "what is this and what does it do". A bare name is rejected.
         service_inputs/service_outputs/service_side_effects: The service's dataflow as typed 'scheme:value' lists. Input/output resource schemes are declaration-local and open (http, redis, kafka, s3, grpc, or domain-specific schemes); matching refs meet on one graph node. Terminal actions remain in the closed service_side_effects vocabulary. For example, service_outputs=["http://127.0.0.1:8081/v1"] links to a consumer declaring that exact service_input.
+        service_relationships: Subject-predicate-object topology facts. The service is the implicit subject; each entry has a machine predicate and typed object ref, for example {"predicate": "runs_in", "object": "runtime:docker"}.
 
     Returns:
         str: JSON string with output, exit_code, and error fields
@@ -3041,6 +3043,7 @@ def terminal_tool(
                         inputs=service_inputs,
                         outputs=service_outputs,
                         side_effects=service_side_effects,
+                        relationships=service_relationships,
                     )
                     health_spec = normalize_service_health(service_health)
                 except ValueError as exc:
@@ -3915,6 +3918,22 @@ TERMINAL_SCHEMA = {
                 "items": {"type": "string"},
                 "description": "The service's terminal actions, as typed 'scheme:value' refs (telegram/slack/email/notify/pr/github/webhook). Sink leaves, not edges onward."
             },
+            "service_relationships": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "predicate": {
+                            "type": "string",
+                            "pattern": "^[a-z][a-z0-9_]{0,63}$"
+                        },
+                        "object": {"type": "string"}
+                    },
+                    "required": ["predicate", "object"],
+                    "additionalProperties": False
+                },
+                "description": "Subject-predicate-object topology/control facts. The service is the subject; predicate names the relationship and object is a typed 'scheme:value' ref such as runtime:docker or workflow:github-pr-review. These do not imply data movement or a terminal side effect."
+            },
             "service_health": {
                 "type": "object",
                 "description": "Optional readiness gate for a declared service. Harness keeps the service out of the live graph until this probe passes; failure rolls the spawned process back. The same bounded probe is refreshed when the graph is read, so service nodes expose current application health rather than PID liveness alone.",
@@ -3960,6 +3979,7 @@ def _handle_terminal(args, **kw):
         service_inputs=args.get("service_inputs"),
         service_outputs=args.get("service_outputs"),
         service_side_effects=args.get("service_side_effects"),
+        service_relationships=args.get("service_relationships"),
         service_health=args.get("service_health"),
     )
 

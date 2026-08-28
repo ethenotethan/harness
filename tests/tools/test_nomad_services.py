@@ -53,6 +53,9 @@ class TestParseMeta:
             "hermes_service": "Honcho Memory API",
             "hermes_description": "# Honcho\nDialectic memory server.",
             "hermes_inputs": "postgres:honcho.sessions",
+            "hermes_relationships": json.dumps([
+                {"predicate": "supervised_by", "object": "scheduler:nomad"},
+            ]),
         })
         assert decl == {
             "id": "nomad:honcho",
@@ -61,6 +64,9 @@ class TestParseMeta:
             "inputs": ["postgres:honcho.sessions"],
             "outputs": [],
             "side_effects": [],
+            "relationships": [
+                {"predicate": "supervised_by", "object": "scheduler:nomad"},
+            ],
         }
 
     def test_no_service_meta_is_not_a_hermes_service(self):
