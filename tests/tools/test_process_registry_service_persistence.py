@@ -51,6 +51,19 @@ def _service_session(sid="proc_dash", pid=4242):
     s.service_relationships = [
         {"predicate": "runs_in", "object": "runtime:docker"},
     ]
+    s.service_code_control = {
+        "status": "verified",
+        "enforcement": "merged-pull-request",
+        "provider": "github",
+        "repository": "owner/dashboard",
+        "base_branch": "main",
+        "revision": "a" * 40,
+        "pull_request": {
+            "number": 42,
+            "url": "https://github.com/owner/dashboard/pull/42",
+            "merged_at": "2026-09-03T12:00:00Z",
+        },
+    }
     return s
 
 
@@ -211,6 +224,7 @@ class TestServiceDeclarationSurvivesRestart:
             assert entry["service_outputs"] == original.service_outputs
             assert entry["service_side_effects"] == original.service_side_effects
             assert entry["service_relationships"] == original.service_relationships
+            assert entry["service_code_control"] == original.service_code_control
 
             # Restored into a NEW registry, with the process still alive.
             fresh = ProcessRegistry()
@@ -226,6 +240,7 @@ class TestServiceDeclarationSurvivesRestart:
             assert revived.service_outputs == original.service_outputs
             assert revived.service_side_effects == original.service_side_effects
             assert revived.service_relationships == original.service_relationships
+            assert revived.service_code_control == original.service_code_control
 
     def test_recovered_service_still_appears_in_the_graph(self, registry, tmp_path):
         """End-to-end of the actual symptom: after a restart the still-running
@@ -250,6 +265,7 @@ class TestServiceDeclarationSurvivesRestart:
         assert services[0]["inputs"] == ["postgres:agentic_payments.transfers"]
         assert services[0]["description"]  # required by normalize_service_declaration
         assert services[0]["relationships"] == original.service_relationships
+        assert services[0]["code_control"] == original.service_code_control
 
     def test_declaration_shape_matches_graph_builder(self, registry, tmp_path):
         """A recovered service must feed build_cron_graph and converge with a
@@ -282,6 +298,9 @@ class TestServiceDeclarationSurvivesRestart:
         assert {(e["source"], e["target"], e["type"]) for e in graph["edges"]} >= {
             ("indexer", shared, "writes"),
             (shared, original.id, "reads"),
+            (original.id, "github:owner/dashboard", "source_repository"),
+            (original.id, "pr:owner/dashboard#42", "released_via"),
+            (original.id, f"git:{'a' * 40}", "runs_revision"),
         }
 
 

@@ -1968,6 +1968,7 @@ def normalize_service_declaration(
     outputs: Any = None,
     side_effects: Any = None,
     relationships: Any = None,
+    code_control: Any = None,
 ) -> Dict[str, Any]:
     """Validate & normalize a long-running service's dataflow declaration.
 
@@ -2019,6 +2020,10 @@ def normalize_service_declaration(
     normalized_relationships = _normalize_service_relationships(relationships)
     if normalized_relationships:
         declaration["relationships"] = normalized_relationships
+    if code_control is not None:
+        from tools.service_code_control import normalize_service_code_control
+
+        declaration["code_control"] = normalize_service_code_control(code_control)
     return declaration
 
 
@@ -2149,6 +2154,9 @@ def build_cron_graph(
         }
         if isinstance(service.get("health"), dict):
             node["health"] = service["health"]
+        code_control = service.get("code_control")
+        if isinstance(code_control, dict) and code_control.get("status") == "verified":
+            node["code_control"] = code_control
         nodes.append(node)
         for ref in service.get("inputs") or []:
             if ref.startswith("cron-output:"):
@@ -2173,6 +2181,23 @@ def build_cron_graph(
                 "type": relationship["predicate"],
                 "class": "relationship",
             })
+        if isinstance(code_control, dict) and code_control.get("status") == "verified":
+            repository_ref = f"github:{code_control['repository']}"
+            revision_ref = f"git:{code_control['revision']}"
+            pull = code_control["pull_request"]
+            pull_ref = f"pr:{code_control['repository']}#{pull['number']}"
+            for target, predicate in (
+                (repository_ref, "source_repository"),
+                (pull_ref, "released_via"),
+                (revision_ref, "runs_revision"),
+            ):
+                relationship_objects.add(target)
+                edges.append({
+                    "source": sid,
+                    "target": target,
+                    "type": predicate,
+                    "class": "control",
+                })
 
     for ref in sorted(resource_kind):
         scheme, _, value = ref.partition(":")

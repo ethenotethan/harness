@@ -2548,6 +2548,7 @@ def terminal_tool(
     service_side_effects: Optional[List[str]] = None,
     service_relationships: Optional[List[Dict[str, str]]] = None,
     service_health: Optional[Dict[str, Any]] = None,
+    service_code_control: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     Execute a command in the configured terminal environment.
@@ -3032,6 +3033,13 @@ def terminal_tool(
                     "error": "service_health requires service_name",
                     "status": "error",
                 }, ensure_ascii=False)
+            if service_code_control is not None and not service_name:
+                return json.dumps({
+                    "output": "",
+                    "exit_code": -1,
+                    "error": "service_code_control requires service_name",
+                    "status": "error",
+                }, ensure_ascii=False)
             if service_name:
                 try:
                     from cron.jobs import normalize_service_declaration
@@ -3044,6 +3052,7 @@ def terminal_tool(
                         outputs=service_outputs,
                         side_effects=service_side_effects,
                         relationships=service_relationships,
+                        code_control=service_code_control,
                     )
                     health_spec = normalize_service_health(service_health)
                 except ValueError as exc:
@@ -3053,6 +3062,31 @@ def terminal_tool(
                         "error": f"service declaration rejected: {exc}",
                         "status": "error",
                     }, ensure_ascii=False)
+
+                if service_code_control is not None:
+                    if env_type != "local":
+                        return json.dumps({
+                            "output": "",
+                            "exit_code": -1,
+                            "error": (
+                                "service code control rejected: verification is only "
+                                "supported for a local checkout"
+                            ),
+                            "status": "error",
+                        }, ensure_ascii=False)
+                    try:
+                        from tools.service_code_control import verify_service_code_control
+
+                        service_decl["code_control_evidence"] = verify_service_code_control(
+                            service_decl["code_control"], source_root=effective_cwd
+                        )
+                    except ValueError as exc:
+                        return json.dumps({
+                            "output": "",
+                            "exit_code": -1,
+                            "error": f"service code control rejected: {exc}",
+                            "status": "error",
+                        }, ensure_ascii=False)
 
             try:
                 if env_type == "local":
@@ -3945,6 +3979,19 @@ TERMINAL_SCHEMA = {
                     "startup_timeout_seconds": {"type": "number", "minimum": 0.1, "maximum": 300, "default": 30}
                 },
                 "required": ["type", "url"]
+            },
+            "service_code_control": {
+                "type": "object",
+                "description": "Fail-closed source provenance gate. Before spawning, Hermes verifies a clean local checkout at the exact revision, fetches the configured base branch, and requires GitHub to report that revision as the merge commit of a merged pull request into that branch. Verified repository, PR, and revision evidence is persisted and rendered in the context graph.",
+                "properties": {
+                    "provider": {"type": "string", "enum": ["github"]},
+                    "repository": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
+                    "base_branch": {"type": "string"},
+                    "revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+                    "remote": {"type": "string", "default": "origin"}
+                },
+                "required": ["provider", "repository", "base_branch", "revision"],
+                "additionalProperties": False
             }
         },
         "required": ["command"]
@@ -3981,6 +4028,7 @@ def _handle_terminal(args, **kw):
         service_side_effects=args.get("service_side_effects"),
         service_relationships=args.get("service_relationships"),
         service_health=args.get("service_health"),
+        service_code_control=args.get("service_code_control"),
     )
 
 
