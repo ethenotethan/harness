@@ -467,6 +467,72 @@ def _(rid, params: dict) -> dict:
         logger.exception("wiki.list failed")
         return _err(rid, 5052, str(e))
 
+
+@method("wiki.glossary")
+def _(rid, params: dict) -> dict:
+    """Read the validated glossary for one configured wiki."""
+    try:
+        from tui_gateway.wiki_glossary import (
+            GlossaryValidationError,
+            load_glossary,
+            resolve_configured_wiki,
+        )
+
+        try:
+            unknown = set(params) - {"wiki"}
+            if unknown:
+                raise GlossaryValidationError(
+                    f"unknown parameter(s): {', '.join(sorted(map(str, unknown)))}"
+                )
+            wiki_path = resolve_configured_wiki(params.get("wiki"))
+            return _ok(rid, load_glossary(wiki_path))
+        except GlossaryValidationError as exc:
+            return _err(rid, 4001, str(exc))
+    except Exception as e:
+        logger.exception("wiki.glossary failed")
+        return _err(rid, 5062, str(e))
+
+
+@method("wiki.glossary.update")
+def _(rid, params: dict) -> dict:
+    """Validate and atomically replace a configured wiki's glossary."""
+    try:
+        from tui_gateway.wiki_glossary import (
+            GlossaryConflictError,
+            GlossaryValidationError,
+            resolve_configured_wiki,
+            update_glossary,
+        )
+
+        try:
+            allowed = {"wiki", "version", "mode", "proper_nouns", "if_match"}
+            unknown = set(params) - allowed
+            if unknown:
+                raise GlossaryValidationError(
+                    f"unknown parameter(s): {', '.join(sorted(map(str, unknown)))}"
+                )
+            wiki_path = resolve_configured_wiki(params.get("wiki"))
+            if_match = params.get("if_match")
+            if if_match is not None and not isinstance(if_match, str):
+                raise GlossaryValidationError("if_match must be a string")
+            payload = {
+                "version": params.get("version"),
+                "mode": params.get("mode"),
+                "proper_nouns": params.get("proper_nouns"),
+            }
+            return _ok(
+                rid,
+                update_glossary(wiki_path, payload, if_match=if_match),
+            )
+        except GlossaryConflictError as exc:
+            return _err(rid, 409, str(exc))
+        except GlossaryValidationError as exc:
+            return _err(rid, 4001, str(exc))
+    except Exception as e:
+        logger.exception("wiki.glossary.update failed")
+        return _err(rid, 5063, str(e))
+
+
 @method("wiki.taxonomy")
 def _(rid, params: dict) -> dict:
     """Return the hierarchical taxonomy tree from taxonomy.yaml."""
@@ -945,6 +1011,8 @@ def _(rid, params: dict) -> dict:
             "wiki.scan",
             "wiki.page",
             "wiki.list",
+            "wiki.glossary",
+            "wiki.glossary.update",
             "wiki.changesets",
             "wiki.events",
             "learning.course",

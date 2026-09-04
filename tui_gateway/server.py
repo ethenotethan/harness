@@ -283,6 +283,10 @@ _LONG_HANDLERS = frozenset(
         "shell.exec",
         "skills.manage",
         "slash.exec",
+        # Glossary reads/writes touch per-wiki YAML and fsync updates. Keep that
+        # filesystem I/O off the JSON-RPC reader thread.
+        "wiki.glossary",
+        "wiki.glossary.update",
     }
 )
 
