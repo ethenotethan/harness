@@ -132,7 +132,7 @@ def test_agent_tool_surface(artifact_home):
         content="| name |\n| Acme |", title="Clients", session_id="s1",
     )
     assert result["success"] is True
-    assert result["artifact"]["updated_by"] == "agent:s1"
+    assert result["artifact"]["updated_by"] == "session:s1"
     assert "content" not in result["artifact"]  # summaries keep tool results small
 
     fetched = artifact_tool(action="get", id="clients")
@@ -361,3 +361,93 @@ def test_model_merge_entity_sets_relations_tombstones(artifact_home):
     rels = body["relations"]
     assert len(rels) == 2                            # triple-deduped
     assert any(r.get("note") == "8 min" for r in rels)  # incoming wins field-wise
+
+
+def test_cron_write_stamps_and_self_declares_maintainer(artifact_home):
+    """A write driven by a cron run stamps updated_by=cron:<jobId> and merges
+    itself into the content's top-level maintainers — the declarative link the
+    client renders, no human wiring required."""
+    import json as _json
+
+    from gateway.session_context import _VAR_MAP
+    from tools.artifact_tool import artifact_tool as _raw_tool
+
+    _VAR_MAP["HERMES_CRON_JOB_ID"].set("ab12cd34ef56")
+    try:
+        result = _json.loads(_raw_tool(
+            action="set", id="meetups", kind="dataset",
+            content=_json.dumps({"key": "name", "rows": [{"name": "AI night"}]}),
+            session_id="ignored-when-cron",
+        ))
+    finally:
+        _VAR_MAP["HERMES_CRON_JOB_ID"].set("")
+
+    assert result["success"] is True
+    assert result["artifact"]["updated_by"] == "cron:ab12cd34ef56"
+
+    from tui_gateway import artifact_store as store
+
+    body = _json.loads(store.get_artifact("meetups")["content"])
+    assert body["maintainers"] == ["cron:ab12cd34ef56"]
+    assert body["rows"] == [{"name": "AI night"}]  # other keys untouched
+
+
+def test_cron_maintainer_declaration_is_idempotent(artifact_home):
+    """Repeated cron runs don't duplicate the declaration, and a second cron
+    appends alongside the first."""
+    import json as _json
+
+    from tui_gateway import artifact_store as store
+
+    for _ in range(2):
+        store.set_artifact(
+            "meetups", "dataset",
+            _json.dumps({"key": "name", "rows": [{"name": "AI night"}]}),
+            updated_by="cron:job-a",
+        )
+    body = _json.loads(store.get_artifact("meetups")["content"])
+    assert body["maintainers"] == ["cron:job-a"]
+
+    store.set_artifact(
+        "meetups", "dataset",
+        _json.dumps({"key": "name", "rows": [{"name": "ML meetup"}]}),
+        updated_by="cron:job-b",
+    )
+    body = _json.loads(store.get_artifact("meetups")["content"])
+    assert body["maintainers"] == ["cron:job-a", "cron:job-b"]
+
+
+def test_cron_declaration_survives_replace_and_skips_non_json(artifact_home):
+    """replace=True bypasses the per-kind merge but still gets the maintainer
+    stamped into what's stored; non-JSON kinds (markdown/html) pass through
+    untouched — provenance never bricks a write."""
+    import json as _json
+
+    from tui_gateway import artifact_store as store
+
+    store.set_artifact(
+        "notes", "dataset",
+        _json.dumps({"key": "id", "rows": []}),
+        updated_by="cron:job-a",
+        replace=True,
+    )
+    body = _json.loads(store.get_artifact("notes")["content"])
+    assert body["maintainers"] == ["cron:job-a"]
+
+    md = store.set_artifact("readme", "markdown", "# Hello", updated_by="cron:job-a")
+    assert md["content"] == "# Hello"
+
+
+def test_non_cron_writers_never_touch_maintainers(artifact_home):
+    import json as _json
+
+    from tui_gateway import artifact_store as store
+
+    store.set_artifact(
+        "meetups", "dataset",
+        _json.dumps({"key": "name", "rows": [], "maintainers": ["cron:job-a"]}),
+        updated_by="session:s1",
+    )
+    body = _json.loads(store.get_artifact("meetups")["content"])
+    # The declared maintainer survives, and the session didn't add itself.
+    assert body["maintainers"] == ["cron:job-a"]
