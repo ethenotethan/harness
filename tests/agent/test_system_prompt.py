@@ -272,6 +272,14 @@ class TestNativeGuidanceGating:
             ["read_file"], wiki_is_present=False
         )
 
+    def test_artifact_guidance_teaches_interactive_kanban_model_views(self):
+        from agent.native_guidance import ARTIFACT_GUIDANCE
+
+        assert '"type": "markdown"' in ARTIFACT_GUIDANCE
+        assert '"type": "kanban"' in ARTIFACT_GUIDANCE
+        assert '"column": "status"' in ARTIFACT_GUIDANCE
+        assert "no `actions` declaration" in ARTIFACT_GUIDANCE
+
     def test_feed_block_gated_on_feed_publish_tool(self):
         from agent.native_guidance import native_guidance_blocks, FEED_GUIDANCE
 
