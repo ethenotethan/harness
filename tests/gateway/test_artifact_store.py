@@ -116,7 +116,7 @@ def test_delete_removes_artifact_and_revisions(artifact_home):
 def test_agent_tool_surface(artifact_home):
     import json as _json
 
-    from tools.artifact_tool import artifact_tool as _raw_tool
+    from tools.artifact_tool import ARTIFACT_SCHEMA, artifact_tool as _raw_tool
 
     def artifact_tool(**kwargs):
         # The registry contract requires tools to return STRINGS — pin the
@@ -164,6 +164,11 @@ def test_agent_tool_surface(artifact_home):
 
     missing = artifact_tool(action="get", id="nope")
     assert missing["success"] is False
+
+    description = ARTIFACT_SCHEMA["description"]
+    assert '"type": "markdown"' in description
+    assert '"type": "kanban"' in description
+    assert '"column": "status"' in description
 
 
 def test_agent_tool_actions_declarations(artifact_home):
@@ -337,6 +342,15 @@ def test_model_merge_entity_sets_relations_tombstones(artifact_home):
                 "gyms": {"key": "name", "items": [{"name": "Felix"}]},
             },
             "relations": [{"from": "apartments/B", "to": "gyms/Felix", "type": "walkable"}],
+            "views": [
+                {"type": "markdown", "text": "## Current work"},
+                {
+                    "type": "kanban",
+                    "entities": ["apartments"],
+                    "column": "status",
+                    "columns": ["interested", "viewed", "ruled out"],
+                },
+            ],
         }),
     )
     merged = store.set_artifact(
@@ -358,6 +372,8 @@ def test_model_merge_entity_sets_relations_tombstones(artifact_home):
     assert apartments["A"]["rent"] == 999            # fields still merge
     assert "B" in apartments and "C" in apartments
     assert "gyms" in body["entities"]                # untouched set survives
+    assert [view["type"] for view in body["views"]] == ["markdown", "kanban"]
+    assert body["views"][1]["column"] == "status"
     rels = body["relations"]
     assert len(rels) == 2                            # triple-deduped
     assert any(r.get("note") == "8 min" for r in rels)  # incoming wins field-wise
