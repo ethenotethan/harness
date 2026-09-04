@@ -23,7 +23,8 @@ Sidecar shape (``name`` + ``description`` required; rest optional):
     "description": "The Hermes gateway …",   # markdown detail card (required)
     "inputs":      ["file:~/.hermes/config.yaml"],
     "outputs":     [],
-    "side_effects":["https:127.0.0.1:8787"]
+    "side_effects":["https:127.0.0.1:8787"],
+    "service_health": {"type": "http", "url": "http://127.0.0.1:8787/health"}
   }
 
 One JSON object per file; unknown keys ignored; malformed files are dropped
@@ -32,8 +33,11 @@ with a warning, never crash the overlay.
 import json
 import logging
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+
+from tools.service_health import normalize_service_health, probe_service_health
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +92,7 @@ def _parse_sidecar_to_declaration(
             side_effects=doc.get("side_effects"),
             relationships=doc.get("relationships"),
         )
+        health_spec = normalize_service_health(doc.get("service_health"))
     except ValueError as exc:
         logger.warning("launchd sidecar %s invalid: %s", path.name, exc)
         return None
@@ -103,6 +108,8 @@ def _parse_sidecar_to_declaration(
     }
     if decl.get("relationships"):
         service["relationships"] = decl["relationships"]
+    if health_spec is not None:
+        service["_health_spec"] = health_spec
     return service
 
 
@@ -148,6 +155,7 @@ def _uid() -> int:
 def collect_launchd_services(
     runner: Callable[[List[str]], str] = _default_runner,
     registry_dir: Optional[Path] = None,
+    health_prober: Callable[[Dict[str, Any]], Dict[str, Any]] = probe_service_health,
 ) -> List[Dict[str, Any]]:
     """Registered launchd services that are live right now, as graph nodes.
 
@@ -179,19 +187,38 @@ def collect_launchd_services(
         decl = _parse_sidecar_to_declaration(path, doc)
         if decl is None:
             continue
+        health_spec = decl.pop("_health_spec", None)
         label = decl["id"].split(":", 1)[1]
         if not _launchd_label_running(label, runner):
             logger.debug(
                 "launchd service %s not running; skipped from overlay", label
             )
             continue
-        decl["health"] = {
-            "status": "unknown",
-            "probe": "launchctl",
-            "target": decl["id"],
-            "checked_at": "",
-            "latency_ms": 0,
-            "message": "launchd lease running; application health not configured",
-        }
+        if health_spec is not None:
+            try:
+                decl["health"] = health_prober(health_spec)
+            except Exception as exc:
+                logger.warning(
+                    "launchd service %s health probe failed: %s", label, exc
+                )
+                decl["health"] = {
+                    "status": "unhealthy",
+                    "probe": health_spec["type"],
+                    "target": health_spec["url"],
+                    "checked_at": datetime.now(timezone.utc).isoformat().replace(
+                        "+00:00", "Z"
+                    ),
+                    "latency_ms": 0,
+                    "message": f"{type(exc).__name__}: {exc}",
+                }
+        else:
+            decl["health"] = {
+                "status": "unknown",
+                "probe": "launchctl",
+                "target": decl["id"],
+                "checked_at": "",
+                "latency_ms": 0,
+                "message": "launchd lease running; application health not configured",
+            }
         services.append(decl)
     return services

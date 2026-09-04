@@ -123,6 +123,92 @@ def _safe_stem(label):
 
 
 class TestCollectLaunchdServices:
+    def test_running_service_uses_declared_application_health_probe(self, tmp_path):
+        from tools.launchd_services import collect_launchd_services
+
+        registry = _make_registry(tmp_path, {
+            "dev.api.json": _sidecar(
+                "dev.api",
+                service_health={
+                    "type": "http",
+                    "url": "http://127.0.0.1:8080/health",
+                    "expected_status": 204,
+                    "timeout_seconds": 1,
+                },
+            ),
+        })
+        seen = []
+
+        def health_prober(spec):
+            seen.append(spec)
+            return {
+                "status": "healthy",
+                "probe": "http",
+                "target": spec["url"],
+                "checked_at": "2026-09-04T00:00:00Z",
+                "latency_ms": 2.5,
+                "message": "HTTP 204",
+            }
+
+        services = collect_launchd_services(
+            runner=_running_probe({"dev.api"}),
+            registry_dir=registry,
+            health_prober=health_prober,
+        )
+
+        assert seen == [{
+            "type": "http",
+            "url": "http://127.0.0.1:8080/health",
+            "expected_status": 204,
+            "timeout_seconds": 1.0,
+            "startup_timeout_seconds": 30.0,
+        }]
+        assert services[0]["health"] == {
+            "status": "healthy",
+            "probe": "http",
+            "target": "http://127.0.0.1:8080/health",
+            "checked_at": "2026-09-04T00:00:00Z",
+            "latency_ms": 2.5,
+            "message": "HTTP 204",
+        }
+        assert "_health_spec" not in services[0]
+        from cron.jobs import build_cron_graph
+
+        graph = build_cron_graph(jobs=[], services=services)
+        node = next(n for n in graph["nodes"] if n["id"] == "launchd:dev.api")
+        assert node["health"] == services[0]["health"]
+        assert "_health_spec" not in node
+
+    def test_application_probe_failure_is_health_evidence_not_graph_failure(self, tmp_path):
+        from tools.launchd_services import collect_launchd_services
+
+        registry = _make_registry(tmp_path, {
+            "dev.api.json": _sidecar(
+                "dev.api",
+                service_health={
+                    "type": "http",
+                    "url": "http://127.0.0.1:8080/health",
+                },
+            ),
+        })
+
+        def health_prober(_spec):
+            raise RuntimeError("probe implementation failed")
+
+        services = collect_launchd_services(
+            runner=_running_probe({"dev.api"}),
+            registry_dir=registry,
+            health_prober=health_prober,
+        )
+
+        assert len(services) == 1
+        assert services[0]["health"]["status"] == "unhealthy"
+        assert services[0]["health"]["probe"] == "http"
+        assert services[0]["health"]["target"] == "http://127.0.0.1:8080/health"
+        assert services[0]["health"]["message"] == (
+            "RuntimeError: probe implementation failed"
+        )
+
     def test_collects_registered_and_running(self, tmp_path):
         from tools.launchd_services import collect_launchd_services
 
@@ -141,16 +227,42 @@ class TestCollectLaunchdServices:
         assert services[0]["health"]["status"] == "unknown"
         assert services[0]["health"]["probe"] == "launchctl"
 
+    def test_invalid_application_health_contract_drops_sidecar(self, tmp_path):
+        from tools.launchd_services import collect_launchd_services
+
+        registry = _make_registry(tmp_path, {
+            "dev.api.json": _sidecar(
+                "dev.api",
+                service_health={"type": "http", "url": "file:///tmp/healthy"},
+            ),
+        })
+
+        assert collect_launchd_services(
+            runner=_running_probe({"dev.api"}),
+            registry_dir=registry,
+        ) == []
+
     def test_registered_but_not_running_is_skipped(self, tmp_path):
         from tools.launchd_services import collect_launchd_services
 
         registry = _make_registry(tmp_path, {
-            "dev.redis.json": _sidecar("dev.redis"),
+            "dev.redis.json": _sidecar(
+                "dev.redis",
+                service_health={
+                    "type": "http",
+                    "url": "http://127.0.0.1:8080/health",
+                },
+            ),
         })
+
+        def forbidden_health_probe(_spec):
+            raise AssertionError("inactive launchd service must not be probed")
+
         # probe raises (not loaded) → not running
         services = collect_launchd_services(
             runner=_running_probe(set()),
             registry_dir=registry,
+            health_prober=forbidden_health_probe,
         )
         assert services == []
 
