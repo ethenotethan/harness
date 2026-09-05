@@ -725,7 +725,12 @@ def wiki_query_events(
     for key, rec in events_map.items():
         if not isinstance(rec, dict):
             continue
-        event_kind = str(rec.get("kind", "") or "").strip()
+        # `kind` is optional enrichment, while every capture already carries
+        # the open-taxonomy wire value as `trigger`. Most writers only call
+        # capture, so fall back to that value or the UI would label correctly
+        # classified events "Unclassified" forever. Keep the stored fields
+        # separate so a later enrichment can still add a more specific kind.
+        event_kind = str(rec.get("kind") or rec.get("trigger") or "").strip()
         if kind and event_kind != kind:
             continue
 

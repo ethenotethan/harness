@@ -238,6 +238,24 @@ class TestWikiEvents:
         # The edge the client navigates: event → the changesets it caused.
         assert [c["page"] for c in event["changesets"]] == ["entities/x.md"]
 
+    def test_capture_trigger_classifies_event_when_kind_was_not_enriched(self, git_wiki):
+        """The capture path knows the open event-kind wire value as `trigger`.
+
+        Most wiki writers only call capture; they do not separately enrich the
+        materialized event. The read contract must therefore expose that trigger
+        as the event kind instead of rendering a classified source as blank.
+        """
+        _write(git_wiki, "entities/x.md", "---\ntitle: X\n---\nBody.\n")
+        wiki_changeset.wiki_capture_changeset(
+            "entities/x.md", "create", "from Telegram",
+            trigger="telegram", source_events=["raw/telegram/item.md"],
+        )
+
+        event = wiki_api.wiki_events(wiki_path=str(git_wiki))["events"][0]
+
+        assert event["kind"] == "telegram"
+        assert event["trigger"] == "telegram"
+
     def test_an_event_that_caused_nothing_still_appears(self, git_wiki):
         # An ingester fetched a source but hasn't synthesized from it yet. It
         # records the event directly (wiki_record_event is public/standalone),
