@@ -13,6 +13,11 @@ upstream commit the fork is rebased onto (`base.hash`), and lists files that
 are not code (`ignore`). Every push to `main` re-renders and redeploys it
 (`.github/workflows/forkdiff-pages.yml`).
 
+**One-time setup.** GitHub Pages has to be switched on by a repo admin:
+Settings → Pages → Source: **GitHub Actions**. The workflow token cannot do
+this itself. Until it's done the deploy workflow still builds the page (kept
+as a run artifact, `forkdiff-page`) and exits with a notice instead of failing.
+
 ## The gate
 
 A fork-diff page is only useful while it is true, and two things make it go
