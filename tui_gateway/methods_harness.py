@@ -738,6 +738,8 @@ def _(rid, params: dict) -> dict:
 
         raw_actions = params.get("actions")
         actions = raw_actions if isinstance(raw_actions, list) else None
+        raw_queries = params.get("queries")
+        queries = raw_queries if isinstance(raw_queries, list) else None
         stored = set_artifact(
             artifact_id=str(params.get("id", "")),
             kind=str(params.get("kind", "")),
@@ -746,7 +748,12 @@ def _(rid, params: dict) -> dict:
             updated_by=str(params.get("updated_by", "")),
             replace=bool(params.get("replace", False)),
             actions=actions,
+            queries=queries,
         )
+        # A new revision may have changed what the page's queries mean; let
+        # subscribed slots re-run now rather than at their next tick.
+        from tui_gateway.artifact_queries import mark_changed as _queries_mark_changed
+        _queries_mark_changed(artifact_id=stored["id"])
         _emit("artifact.changed", "", {
             "id": stored["id"], "kind": stored["kind"],
             "title": stored["title"], "rev": stored["rev"],
@@ -935,6 +942,105 @@ def _(rid, params: dict) -> dict:
         logger.exception("artifact.action.log failed")
         return _err(rid, 5219, str(e))
 
+@method("artifact.query.invoke")
+def _(rid, params: dict) -> dict:
+    """Run a query the artifact declares, with page-supplied parameters.
+
+    The read side of ``artifact.action.invoke``. The client sends the
+    artifact ID, its pinned revision, the ``query_id`` from the artifact's
+    ``queries`` manifest, a ``params`` object and an optional ``cursor``. The
+    server resolves the registered handler from the manifest at that
+    revision, validates every parameter against the artifact's declared
+    schema and the handler's own, runs the handler, and returns JSON data
+    with an ``etag``. The caller never names a handler and never sends query
+    text.
+
+    Returns: {"status": "ok"|"failed"|"conflict"|"unsupported", ...}
+    """
+    try:
+        from tui_gateway.artifact_queries import invoke as _query_invoke
+
+        raw_params = params.get("params")
+        if raw_params is not None and not isinstance(raw_params, dict):
+            return _err(rid, 4001, "params must be an object")
+        rev = params.get("artifact_rev")
+        result = _query_invoke(
+            artifact_id=str(params.get("artifact_id", "")),
+            artifact_rev=int(rev) if rev is not None else None,
+            query_id=str(params.get("query_id", "")),
+            params=raw_params,
+            cursor=params.get("cursor"),
+        )
+        return _ok(rid, result)
+    except (TypeError, ValueError) as e:
+        return _err(rid, 4001, str(e))
+    except Exception as e:
+        logger.exception("artifact.query.invoke failed")
+        return _err(rid, 5220, str(e))
+
+@method("artifact.query.subscribe")
+def _(rid, params: dict) -> dict:
+    """Follow a declared query: the gateway re-runs it on the artifact's
+    declared ``live`` cadence (or when a plugin reports a change) and emits
+    ``artifact.query.changed`` only when the result's etag differs. Returns
+    the current result plus a ``subscription`` handle for
+    ``artifact.query.unsubscribe``. Same params as ``artifact.query.invoke``.
+    """
+    try:
+        from tui_gateway import artifact_queries as _queries
+
+        # Broadcasts go through the server's own emitter; installed here so the
+        # poller thread has one by the time it has anything to say.
+        _queries.set_emitter(lambda event, payload: _emit(event, "", payload))
+        raw_params = params.get("params")
+        if raw_params is not None and not isinstance(raw_params, dict):
+            return _err(rid, 4001, "params must be an object")
+        rev = params.get("artifact_rev")
+        result = _queries.subscribe(
+            artifact_id=str(params.get("artifact_id", "")),
+            artifact_rev=int(rev) if rev is not None else None,
+            query_id=str(params.get("query_id", "")),
+            params=raw_params,
+        )
+        return _ok(rid, result)
+    except (TypeError, ValueError) as e:
+        return _err(rid, 4001, str(e))
+    except Exception as e:
+        logger.exception("artifact.query.subscribe failed")
+        return _err(rid, 5221, str(e))
+
+@method("artifact.query.unsubscribe")
+def _(rid, params: dict) -> dict:
+    """Drop a subscription handle from ``artifact.query.subscribe``. The slot
+    stops being polled once its last subscriber leaves."""
+    try:
+        from tui_gateway.artifact_queries import unsubscribe as _query_unsubscribe
+
+        handle = str(params.get("subscription", "")).strip()
+        if not handle:
+            return _err(rid, 4001, "subscription required")
+        return _ok(rid, _query_unsubscribe(handle))
+    except Exception as e:
+        logger.exception("artifact.query.unsubscribe failed")
+        return _err(rid, 5222, str(e))
+
+@method("artifact.query.handlers")
+def _(rid, params: dict) -> dict:
+    """The registered query handler names and their parameter schemas — what
+    an artifact author (human or agent) may declare against. Built-ins plus
+    whatever the loaded plugins registered."""
+    try:
+        from tui_gateway.artifact_queries import _QUERY_HANDLERS
+
+        handlers = [
+            {"name": name, "params": entry.get("params") or {}}
+            for name, entry in sorted(_QUERY_HANDLERS.items())
+        ]
+        return _ok(rid, {"handlers": handlers})
+    except Exception as e:
+        logger.exception("artifact.query.handlers failed")
+        return _err(rid, 5223, str(e))
+
 @method("actions.reload")
 def _(rid, params: dict) -> dict:
     """Reload plugin action handlers from ~/.hermes/plugins/actions/.
@@ -1009,6 +1115,10 @@ def _(rid, params: dict) -> dict:
             "artifact.action.confirm",
             "artifact.action.reload",
             "artifact.action.log",
+            "artifact.query",
+            "artifact.query.invoke",
+            "artifact.query.subscribe",
+            "artifact.query.handlers",
             "gateway.restart",
             "wiki.scan",
             "wiki.page",

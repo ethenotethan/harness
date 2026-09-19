@@ -217,6 +217,22 @@ def:
             - "tests/gateway/test_artifact_plugin_loader.py"
             - "tests/gateway/test_artifact_invocation_ledger.py"
             - "docs/plugins/actions.md"
+        - title: "Queries: read handlers, subscriptions, Postgres reference plugin"
+          description: |
+            The read side of intents. Artifacts declare `queries` naming registered handlers;
+            pages supply typed parameters; `artifact.query.invoke` validates against both the
+            artifact's and the handler's schema and returns etag'd JSON. `artifact.query.subscribe`
+            has the gateway re-run slots on their declared cadence (or on a plugin's
+            `mark_query_changed`) and emit `artifact.query.changed` only when data differs. Query
+            plugins load from the same directory as action plugins; a Postgres example turns a
+            directory of `-- params:`-headed `.sql` files into read-only persisted queries.
+          globs:
+            - "tui_gateway/artifact_queries.py"
+            - "tests/gateway/test_artifact_queries.py"
+            - "docs/plugins/queries.md"
+            - "docs/plugins/postgres_queries/postgres_queries.py"
+            - "docs/plugins/postgres_queries/statements/orders.open.sql"
+            - "docs/api/artifact-queries.md"
     - title: "Learning surface"
       description: |
         Courses, flashcard decks and progress as gateway state (`learning.*` RPCs) with a

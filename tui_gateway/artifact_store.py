@@ -256,6 +256,7 @@ def set_artifact(
     updated_by: str = "",
     replace: bool = False,
     actions: Optional[list] = None,
+    queries: Optional[list] = None,
 ) -> dict:
     """Upsert an artifact, merging per kind unless replace=True; appends a
     revision. Returns the stored artifact dict (the merged state).
@@ -264,6 +265,12 @@ def set_artifact(
     ``actions`` is an optional list of action declarations (choice/toggle/
     delete/intent) for the artifact's native controls. Stored atomically
     with content; carried forward when a write omits it.
+
+    ``queries`` is the read-side twin: declarations naming the registered
+    query handlers the artifact's page may call (see ``artifact_queries``).
+    Shape-checked here so a declaration that can never resolve is refused at
+    write time rather than dead-buttoning the page; carried forward like
+    ``actions``.
     """
     artifact_id = (artifact_id or "").strip()
     kind = (kind or "").strip().lower()
@@ -275,6 +282,9 @@ def set_artifact(
         raise ValueError("artifact kind required")
     if len(content.encode("utf-8", errors="replace")) > MAX_CONTENT_BYTES:
         raise ValueError(f"content exceeds {MAX_CONTENT_BYTES} bytes")
+    if queries is not None:
+        from tui_gateway.artifact_queries import validate_declarations
+        queries = validate_declarations(queries)
 
     with _lock:
         index = _read_json(_index_file(), {})
@@ -287,6 +297,7 @@ def set_artifact(
 
         # Carry existing actions forward when the caller doesn't supply new ones.
         stored_actions = actions if actions is not None else (existing or {}).get("actions")
+        stored_queries = queries if queries is not None else (existing or {}).get("queries")
 
         revisions = _read_json(_revisions_file(artifact_id), [])
         rev = (revisions[-1]["rev"] + 1) if revisions else 1
@@ -302,6 +313,8 @@ def set_artifact(
         }
         if stored_actions is not None:
             stored["actions"] = stored_actions
+        if stored_queries is not None:
+            stored["queries"] = stored_queries
 
         index[artifact_id] = stored
         _write_json(_index_file(), index)

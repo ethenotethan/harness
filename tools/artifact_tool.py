@@ -37,6 +37,7 @@ def artifact_tool(
     title: str = "",
     replace: bool = False,
     actions: str = "",
+    queries: str = "",
     session_id: str = "",
 ) -> str:
     """Execute an artifact action against the shared store.
@@ -50,7 +51,7 @@ def artifact_tool(
         _artifact_tool_impl(
             action, id=id, kind=kind, content=content,
             title=title, replace=replace, actions=actions,
-            session_id=session_id,
+            queries=queries, session_id=session_id,
         ),
         ensure_ascii=False,
         default=str,
@@ -65,6 +66,7 @@ def _artifact_tool_impl(
     title: str = "",
     replace: bool = False,
     actions: str = "",
+    queries: str = "",
     session_id: str = "",
 ) -> dict:
     from tui_gateway import artifact_store
@@ -106,6 +108,22 @@ def _artifact_tool_impl(
                         "success": False,
                         "error": "actions must be a JSON array of action declarations",
                     }
+            # Same contract for the read side: omitted carries forward, a
+            # present-but-invalid string is an error.
+            parsed_queries = None
+            if queries.strip():
+                try:
+                    parsed_queries = json.loads(queries)
+                except ValueError:
+                    return {
+                        "success": False,
+                        "error": "queries must be a JSON array of query declarations",
+                    }
+                if not isinstance(parsed_queries, list):
+                    return {
+                        "success": False,
+                        "error": "queries must be a JSON array of query declarations",
+                    }
             stored = artifact_store.set_artifact(
                 artifact_id=id,
                 kind=normalized_kind,
@@ -114,6 +132,7 @@ def _artifact_tool_impl(
                 updated_by=f"agent:{session_id}" if session_id else "agent",
                 replace=bool(replace),
                 actions=parsed_actions,
+                queries=parsed_queries,
             )
             _emit_changed(stored)
             summary = {k: v for k, v in stored.items() if k != "content"}
@@ -237,6 +256,29 @@ ARTIFACT_SCHEMA = {
                     "stored declarations forward unchanged."
                 ),
             },
+            "queries": {
+                "type": "string",
+                "description": (
+                    "JSON array of query declarations — the READ side of "
+                    "actions, for html-kind dashboards that show live data "
+                    "from a backend the gateway can reach. Each names a "
+                    "registered query handler (see the artifact.query.handlers "
+                    "RPC; built-in: artifact.rows) and may narrow or bind its "
+                    "parameters: [{\"id\": \"open-orders\", \"query\": "
+                    "\"postgres.orders.open\", \"bind\": {\"state\": "
+                    "\"open\"}, \"params\": {\"limit\": {\"type\": "
+                    "\"int\", \"max\": 200}}, \"live\": {\"mode\": "
+                    "\"poll\", \"interval_s\": 30}, \"invalidated_by\": "
+                    "[\"archive-order\"]}]. In the page, an element with "
+                    "data-hermes-query=\"<id>\" (and optional "
+                    "data-hermes-params='{...}') receives the JSON result in a "
+                    "child <script type=\"application/json\" data-hermes-sink> "
+                    "and a 'hermes-data' event; render it with the page's own "
+                    "JS. Never put SQL or credentials in an artifact — the "
+                    "handler owns those. Omit to carry stored declarations "
+                    "forward."
+                ),
+            },
         },
         "required": ["action"],
     },
@@ -257,6 +299,11 @@ registry.register(
         content=args.get("content", ""),
         title=args.get("title", ""),
         replace=bool(args.get("replace", False)),
+        # Both manifests used to be dropped here: the tool accepted `actions`
+        # but the registry never forwarded it, so an agent's intent buttons
+        # silently never landed.
+        actions=str(args.get("actions", "") or ""),
+        queries=str(args.get("queries", "") or ""),
         session_id=str(kw.get("session_id", "") or ""),
     ),
     emoji="🗂️",
