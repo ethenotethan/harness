@@ -2,8 +2,10 @@
 Artifact action plugin loader.
 
 Plugins live in ``~/.hermes/plugins/actions/*.py``. Each file is executed at
-load time; it calls ``register_handler(name, fn)`` from this module (re-exported
-via ``artifact_actions``) to add handlers to the shared registry.
+load time; it calls ``register_handler(name, fn)`` to add intent handlers to
+the shared registry, and ``register_query_handler(name, fn, params=schema)``
+to add read handlers (``artifact_queries``) — one directory, one security
+model, for both directions.
 
 Security model — authorship/activation split
 ---------------------------------------------
@@ -104,22 +106,53 @@ def _swap_registry(new_handlers: dict[str, Any]) -> None:
     artifact_actions._HANDLERS.update(new_handlers)
 
 
+def _get_query_registry() -> dict[str, Any]:
+    from tui_gateway import artifact_queries
+    return artifact_queries._QUERY_HANDLERS  # noqa: SLF001
+
+
+def _swap_query_registry(new_handlers: dict[str, Any]) -> None:
+    from tui_gateway import artifact_queries
+    artifact_queries._QUERY_HANDLERS.clear()
+    artifact_queries._QUERY_HANDLERS.update(new_handlers)
+
+
 # ── Staging execution ────────────────────────────────────────────────────────
 
 
-def _exec_plugin(path: Path, staging: dict[str, Any]) -> None:
-    """Execute a single plugin file, registering handlers into *staging*."""
+def _exec_plugin(
+    path: Path, staging: dict[str, Any], staging_queries: Optional[dict[str, Any]] = None
+) -> None:
+    """Execute a single plugin file, registering handlers into *staging*
+    (intents) and *staging_queries* (reads)."""
     source = path.read_text(encoding="utf-8")
     code = compile(source, str(path), "exec")
 
     # Give the plugin a fresh module namespace with register_handler pointing
     # at our staging dict so its register_handler calls land there.
-    from tui_gateway import artifact_actions
+    from tui_gateway import artifact_queries
+
+    if staging_queries is None:
+        staging_queries = {}
+
+    def _register_query(name, fn, params=None, _q=staging_queries):
+        # Same shape checks as the live registry, staged like the intents.
+        name = (name or "").strip()
+        if not name:
+            raise ValueError("query handler name required")
+        if params is not None and not isinstance(params, dict):
+            raise ValueError("query handler params schema must be a dict")
+        _q[name] = {"fn": fn, "params": params}
 
     namespace: dict[str, Any] = {
         "__file__": str(path),
         "__name__": f"hermes_plugin_{path.stem}",
         "register_handler": lambda name, fn, _s=staging: _s.update({name: fn}),
+        # The read side: `register_query_handler(name, fn, params=schema)` and
+        # the hook a plugin calls when the data behind its queries moved.
+        "register_query_handler": _register_query,
+        "mark_query_changed": artifact_queries.mark_changed,
+        "QueryError": artifact_queries.QueryError,
         # Convenience re-exports plugins typically need
         "logger": logging.getLogger(f"hermes.plugin.{path.stem}"),
     }
@@ -161,6 +194,7 @@ def reload(force: bool = False) -> dict:
             "status": "ok",
             "loaded": [],
             "diff": {"added": [], "changed": [], "removed": []},
+            "queries": {"added": [], "changed": [], "removed": []},
         }
 
     plugins_real = os.path.realpath(str(plugins_dir))
@@ -174,6 +208,7 @@ def reload(force: bool = False) -> dict:
 
     # Snapshot current handler names + hashes for diff logging.
     before = dict(_get_registry())
+    before_queries = dict(_get_query_registry())
     before_hashes: dict[str, str] = {}
 
     with _reload_lock:
@@ -187,11 +222,17 @@ def reload(force: bool = False) -> dict:
             for name, fn in before.items()
             if getattr(fn, "__module__", "") == artifact_actions.__name__
         }
+        from tui_gateway import artifact_queries
+        staging_queries: dict[str, Any] = {
+            name: entry
+            for name, entry in before_queries.items()
+            if getattr(entry.get("fn"), "__module__", "") == artifact_queries.__name__
+        }
 
         loaded: list[str] = []
         try:
             for path in plugin_files:
-                _exec_plugin(path, staging)
+                _exec_plugin(path, staging, staging_queries)
                 loaded.append(path.name)
         except Exception as exc:
             import traceback
@@ -213,14 +254,27 @@ def reload(force: bool = False) -> dict:
             name for name in before_names & after_names
             if staging[name] is not before[name]
         )
+        q_before, q_after = set(before_queries), set(staging_queries)
+        q_added = sorted(q_after - q_before)
+        q_removed = sorted(q_before - q_after)
+        q_changed = sorted(
+            name for name in q_before & q_after
+            if staging_queries[name].get("fn") is not before_queries[name].get("fn")
+        )
 
         _swap_registry(staging)
+        _swap_query_registry(staging_queries)
+        if q_removed or q_changed:
+            # Subscriptions pinned to a handler that moved re-run on the next
+            # tick and either emit fresh data or report themselves unsupported.
+            artifact_queries.mark_changed()
 
     # Log the diff.
-    if added or changed or removed:
+    if added or changed or removed or q_added or q_changed or q_removed:
         logger.info(
-            "plugin registry updated — added=%s changed=%s removed=%s files=%s",
-            added, changed, removed, loaded,
+            "plugin registry updated — added=%s changed=%s removed=%s "
+            "queries added=%s changed=%s removed=%s files=%s",
+            added, changed, removed, q_added, q_changed, q_removed, loaded,
         )
     else:
         logger.info("plugin registry reload — no changes (%d files)", len(loaded))
@@ -229,6 +283,7 @@ def reload(force: bool = False) -> dict:
         "status": "ok",
         "loaded": loaded,
         "diff": {"added": added, "changed": changed, "removed": removed},
+        "queries": {"added": q_added, "changed": q_changed, "removed": q_removed},
     }
 
 
