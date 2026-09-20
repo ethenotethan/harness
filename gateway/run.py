@@ -11132,6 +11132,17 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             self._start_loop_liveness_guards(self._gateway_loop)
         logger.info("Session storage: %s", self.config.sessions_dir)
 
+        # Load persisted artifact action/query plugins before any platform can
+        # accept an RPC. The stdio TUI entry point does this independently;
+        # the long-running messaging/API gateway must do the same so handlers
+        # survive a supervised restart without requiring a manual reload.
+        try:
+            from tui_gateway.artifact_plugin_loader import initial_load
+
+            initial_load()
+        except Exception:
+            logger.warning("artifact plugin initial_load failed", exc_info=True)
+
         # Sanity-check that systemd's TimeoutStopSec covers our drain
         # window.  When the user upgraded hermes-agent without re-running
         # ``hermes setup``, their unit file may still encode the old

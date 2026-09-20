@@ -991,7 +991,9 @@ def _(rid, params: dict) -> dict:
 
         # Broadcasts go through the server's own emitter; installed here so the
         # poller thread has one by the time it has anything to say.
-        _queries.set_emitter(lambda event, payload: _emit(event, "", payload))
+        _queries.set_emitter(
+            lambda event, payload: _broadcast_global_event(event, payload)
+        )
         raw_params = params.get("params")
         if raw_params is not None and not isinstance(raw_params, dict):
             return _err(rid, 4001, "params must be an object")

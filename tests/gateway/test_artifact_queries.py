@@ -320,6 +320,43 @@ def test_mark_changed_makes_a_slot_due_now(artifact_home):
     assert len(aq.run_due(now)) == 1
 
 
+def test_rpc_subscription_broadcasts_changed_to_live_transports(artifact_home, monkeypatch):
+    """Background query pushes must not depend on a request-local transport."""
+    import time
+    from tui_gateway import artifact_queries as aq, server
+
+    broadcasts = []
+    monkeypatch.setattr(
+        server,
+        "_broadcast_global_event",
+        lambda event, payload=None: broadcasts.append((event, payload)),
+    )
+    _dataset()
+    dash = _dashboard([ROWS_QUERY])
+
+    response = server._methods["artifact.query.subscribe"]("sub-1", {
+        "artifact_id": "dash",
+        "artifact_rev": dash["rev"],
+        "query_id": "rows",
+        "params": {"limit": 5},
+    })
+    assert response["result"]["status"] == "ok"
+    aq.stop_poller()
+
+    _dataset(rows=[{"id": "fresh", "state": "open"}])
+    assert len(aq.run_due(time.monotonic() + 20)) == 1
+    assert broadcasts == [(
+        "artifact.query.changed",
+        {
+            "artifact_id": "dash",
+            "query_id": "rows",
+            "params_hash": response["result"]["subscription"].rsplit("/", 1)[-1],
+            "etag": broadcasts[0][1]["etag"],
+            "status": "ok",
+        },
+    )]
+
+
 def test_unsubscribe_and_vanished_handler(artifact_home):
     import time
     from tui_gateway import artifact_queries as aq
