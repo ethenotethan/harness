@@ -7160,6 +7160,8 @@ class APIServerAdapter(BasePlatformAdapter):
                 self._closed = True
 
         transport = _AiohttpWSTransport(ws, _loop)
+        if _tui_server is not None:
+            _tui_server.register_live_transport(transport)
 
         # Emit gateway.ready so the client knows the protocol version
         try:
@@ -7229,6 +7231,8 @@ class APIServerAdapter(BasePlatformAdapter):
                 elif msg.type == WSMsgType.CLOSE:
                     break
         finally:
+            if _tui_server is not None:
+                _tui_server.unregister_live_transport(transport)
             transport.close()
             # Detach transport from sessions so later events don't crash into
             # a closed socket.
