@@ -208,10 +208,12 @@ def:
           description: |
             An action registry with invoke/confirm RPCs advertised through `gateway.capabilities`,
             user action plugins loaded from `~/.hermes/plugins/actions/*.py`, and a durable
-            idempotency ledger exposed as `artifact.action.log`.
+            idempotency ledger exposed as `artifact.action.log`. The long-running gateway process
+            loads persisted plugins at startup so handlers survive a supervised restart.
           globs:
             - "tui_gateway/artifact_actions.py"
             - "tui_gateway/artifact_plugin_loader.py"
+            - "gateway/run.py"
             - "tui_gateway/artifact_invocation_ledger.py"
             - "tests/gateway/test_artifact_actions.py"
             - "tests/gateway/test_artifact_plugin_loader.py"
@@ -223,12 +225,16 @@ def:
             pages supply typed parameters; `artifact.query.invoke` validates against both the
             artifact's and the handler's schema and returns etag'd JSON. `artifact.query.subscribe`
             has the gateway re-run slots on their declared cadence (or on a plugin's
-            `mark_query_changed`) and emit `artifact.query.changed` only when data differs. Query
-            plugins load from the same directory as action plugins; a Postgres example turns a
-            directory of `-- params:`-headed `.sql` files into read-only persisted queries.
+            `mark_query_changed`) and emit `artifact.query.changed` only when data differs. The
+            poller runs outside any request context, so changed events go through the
+            live-transport registry to every WebSocket peer, including `/v1/ws` on the API server.
+            Query plugins load from the same directory as action plugins; a Postgres example turns
+            a directory of `-- params:`-headed `.sql` files into read-only persisted queries.
           globs:
             - "tui_gateway/artifact_queries.py"
             - "tests/gateway/test_artifact_queries.py"
+            - "tests/gateway/test_artifact_query_broadcast.py"
+            - "tests/gateway/test_api_server_ws_live_transport.py"
             - "docs/plugins/queries.md"
             - "docs/plugins/postgres_queries/postgres_queries.py"
             - "docs/plugins/postgres_queries/statements/orders.open.sql"
