@@ -34,17 +34,71 @@ content digest of the model when there is no repository); a GitHub service's rev
 the model's own `source_revision`, falling back to the ref. Malformed manifests are
 logged and skipped, never fatal.
 
+### Standalone or bound to a runtime service
+
+A manifest describes a codebase. When nothing else on the gateway runs that codebase
+(Portal, a library, a tool), the manifest is **standalone** and the graph draws it as its
+own `arch:<id>` service node. When a process, Docker, Nomad or launchd provider already
+reports the running service, the manifest **binds** to it and annotates that node instead
+of adding a second one:
+
+```jsonc
+{
+  "name": "Hermes Gateway",
+  "description": "Hermes gateway architecture",
+  "root": "/Users/me/.hermes/hermes-agent",
+  "check": ["python3", "scripts/build_architecture.py", "--check"],
+  "runtime": {"provider": "launchd", "id": "ai.hermes.gateway"}
+}
+```
+
+The binding is typed and exact — never a display-name match. `runtime.id` is the
+provider's own identity and resolves to the canonical graph id the provider emits:
+
+| `runtime.provider` | `runtime.id` | Graph node |
+|---|---|---|
+| `launchd` | the launchd label | `launchd:<label>` |
+| `docker` | the container id | `docker:<first 12 chars>` |
+| `nomad` | the job id | `nomad:<job>` |
+| `process` | the tracked process id | `proc_<id>` |
+
+A binding with an unknown provider, a blank or non-string id, a prefixed id, or an
+`arch:` id makes the manifest invalid (logged, skipped). Omit `runtime` when a standalone
+codebase node is intended.
+
+**Merge authority** for a bound manifest, applied in `tools/service_graph.py` after every
+provider has reported and before the graph is built:
+
+| Fact | Owner |
+|---|---|
+| graph node id, health/liveness, description, label | the runtime provider |
+| inputs, outputs, side effects, relationships (topology) | the runtime provider — the manifest's dataflow is not drawn |
+| `architecture` annotation | the manifest (`ref` is `arch:<manifest-id>`, plus `runtime`: the graph id) |
+| `source_files` | deterministic union of both, deduplicated by normalized path |
+| browse root | `arch-<manifest-id>` → the manifest's `root`, as for a standalone manifest |
+
+If the bound runtime service is **absent** (not running, not reported), nothing is drawn
+for the manifest — no `arch:` node is fabricated — and a warning names the target. The
+model stays reachable through `architecture.describe`. If **two manifests bind one
+runtime service**, neither is applied (a warning names both); there is no last-writer-wins.
+
+The **RPC identity and the graph identity differ** for a bound manifest: `architecture.*`
+methods take `arch:<manifest-id>` (or the bare id), while the node on `cron.graph` is the
+runtime's id and carries `architecture.ref` pointing back at the manifest.
+
 ## On the dataflow graph
 
-`cron.graph` and `code.graph` run the manifest collector beside the process, Docker,
-Nomad and launchd providers. A manifest service node has `kind: "service"`, its
-`source_files` (the model file plus any declared files, resolved onto browse roots like a
-cron's scripts), and an `architecture` annotation:
+`cron.graph` and `code.graph` compose the four runtime providers with the manifests
+(`tools/service_graph.collect_graph_services`). A standalone manifest is a service node
+of its own; a bound manifest annotates the runtime node. Either way the node has
+`kind: "service"`, its `source_files` (the model file plus any declared files, resolved
+onto browse roots like a cron's scripts), and an `architecture` annotation:
 
 ```jsonc
 "architecture": {
   "ref": "arch:portal", "source": "local", "revision": "62911e4…",
   "model": "architecture/model/model.json", "snapshots": 3,
+  "runtime": "launchd:ai.hermes.gateway",           // bound manifests only
   "check": {"status": "passed", "checked_at": "2026-09-24T09:00:00+00:00"},
   "summary": {"components": 31, "nodes": 240, "invariants": {"total": 12, "holds": 12, "violated": []}, "gates": 14, …}
 }
@@ -58,7 +112,7 @@ named `arch-<id>` for `files.list` / `files.read`.
 
 | Method | Params | Returns |
 |---|---|---|
-| `architecture.list` | — | `{services: [{id, label, description, source, root, repository, ref, model, check_configured, status}]}` — `status` is the node annotation above |
+| `architecture.list` | — | `{services: [{id, label, description, source, root, repository, ref, model, check_configured, runtime, status}]}` — `status` is the node annotation above; `runtime` is the binding (`{provider, id, graph_id}`) or null |
 | `architecture.describe` | `service` (graph id or bare id), `revision?` | `{service: {…}, revision, source, stored_at, summary, check, model}` — without `revision` the current model is read now and snapshotted; with it a stored snapshot is returned. **4032** model missing/invalid/unfetchable, **4404** no such stored revision |
 | `architecture.check` | `service` | `{service, check: {status: passed\|failed\|unavailable, exit_code?, output?, reason?, revision, checked_at, duration_s, command}}` — runs the manifest's `check` in `root`, bounded at 300 s. A GitHub service or a manifest without `check` is `unavailable` with a `reason` |
 | `architecture.history` | `service` | `{service, source, latest, revisions: [{revision, source, stored_at, summary}], checks: [runs, newest first]}` |
@@ -102,7 +156,8 @@ be JSON objects with a `schema_version`. Check commands run only for local servi
 the declared root, with output truncated to 4 000 characters. GitHub fetches go to
 `raw.githubusercontent.com` over HTTPS and send `GITHUB_TOKEN`/`GH_TOKEN` when set.
 
-Implementation: `tui_gateway/architecture_store.py` (manifests, snapshots, checks),
-`tools/architecture_services.py` (graph collector), `tui_gateway/methods_architecture.py`
-(handlers); tests in `tests/gateway/test_architecture_store.py`,
-`tests/gateway/test_methods_architecture.py`, `tests/cron/test_architecture_services.py`.
+Implementation: `tui_gateway/architecture_store.py` (manifests, bindings, snapshots,
+checks), `tools/architecture_services.py` (definitions), `tools/service_graph.py`
+(runtime providers + composition), `tui_gateway/methods_architecture.py` (handlers); tests
+in `tests/gateway/test_architecture_store.py`, `tests/gateway/test_methods_architecture.py`,
+`tests/cron/test_architecture_services.py`, `tests/cron/test_architecture_binding.py`.
