@@ -212,6 +212,7 @@ def:
           globs:
             - "tui_gateway/artifact_actions.py"
             - "tui_gateway/artifact_plugin_loader.py"
+            - "gateway/run.py"
             - "tui_gateway/artifact_invocation_ledger.py"
             - "tests/gateway/test_artifact_actions.py"
             - "tests/gateway/test_artifact_plugin_loader.py"
@@ -264,6 +265,22 @@ def:
         - "tui_gateway/file_serve.py"
         - "tests/gateway/test_files_browse.py"
         - "docs/api/files-browse.md"
+    - title: "Architecture models"
+      description: |
+        The architecture standard as a gateway surface: a per-service manifest under
+        `~/.hermes/services/architecture/` (a local checkout that is never pushed, or a GitHub
+        repository) whose compiler-emitted model Harness reads and snapshots per revision,
+        checks on demand with the service's own `--check`, and serves over `architecture.*`;
+        the manifest collector puts the service on the dataflow graph with its code and an
+        `architecture` annotation, and exposes its checkout as a browse root.
+      globs:
+        - "tui_gateway/architecture_store.py"
+        - "tui_gateway/methods_architecture.py"
+        - "tools/architecture_services.py"
+        - "tests/gateway/test_architecture_store.py"
+        - "tests/gateway/test_methods_architecture.py"
+        - "tests/cron/test_architecture_services.py"
+        - "docs/api/architecture.md"
     - title: "Push notifications (APNs)"
       description: Device registration and APNs delivery for HermesNative clients.
       globs:

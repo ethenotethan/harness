@@ -1134,6 +1134,10 @@ def _(rid, params: dict) -> dict:
             "learning.progress",
             "learning.review",
             "prompt.chat_mode",
+            "architecture.list",
+            "architecture.describe",
+            "architecture.check",
+            "architecture.history",
         ],
     })
 
