@@ -40,6 +40,7 @@ def _(rid, params: dict) -> dict:
                 "ref": manifest.get("ref") if manifest.get("repository") else None,
                 "model": manifest["model"],
                 "check_configured": bool(manifest.get("check")),
+                "runtime": manifest.get("runtime"),
                 "status": store.status_for(manifest),
             })
         return _ok(rid, {"services": services})

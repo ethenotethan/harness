@@ -277,6 +277,8 @@ def:
         - "tui_gateway/architecture_store.py"
         - "tui_gateway/methods_architecture.py"
         - "tools/architecture_services.py"
+        - "tools/service_graph.py"
+        - "tests/cron/test_architecture_binding.py"
         - "tests/gateway/test_architecture_store.py"
         - "tests/gateway/test_methods_architecture.py"
         - "tests/cron/test_architecture_services.py"

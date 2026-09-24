@@ -2,12 +2,15 @@
 
 A service that conforms to the architecture standard (see
 ``tui_gateway/architecture_store.py``) is declared by a manifest under
-``~/.hermes/services/architecture/<id>.json``. This collector turns each manifest
-into the same service declaration the process, Docker, Nomad and launchd
-providers produce, so the service appears on the dataflow graph with its code
-(``source_files``) and an ``architecture`` annotation Portal uses to open the
-model. Unlike the liveness providers there is nothing to probe: a manifest
-describes a codebase, not a running process, so its presence is its liveness.
+``~/.hermes/services/architecture/<id>.json``. This module turns each manifest
+into an **architecture definition**: the standalone service declaration the
+graph would draw for a codebase nobody else reports (``arch:<id>``), its code
+(``source_files``), the ``architecture`` annotation Portal opens the model from
+and, when the manifest binds to a runtime service, the canonical graph id of
+that service. ``tools/service_graph.py`` composes the definitions with the
+process, Docker, Nomad and launchd providers: a bound definition annotates the
+runtime node, a standalone one is a node of its own. There is nothing to probe
+here — a manifest describes a codebase, not a running process.
 """
 from __future__ import annotations
 
@@ -33,12 +36,12 @@ def _absolute_source_files(manifest: Dict[str, Any]) -> List[str]:
     return files
 
 
-def collect_architecture_services(home: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Every valid manifest as a service declaration. Fail-open per manifest."""
+def collect_architecture_definitions(home: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Every valid manifest as a definition, sorted by manifest id. Fail-open per manifest."""
     from cron.jobs import normalize_service_declaration
     from tui_gateway import architecture_store as store
 
-    services: List[Dict[str, Any]] = []
+    definitions: List[Dict[str, Any]] = []
     for manifest in store.list_manifests(home):
         try:
             declaration = normalize_service_declaration(
@@ -53,6 +56,7 @@ def collect_architecture_services(home: Optional[str] = None) -> List[Dict[str, 
         except ValueError as exc:
             logger.warning("architecture manifest %s rejected: %s", manifest["id"], exc)
             continue
+        annotation = store.status_for(manifest, home)
         service: Dict[str, Any] = {
             "id": store.graph_id(manifest),
             "label": declaration["name"],
@@ -61,9 +65,27 @@ def collect_architecture_services(home: Optional[str] = None) -> List[Dict[str, 
             "outputs": declaration["outputs"],
             "side_effects": declaration["side_effects"],
             "source_files": declaration["source_files"],
-            "architecture": store.status_for(manifest, home),
+            "architecture": annotation,
         }
         if declaration.get("relationships"):
             service["relationships"] = declaration["relationships"]
-        services.append(service)
-    return services
+        definitions.append({
+            "manifest_id": manifest["id"],
+            "graph_id": store.graph_id(manifest),
+            "runtime": manifest.get("runtime"),
+            "service": service,
+            "source_files": declaration["source_files"],
+            "architecture": annotation,
+        })
+    return definitions
+
+
+def collect_architecture_services(home: Optional[str] = None) -> List[Dict[str, Any]]:
+    """The standalone definitions as service declarations — codebases no runtime
+    provider reports. Bound definitions are not services of their own; they
+    annotate the runtime node through ``tools.service_graph.attach_architecture``."""
+    return [
+        definition["service"]
+        for definition in collect_architecture_definitions(home)
+        if not definition.get("runtime")
+    ]

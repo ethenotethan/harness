@@ -1736,41 +1736,13 @@ def _(rid, params: dict) -> dict:
 
         # Overlay live long-running services (dashboards, APIs) that self-declared
         # their dataflow — they meet crons on shared resource nodes. Four liveness
-        # providers feed the same merge: tracked background processes (the process
-        # IS the lease), Docker containers (labels + `docker ps`), Nomad jobs
-        # (meta + running allocations), and launchd services (sidecar registry +
-        # `launchctl print` state probe). Best-effort per provider — a hiccup in
-        # any must never sink the cron graph itself.
-        # Independent provider probes run concurrently. Each collector is already
-        # bounded and fail-open; parallelism keeps Portal's 10-second health
-        # refresh near the slowest provider rather than the sum of four timeouts.
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        from tools.process_registry import process_registry
-        from tools.docker_services import collect_docker_services
-        from tools.nomad_services import collect_nomad_services
-        from tools.launchd_services import collect_launchd_services
-        from tools.architecture_services import collect_architecture_services
+        # providers (tracked background processes, Docker containers, Nomad jobs,
+        # launchd services) run concurrently and fail open; architecture manifests
+        # then annotate the runtime node they bind to, or stand alone as a codebase
+        # node when nothing runs it. See tools/service_graph.py.
+        from tools.service_graph import collect_graph_services
 
-        collectors = {
-            "process": process_registry.collect_service_declarations,
-            "docker": collect_docker_services,
-            "nomad": collect_nomad_services,
-            "launchd": collect_launchd_services,
-            "architecture": collect_architecture_services,
-        }
-        services = []
-        with ThreadPoolExecutor(max_workers=len(collectors)) as executor:
-            pending = {executor.submit(fn): name for name, fn in collectors.items()}
-            for future in as_completed(pending):
-                provider = pending[future]
-                try:
-                    services.extend(future.result())
-                except Exception:
-                    logger.exception(
-                        "cron.graph: %s service overlay unavailable", provider
-                    )
-
-        return _ok(rid, build_cron_graph(services=services))
+        return _ok(rid, build_cron_graph(services=collect_graph_services()))
     except Exception as e:
         logger.exception("cron.graph failed")
         return _err(rid, 5024, str(e))
@@ -1793,33 +1765,11 @@ def _(rid, params: dict) -> dict:
             return _err(rid, 4029, "code.graph needs a 'service' id")
         service_id = service_id.strip()
 
-        # Resolve the service the same way cron.graph does — the four concurrent
-        # liveness collectors — then pick the one whose id matches.
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        from tools.process_registry import process_registry
-        from tools.docker_services import collect_docker_services
-        from tools.nomad_services import collect_nomad_services
-        from tools.launchd_services import collect_launchd_services
-        from tools.architecture_services import collect_architecture_services
+        # Resolve the service the same way cron.graph does — the runtime providers
+        # composed with the architecture manifests — then pick the id that matches.
+        from tools.service_graph import collect_graph_services
 
-        collectors = {
-            "process": process_registry.collect_service_declarations,
-            "docker": collect_docker_services,
-            "nomad": collect_nomad_services,
-            "launchd": collect_launchd_services,
-            "architecture": collect_architecture_services,
-        }
-        services = []
-        with ThreadPoolExecutor(max_workers=len(collectors)) as executor:
-            pending = {executor.submit(fn): name for name, fn in collectors.items()}
-            for future in as_completed(pending):
-                try:
-                    services.extend(future.result())
-                except Exception:
-                    logger.exception(
-                        "code.graph: %s service overlay unavailable", pending[future]
-                    )
-
+        services = collect_graph_services()
         service = next((s for s in services if s.get("id") == service_id), None)
         if service is None:
             return _err(rid, 4030, f"unknown service: {service_id}")

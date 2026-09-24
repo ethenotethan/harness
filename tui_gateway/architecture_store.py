@@ -73,6 +73,13 @@ FETCH_TIMEOUT_S = 20.0
 # can never collide with a resource ref, a cron id, or a proc_/docker:/nomad:/
 # launchd: service id.
 ID_PREFIX = "arch:"
+# A manifest may bind to a service another provider already puts on the graph
+# (``"runtime": {"provider": "launchd", "id": "ai.hermes.gateway"}``); the
+# architecture then annotates that runtime node instead of adding an ``arch:``
+# node beside it. The canonical graph identity per provider mirrors what the
+# provider's own collector emits, so a binding is exact, never a name match.
+RUNTIME_PROVIDERS = ("launchd", "docker", "nomad", "process")
+RUNTIME_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._@:/-]{0,127}$")
 
 _lock = threading.Lock()
 
@@ -150,6 +157,38 @@ def _string_list(value: Any, field: str) -> List[str]:
     return [item.strip() for item in value if item.strip()]
 
 
+def runtime_graph_id(provider: str, runtime_id: str) -> str:
+    """The graph node id the named provider gives this runtime service."""
+    if provider == "launchd":
+        return f"launchd:{runtime_id}"
+    if provider == "docker":
+        return f"docker:{runtime_id[:12]}"
+    if provider == "nomad":
+        return f"nomad:{runtime_id}"
+    if provider == "process":
+        return runtime_id if runtime_id.startswith("proc_") else f"proc_{runtime_id}"
+    raise ValueError(f"unsupported runtime provider {provider!r}")
+
+
+def normalize_runtime_binding(value: Any) -> Dict[str, str]:
+    """Validate ``runtime: {provider, id}``. Raises ValueError with a reason."""
+    if not isinstance(value, dict):
+        raise ValueError("runtime must be an object with provider and id")
+    provider = value.get("provider")
+    runtime_id = value.get("id")
+    if not isinstance(provider, str) or provider not in RUNTIME_PROVIDERS:
+        raise ValueError(f"runtime.provider must be one of {', '.join(RUNTIME_PROVIDERS)}")
+    if not isinstance(runtime_id, str) or not runtime_id.strip():
+        raise ValueError("runtime.id must be a non-empty string")
+    runtime_id = runtime_id.strip()
+    if not RUNTIME_ID_RE.match(runtime_id) or runtime_id.startswith(ID_PREFIX):
+        raise ValueError(f"runtime.id {runtime_id!r} is not a valid {provider} identity")
+    for prefix in ("launchd:", "docker:", "nomad:"):
+        if runtime_id.startswith(prefix):
+            raise ValueError(f"runtime.id must be the provider's own id, without the {prefix!r} prefix")
+    return {"provider": provider, "id": runtime_id, "graph_id": runtime_graph_id(provider, runtime_id)}
+
+
 def normalize_manifest(doc: Any, stem: str) -> Dict[str, Any]:
     """Validate one manifest document. Raises ValueError with a reason."""
     if not isinstance(doc, dict):
@@ -204,6 +243,8 @@ def normalize_manifest(doc: Any, stem: str) -> Dict[str, Any]:
     }
     if doc.get("relationships") is not None:
         manifest["relationships"] = doc["relationships"]
+    if doc.get("runtime") is not None:
+        manifest["runtime"] = normalize_runtime_binding(doc["runtime"])
     return manifest
 
 
@@ -503,6 +544,8 @@ def status_for(manifest: Dict[str, Any], home: Optional[str] = None) -> Dict[str
         "model": manifest["model"],
         "snapshots": len(snapshots.get("revisions") or []),
     }
+    if manifest.get("runtime"):
+        annotation["runtime"] = manifest["runtime"]["graph_id"]
     if check is not None:
         annotation["check"] = {"status": check.get("status"), "checked_at": check.get("checked_at")}
     latest = snapshots.get("latest")
@@ -538,6 +581,7 @@ def describe(manifest: Dict[str, Any], revision: Optional[str] = None, home: Opt
             "ref": manifest.get("ref") if manifest.get("repository") else None,
             "model_path": manifest["model"],
             "check_configured": bool(manifest.get("check")),
+            "runtime": manifest.get("runtime"),
         },
         "revision": entry["revision"],
         "source": entry.get("source", source_of(manifest)),

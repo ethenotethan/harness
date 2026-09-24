@@ -226,7 +226,7 @@ def test_status_and_describe_round_trip(home, tmp_path):
     assert document["service"] == {
         "id": "arch:demo", "label": "Demo", "description": "A demo service.", "source": "local",
         "root": str(root), "repository": None, "ref": None, "model_path": store.DEFAULT_MODEL_PATH,
-        "check_configured": True,
+        "check_configured": True, "runtime": None,
     }
     assert document["revision"] == "rev1" and document["model"]["title"] == "Demo"
     assert document["summary"]["components"] == 2 and document["check"] is None
