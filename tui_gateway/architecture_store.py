@@ -239,6 +239,14 @@ def load_manifest(service_id: str, home: Optional[str] = None) -> Optional[Dict[
         return None
 
 
+def service_param(params: Any) -> Optional[str]:
+    """The ``service`` argument of an RPC, stripped, or None when missing/blank."""
+    service_id = (params or {}).get("service") if isinstance(params, dict) else None
+    if not isinstance(service_id, str) or not service_id.strip():
+        return None
+    return service_id.strip()
+
+
 def graph_id(manifest: Dict[str, Any]) -> str:
     return f"{ID_PREFIX}{manifest['id']}"
 

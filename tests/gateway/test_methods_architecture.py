@@ -53,6 +53,36 @@ def _write_service(tmp_path, check=None):
     return root
 
 
+def test_installed_handlers_resolve_every_name_at_runtime(home, tmp_path):
+    """HandlerRegistry.install rebinds each handler onto the *server's* globals, so a
+    helper defined in this module is not visible at runtime (the bug behind
+    "name '_service_param' is not defined"). Install onto a fake server that has
+    exactly the globals server.py provides and call the installed handlers."""
+    import types
+
+    _write_service(tmp_path, check=["python3", "-c", "print('ok')"])
+    fake = types.ModuleType("fake_server")
+    events = []
+    fake._methods = {}
+    fake._ok = lambda rid, result: {"rid": rid, "result": result}
+    fake._err = lambda rid, code, msg: {"rid": rid, "error": {"code": code, "message": msg}}
+    fake._broadcast_global_event = lambda event, payload=None: events.append((event, payload))
+    fake._profile_scoped = lambda fn: fn
+    fake.logger = logging.getLogger("fake")
+    ma.register(fake)
+    assert set(fake._methods) == {"architecture.list", "architecture.describe", "architecture.check", "architecture.history"}
+    listed = fake._methods["architecture.list"](1, {})
+    assert listed["result"]["services"][0]["id"] == "arch:demo"
+    described = fake._methods["architecture.describe"](2, {"service": "arch:demo"})
+    assert described["result"]["model"]["title"] == "Demo"
+    assert fake._methods["architecture.describe"](3, {})["error"]["code"] == 4029
+    checked = fake._methods["architecture.check"](4, {"service": "demo"})
+    assert checked["result"]["check"]["status"] == "passed"
+    history = fake._methods["architecture.history"](5, {"service": "arch:demo"})
+    assert history["result"]["latest"] == described["result"]["revision"]
+    assert [e[1]["reason"] for e in events] == ["snapshot", "check"]
+
+
 def test_registry_names_match_docs_and_capabilities():
     names = {name for name, _ in ma._registry._pending}
     assert names == {"architecture.list", "architecture.describe", "architecture.check", "architecture.history"}

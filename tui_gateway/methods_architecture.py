@@ -14,12 +14,9 @@ from .method_ctx import HandlerRegistry
 _registry = HandlerRegistry()
 method = _registry.method
 
-
-def _service_param(params: dict):
-    service_id = (params or {}).get("service")
-    if not isinstance(service_id, str) or not service_id.strip():
-        return None
-    return service_id.strip()
+# No module-level helpers below: ``HandlerRegistry.install`` rebinds each handler's
+# globals to the server module, so anything a body needs must be imported inside
+# it (``architecture_store.service_param``) or be a server global (``_ok``).
 
 
 @method("architecture.list")
@@ -56,7 +53,7 @@ def _(rid, params: dict) -> dict:
     try:
         from tui_gateway import architecture_store as store
 
-        service_id = _service_param(params)
+        service_id = store.service_param(params)
         if service_id is None:
             return _err(rid, 4029, "architecture.describe needs a 'service' id")
         manifest = store.load_manifest(service_id)
@@ -90,7 +87,7 @@ def _(rid, params: dict) -> dict:
     try:
         from tui_gateway import architecture_store as store
 
-        service_id = _service_param(params)
+        service_id = store.service_param(params)
         if service_id is None:
             return _err(rid, 4029, "architecture.check needs a 'service' id")
         manifest = store.load_manifest(service_id)
@@ -118,7 +115,7 @@ def _(rid, params: dict) -> dict:
     try:
         from tui_gateway import architecture_store as store
 
-        service_id = _service_param(params)
+        service_id = store.service_param(params)
         if service_id is None:
             return _err(rid, 4029, "architecture.history needs a 'service' id")
         manifest = store.load_manifest(service_id)
