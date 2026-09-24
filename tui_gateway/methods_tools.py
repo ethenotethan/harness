@@ -1749,12 +1749,14 @@ def _(rid, params: dict) -> dict:
         from tools.docker_services import collect_docker_services
         from tools.nomad_services import collect_nomad_services
         from tools.launchd_services import collect_launchd_services
+        from tools.architecture_services import collect_architecture_services
 
         collectors = {
             "process": process_registry.collect_service_declarations,
             "docker": collect_docker_services,
             "nomad": collect_nomad_services,
             "launchd": collect_launchd_services,
+            "architecture": collect_architecture_services,
         }
         services = []
         with ThreadPoolExecutor(max_workers=len(collectors)) as executor:
@@ -1798,12 +1800,14 @@ def _(rid, params: dict) -> dict:
         from tools.docker_services import collect_docker_services
         from tools.nomad_services import collect_nomad_services
         from tools.launchd_services import collect_launchd_services
+        from tools.architecture_services import collect_architecture_services
 
         collectors = {
             "process": process_registry.collect_service_declarations,
             "docker": collect_docker_services,
             "nomad": collect_nomad_services,
             "launchd": collect_launchd_services,
+            "architecture": collect_architecture_services,
         }
         services = []
         with ThreadPoolExecutor(max_workers=len(collectors)) as executor:

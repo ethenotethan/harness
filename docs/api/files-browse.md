@@ -9,15 +9,17 @@ or reach the repo tree.
 
 ## Roots
 
-Exactly two roots are browsable, and nothing outside them is reachable:
+Two roots are always browsable, plus one per locally declared architecture
+service; nothing outside them is reachable:
 
 | Root | Path | What's in it |
 |------|------|--------------|
 | `repo` | the running gateway's checkout (`Path(__file__).parents[1]`) | `indexing/`, `scripts/`, `agent/`, `tui_gateway/`, … |
 | `hermes` | `HERMES_HOME` (default `~/.hermes`) | `memory/`, `skills/`, wiki data, … |
+| `arch-<id>` | the `root` of `~/.hermes/services/architecture/<id>.json` | that service's checkout — its source files and architecture model (see `architecture.md`) |
 
 `hermes` is omitted if the data home does not resolve (fresh install); `repo`
-is always present.
+is always present; an `arch-<id>` root is omitted while its directory is missing.
 
 ## Security
 

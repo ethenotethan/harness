@@ -8,9 +8,11 @@ were scoped to a single skill (``skills.get``) or a single wiki page
 explicitly staged. Neither can list a directory or reach the repo tree.
 
 This module is the enforcement of the one rule that makes exposing a
-filesystem to a network client safe: **containment**. Exactly two roots are
+filesystem to a network client safe: **containment**. Two roots are always
 browsable — the harness repo checkout (``repo``) and the Hermes data home
-(``hermes``, ``~/.hermes``) — and every path a client names is resolved and
+(``hermes``, ``~/.hermes``) — plus one ``arch-<id>`` root per local service an
+architecture manifest declares (see ``architecture_store``), and every path a
+client names is resolved and
 verified to live under its declared root before a single byte is read, the
 same ``resolve()`` + ``relative_to(root)`` idiom ``skills.get`` and
 ``file_serve`` already use. There is no write path here at all.
@@ -90,6 +92,19 @@ def file_roots() -> dict[str, Path]:
     roots: dict[str, Path] = {"repo": _repo_root().resolve()}
     try:
         roots["hermes"] = _hermes_home().resolve()
+    except Exception:
+        pass
+    # A local service declared by an architecture manifest exposes its checkout
+    # read-only as ``arch-<id>``, so its source files and model open in-app. The
+    # manifest is operator-owned state under HERMES_HOME; a missing directory is
+    # skipped rather than advertised.
+    try:
+        from tui_gateway import architecture_store
+
+        for manifest in architecture_store.list_manifests():
+            root = manifest.get("root")
+            if root and Path(root).is_dir():
+                roots[f"arch-{manifest['id']}"] = Path(root).resolve()
     except Exception:
         pass
     return roots

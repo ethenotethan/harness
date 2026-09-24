@@ -2351,6 +2351,12 @@ def build_cron_graph(
         code_control = service.get("code_control")
         if isinstance(code_control, dict) and code_control.get("status") == "verified":
             node["code_control"] = code_control
+        # A manifest-declared service carries its architecture model reference
+        # (source, revision, last check) so Portal can open the model from the
+        # node. Node metadata, like source_files: outside the configuration digest.
+        architecture = service.get("architecture")
+        if isinstance(architecture, dict) and architecture.get("ref"):
+            node["architecture"] = architecture
         # A change-token for the code knowledge graph behind this service: a
         # cheap digest of its source files (no reads) that flips when the code
         # changes, so the client knows when to refetch the graph. The graph
