@@ -75,44 +75,11 @@ LIMITATIONS = (
 
 
 def load_extended_config(root: Path) -> Dict[str, Any]:
-    """The Python compiler's config validation, then the keys this core adds:
-    ``external_systems``, ``external_groups`` and ``rules``."""
+    """The Python compiler's config validation — which already normalises
+    ``external_systems`` (signatures compiled to (pattern, scope, regex)) and
+    ``external_groups`` (a category in one group at most) — then the keys this
+    core adds: ``rules`` and ``languages``."""
     config = load_config(root)
-    systems = config.get("external_systems") or []
-    if not isinstance(systems, list):
-        raise CompileError(f"{CONFIG_PATH}: 'external_systems' must be a list")
-    seen: Set[str] = set()
-    for system in systems:
-        if not isinstance(system, dict):
-            raise CompileError(f"{CONFIG_PATH}: every external system must be an object")
-        for key in ("id", "label", "category", "description"):
-            if not isinstance(system.get(key), str) or not system[key].strip():
-                raise CompileError(f"{CONFIG_PATH}: external system {key!r} must be a non-empty string")
-        if system["id"] in seen:
-            raise CompileError(f"{CONFIG_PATH}: duplicate external system id {system['id']!r}")
-        seen.add(system["id"])
-        signatures = system.get("signatures")
-        if not isinstance(signatures, list) or not signatures:
-            raise CompileError(f"{CONFIG_PATH}: external system {system['id']!r} needs a non-empty 'signatures' list")
-        for signature in signatures:
-            pattern, scope = normalize_signature(signature, system["id"])
-            re.compile(pattern)
-            if scope not in ("code", "strings"):
-                raise CompileError(f"{CONFIG_PATH}: external system {system['id']!r}: signature scope must be 'code' or 'strings'")
-    groups = config.get("external_groups") or []
-    if not isinstance(groups, list):
-        raise CompileError(f"{CONFIG_PATH}: 'external_groups' must be a list")
-    owned_categories: Dict[str, str] = {}
-    for group in groups:
-        if not isinstance(group, dict) or not all(isinstance(group.get(k), str) and group[k] for k in ("id", "label")):
-            raise CompileError(f"{CONFIG_PATH}: every external group needs string id and label")
-        categories = group.get("categories")
-        if not isinstance(categories, list) or not categories or not all(isinstance(c, str) and c for c in categories):
-            raise CompileError(f"{CONFIG_PATH}: external group {group['id']!r} needs a non-empty 'categories' list")
-        for category in categories:
-            if category in owned_categories:
-                raise CompileError(f"{CONFIG_PATH}: category {category!r} belongs to both {owned_categories[category]!r} and {group['id']!r}")
-            owned_categories[category] = group["id"]
     rules = config.get("rules") or []
     if not isinstance(rules, list):
         raise CompileError(f"{CONFIG_PATH}: 'rules' must be a list")
@@ -123,14 +90,6 @@ def load_extended_config(root: Path) -> Dict[str, Any]:
         if not isinstance(languages, list) or not all(isinstance(l, str) and l in PACKS for l in languages):
             raise CompileError(f"{CONFIG_PATH}: 'languages' must list pack names from {sorted(PACKS)}")
     return config
-
-
-def normalize_signature(signature: Any, system_id: str) -> Tuple[str, str]:
-    if isinstance(signature, str) and signature:
-        return signature, "code"
-    if isinstance(signature, dict) and isinstance(signature.get("pattern"), str) and signature["pattern"]:
-        return signature["pattern"], str(signature.get("scope") or "code")
-    raise CompileError(f"{CONFIG_PATH}: external system {system_id!r}: each signature is a regex string or {{pattern, scope}}")
 
 
 def project_rule(raw: Any) -> Tuple[str, Rule]:
@@ -364,11 +323,11 @@ def build_model(root: Path, config: Dict[str, Any], files: List[Dict[str, Any]],
         return type_id(ex.component, declaration.name) if declaration else module_id(ex.component, ex.rel)
 
     # Declared external systems: signatures over code and strings, fail closed on silence.
-    systems = config.get("external_systems") or []
+    systems = config.get("external_systems") or []  # normalised by load_config: signatures are (pattern, scope, regex)
     system_hits: Dict[str, List[Tuple[str, int]]] = {s["id"]: [] for s in systems}
     absorbing: Dict[str, str] = {}  # import root → system id whose signature matches it
     for system in systems:
-        compiled = [(re.compile(p, re.MULTILINE), scope) for p, scope in (normalize_signature(s, system["id"]) for s in system["signatures"])]
+        compiled = [(regex, scope) for _, scope, regex in system["signatures"]]
         for ex in extractions:
             for pattern, scope in compiled:
                 if scope == "strings":
