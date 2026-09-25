@@ -289,6 +289,18 @@ def:
         - "tests/gateway/test_methods_architecture.py"
         - "tests/cron/test_architecture_services.py"
         - "docs/api/architecture.md"
+    - title: "Architecture compiler for Python services"
+      description: |
+        `tools/architecture_compile_python.py` turns any Python service plus a small
+        `architecture/config.json` into a `hermes.architecture`-conforming model: components
+        assigned fail-closed, an AST-derived extraction map (declarations, passes, one
+        provenance entity per construction), a system map of modules, classes, entrypoints,
+        routes, stores, resources and external packages, declared additions that must resolve,
+        and the gates (local commands plus GitHub workflows) wired into one merge gate.
+        `--check` fails when the committed model drifts from the tree.
+      globs:
+        - "tools/architecture_compile_python.py"
+        - "tests/tools/test_architecture_compile_python.py"
     - title: "Push notifications (APNs)"
       description: Device registration and APNs delivery for HermesNative clients.
       globs:
