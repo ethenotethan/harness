@@ -1,0 +1,5 @@
+# The architecture compiler's only non-stdlib dependencies: the tree-sitter
+# runtime and the prebuilt grammar bundle. Pinned exactly, like everything in
+# pyproject.toml; the `architecture` extra there carries the same pins.
+tree-sitter==0.25.2
+tree-sitter-language-pack==1.17.0

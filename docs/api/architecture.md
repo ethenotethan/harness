@@ -177,6 +177,78 @@ the check (`"check": ["python3", "…/tools/architecture_compile_python.py", "."
 Every file must belong to one component and at least one gate must be declared; the
 compiler refuses to write a model that does not conform.
 
+## Compiling any service: language packs
+
+`tools/architecture_compiler` is the multi-language compiler: one language-independent core and one
+**language pack** per language on a [tree-sitter](https://tree-sitter.github.io) floor. Supported today:
+Swift (`.swift`), TypeScript/JavaScript (`.ts .tsx .js .jsx .mjs .cjs`), Go (`.go`), Rust (`.rs`) and
+Python (`.py`). A service may mix languages; every file is parsed by the pack for its extension.
+
+```
+python3 -m pip install -r tools/architecture_compiler/requirements.txt   # tree-sitter + grammar bundle
+python3 -m tools.architecture_compiler <service-root>                   # writes architecture/model/model.json
+python3 -m tools.architecture_compiler <service-root> --check           # exit 1 when the committed model is stale
+```
+
+The config is the Python compiler's `architecture/config.json` (see above) plus four keys:
+
+```json
+{
+  "external_systems": [
+    {"id": "camera", "label": "Tapo camera", "category": "cameras", "description": "RTSP feed.",
+     "signatures": [{"pattern": "rtsp://", "scope": "strings"}, "\\bcv2\\b"]}
+  ],
+  "external_groups": [{"id": "sensing", "label": "Sensing", "categories": ["cameras"]}],
+  "local_modules": ["example.com/demo"],
+  "rules": [
+    {"id": "publish", "description": "A room-state publish", "family": "boundary", "language": "python",
+     "regex": "\\bpublish_state\\(", "scope": "code",
+     "produces": {"kind": "resource", "sub_kind": "publisher", "relation": "notifies", "edge_class": "interplay"}},
+    {"id": "handlers", "description": "Every handler class", "family": "wiring", "language": "python",
+     "query": "(class_definition name: (identifier) @label) @site"}
+  ]
+}
+```
+
+- **`external_systems`** are the extrinsic dependencies a person names, observed through **signatures**:
+  regexes matched against comment-masked code (`scope: code`, the default) or against string-literal
+  contents only (`scope: strings`, for hostnames and URL schemes). A declared system with **zero hits fails
+  the compile**. Each system becomes an `external:<id>` node wired by `uses` (class `boundary`) from every
+  type or module that cites it, and a row in `externals.systems` with hit and file counts. A signature that
+  matches an imported package's root **absorbs** that package: no separate `external:<package>` node is
+  drawn for it. Packages no system claims still appear, uncategorised, so nothing is hidden.
+- **`external_groups`** put categories into boundary hulls (`interplay.boundary_groups`), the way Portal draws
+  *Platform storage* and *On-device inference*. A group with no members, or a category claimed by two groups,
+  fails the compile.
+- **`local_modules`** lists import prefixes that belong to the service itself (a Go module path, a Rust
+  crate, an internal npm scope) so they never count as external.
+- **`rules`** add project-specific passes on top of the pack's baseline. A rule is a regex (`scope`
+  `code` | `raw` | `strings`) or a tree-sitter `query` whose `@site` capture is the citation and optional
+  `@label` the label. `produces` puts a construction on the map (`external`, `store`, `resource`,
+  `endpoint`) with the relation and edge class the owner is wired by; without it the rule only cites,
+  which still maps the enclosing declaration. Rule ids are namespaced by language (`python.publish`).
+- **`languages`** (optional) restricts which packs run.
+
+Every pack provides the same baseline passes where the concept exists — `<lang>.type`, `<lang>.entrypoint`,
+`<lang>.import_external`, `<lang>.route`, `<lang>.http_client`, `<lang>.socket_or_server`,
+`<lang>.file_write`, `<lang>.process_spawn`, `<lang>.env_read`, `<lang>.persistent_store`,
+`<lang>.concurrency`, `<lang>.state_machine` — and Swift adds Portal's own conventions:
+`swift.store_declaration` (`*Store/*Cache/*Inventory/*Ledger` types become store nodes), `swift.ui_trigger`
+(a SwiftUI action or lifecycle closure calling a same-type property's method draws `drives`) and
+`swift.rpc_call` (`call("namespace.method")` draws an endpoint the caller `invokes`). Intrinsic versus
+extrinsic is expressed exactly as Portal expresses it: edge `class` (`structure`/`lifecycle`/`interplay`
+inside, `boundary` across) plus the boundary hulls.
+
+Adding a pack means one module under `tools/architecture_compiler/packs/`: the grammar name, the comment and
+string node types (so signatures can be scoped), a declaration census, an import reader, an entrypoint
+finder and the rule table; register it in `packs/__init__.py`. The compiler validates its output against
+the contract and refuses to write a non-conforming model; two compiles of one tree are identical bytes.
+
+What the passes cannot see, stated in every model's `evidence_metadata.limitations`: dynamic dispatch,
+reflection and plugin registries, routes assembled at runtime, decorators built at runtime, macro and
+derive expansions, and any mechanism reached through a wrapper in another file. Portal keeps its own
+Swift compiler until the Swift pack plus a project rule table reproduces its map.
+
 ## Methods
 
 | Method | Params | Returns |

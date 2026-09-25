@@ -301,6 +301,27 @@ def:
       globs:
         - "tools/architecture_compile_python.py"
         - "tests/tools/test_architecture_compile_python.py"
+    - title: "Architecture compiler — language packs"
+      description: |
+        `tools/architecture_compiler` is the multi-language compiler: one core (config, component
+        assignment, declared additions, declared external systems observed through signatures,
+        boundary groups, gates, contract validation, `--check`, byte determinism) and one tree-sitter
+        language pack each for Swift, TypeScript/JavaScript, Go, Rust and Python (declaration census,
+        imports, entrypoints, a rule table of passes with file:line citations). Project rule tables in
+        `architecture/config.json` add passes on top of a pack's baseline.
+      globs:
+        - "tools/architecture_compiler/__init__.py"
+        - "tools/architecture_compiler/__main__.py"
+        - "tools/architecture_compiler/core.py"
+        - "tools/architecture_compiler/requirements.txt"
+        - "tools/architecture_compiler/packs/__init__.py"
+        - "tools/architecture_compiler/packs/base.py"
+        - "tools/architecture_compiler/packs/swift.py"
+        - "tools/architecture_compiler/packs/typescript.py"
+        - "tools/architecture_compiler/packs/go.py"
+        - "tools/architecture_compiler/packs/rust.py"
+        - "tools/architecture_compiler/packs/python.py"
+        - "tests/tools/test_architecture_compiler.py"
     - title: "Push notifications (APNs)"
       description: Device registration and APNs delivery for HermesNative clients.
       globs:

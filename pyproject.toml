@@ -164,6 +164,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Architecture compiler (tools/architecture_compiler): the tree-sitter runtime
+# and the prebuilt grammar bundle. Only needed to compile a service's
+# architecture model; the gateway validates models without it.
+architecture = ["tree-sitter==0.25.2", "tree-sitter-language-pack==1.17.0"]
 # Native Anthropic provider — only needed when provider=anthropic (not via
 # OpenRouter or other aggregators).
 anthropic = ["anthropic==0.87.0"]  # CVE-2026-34450, CVE-2026-34452
