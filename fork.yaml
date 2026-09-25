@@ -272,10 +272,16 @@ def:
         repository) whose compiler-emitted model Harness reads and snapshots per revision,
         checks on demand with the service's own `--check`, and serves over `architecture.*`;
         the manifest collector puts the service on the dataflow graph with its code and an
-        `architecture` annotation, and exposes its checkout as a browse root.
+        `architecture` annotation, and exposes its checkout as a browse root. Every model is
+        validated against the `hermes.architecture` contract (vendored into every consumer,
+        pinned by digest) before it is snapshotted or served.
       globs:
+        - "tui_gateway/architecture_contract.py"
         - "tui_gateway/architecture_store.py"
         - "tui_gateway/methods_architecture.py"
+        - "docs/api/architecture-document-v1.schema.json"
+        - "tests/gateway/architecture_fixtures.py"
+        - "tests/gateway/test_architecture_contract.py"
         - "tools/architecture_services.py"
         - "tools/service_graph.py"
         - "tests/cron/test_architecture_binding.py"

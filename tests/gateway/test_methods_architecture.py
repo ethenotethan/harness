@@ -5,6 +5,7 @@ import logging
 import pytest
 
 import tui_gateway.methods_architecture as ma
+from tests.gateway.architecture_fixtures import minimal_document
 from tui_gateway import architecture_store as store
 
 
@@ -41,10 +42,13 @@ def handlers():
 def _write_service(tmp_path, check=None):
     root = tmp_path / "svc"
     (root / "architecture" / "model").mkdir(parents=True)
-    (root / "architecture" / "model" / "model.json").write_text(json.dumps({
-        "schema_version": "1.0.0", "title": "Demo", "components": [{"id": "a"}],
-        "interplay": {"nodes": [], "edges": [], "invariants": []},
-    }), encoding="utf-8")
+    document = minimal_document()
+    document["components"] = document["components"][:1]
+    for record in document["extraction"]["files"]:
+        record["component"] = "a"
+    for node in document["interplay"]["nodes"] + document["extraction"]["entities"]:
+        node["component"] = "a"
+    (root / "architecture" / "model" / "model.json").write_text(json.dumps(document), encoding="utf-8")
     manifest = {"name": "Demo", "description": "A demo.", "root": str(root)}
     if check:
         manifest["check"] = check
@@ -137,7 +141,7 @@ def test_parameter_and_lookup_errors(home, tmp_path, handlers):
         assert pending[name](1, {})["error"]["code"] == 4029
         assert pending[name](1, {"service": "   "})["error"]["code"] == 4029
         assert pending[name](1, {"service": "arch:nobody"})["error"]["code"] == 4030
-    assert pending["architecture.list"](2, {})["result"] == {"services": []}
+    assert pending["architecture.list"](2, {})["result"] == {"services": [], "contract": {"name": "hermes.architecture", "version": "1.0"}}
     _write_service(tmp_path)
     (tmp_path / "svc" / "architecture" / "model" / "model.json").unlink()
     unavailable = pending["architecture.describe"](3, {"service": "arch:demo"})

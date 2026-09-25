@@ -1102,9 +1102,17 @@ def _(rid, params: dict) -> dict:
         version = f"{__version__}+{__release_date__}"
     except Exception:
         version = "unknown"
+    # The architecture contract this gateway validates documents against, so a
+    # client can decode a served document knowing its major (additive, not a
+    # reshape of capability_names).
+    from tui_gateway.architecture_contract import describe_contract
 
     return _ok(rid, {
         "gateway_version": version,
+        "architecture": {
+            "methods": ["architecture.list", "architecture.describe", "architecture.check", "architecture.history"],
+            "contract": describe_contract(),
+        },
         "capability_names": [
             "artifact.set",
             "artifact.get",
