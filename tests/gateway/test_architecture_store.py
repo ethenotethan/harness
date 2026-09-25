@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.gateway.architecture_fixtures import DIGEST, minimal_document
 from tui_gateway import architecture_store as store
 
 
@@ -17,24 +18,7 @@ def home(tmp_path, monkeypatch):
 
 
 def _model(**extra):
-    model = {
-        "schema_version": "1.0.0",
-        "title": "Demo",
-        "source_tree_sha256": "abc",
-        "components": [{"id": "a"}, {"id": "b"}],
-        "inventory": {"swift_files": 3, "swift_lines": 120},
-        "interplay": {
-            "nodes": [{"id": "n1"}, {"id": "n2"}],
-            "edges": [{"source": "n1", "target": "n2"}],
-            "flows": [{"id": "f1"}],
-            "invariants": [{"id": "one", "status": "holds"}, {"id": "two", "status": "violated"}],
-        },
-        "stores": {"items": [{"type_name": "S"}]},
-        "externals": {"systems": [{"id": "x"}, {"id": "y"}]},
-        "ci": {"summary": {"gates": 14, "ratchets": 7, "workflows": 7}},
-    }
-    model.update(extra)
-    return model
+    return minimal_document(**extra)
 
 
 def _write_service(home: Path, tmp_path: Path, service_id="demo", **manifest_extra):
@@ -150,12 +134,15 @@ def test_read_github_model_uses_raw_url_and_token(home, monkeypatch):
 def test_summarize_model_counts_what_portal_shows():
     summary = store.summarize_model(_model())
     assert summary == {
-        "schema_version": "1.0.0", "title": "Demo", "source_tree_sha256": "abc",
+        "schema_version": "1.0.0", "title": "Demo", "source_tree_sha256": DIGEST,
         "components": 2, "files": 3, "lines": 120, "nodes": 2, "edges": 1, "flows": 1,
         "invariants": {"total": 2, "holds": 1, "violated": ["two"]},
         "stores": 1, "externals": 2, "gates": 14, "ratchets": 7, "workflows": 7,
     }
     assert store.summarize_model({"schema_version": "1.0.0"})["invariants"] == {"total": 0, "holds": 0, "violated": []}
+    # Portal's compiler names its inventory swift_files/swift_lines; the contract names files/lines. Both count.
+    swift = store.summarize_model(_model(inventory={"swift_files": 9, "swift_lines": 900, "declarations": 1}))
+    assert (swift["files"], swift["lines"]) == (9, 900)
 
 
 def test_snapshots_are_idempotent_and_keep_genesis(home, monkeypatch):
@@ -230,6 +217,8 @@ def test_status_and_describe_round_trip(home, tmp_path):
     }
     assert document["revision"] == "rev1" and document["model"]["title"] == "Demo"
     assert document["summary"]["components"] == 2 and document["check"] is None
+    assert document["contract"]["name"] == "hermes.architecture" and document["contract"]["major"] == 1
+    assert before["contract"] == {"name": "hermes.architecture", "version": "1.0"} and before["conforming"] is True
     store.run_check(manifest, runner=lambda *a, **k: type("C", (), {"returncode": 0, "stdout": "", "stderr": ""})())
     after = store.status_for(manifest)
     assert after["snapshots"] == 1 and after["check"]["status"] == "passed" and after["summary"]["nodes"] == 2

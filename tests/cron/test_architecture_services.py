@@ -5,6 +5,7 @@ import pytest
 
 from cron.jobs import build_cron_graph
 from tools.architecture_services import collect_architecture_services
+from tests.gateway.architecture_fixtures import minimal_document
 from tui_gateway import architecture_store as store
 from tui_gateway import files_browse
 
@@ -21,9 +22,7 @@ def _write_service(tmp_path, **extra):
     (root / "architecture" / "model").mkdir(parents=True)
     (root / "scripts").mkdir()
     (root / "scripts" / "build.py").write_text("print('hi')\n", encoding="utf-8")
-    (root / "architecture" / "model" / "model.json").write_text(json.dumps({
-        "schema_version": "1.0.0", "components": [], "interplay": {"nodes": [], "edges": [], "invariants": []},
-    }), encoding="utf-8")
+    (root / "architecture" / "model" / "model.json").write_text(json.dumps(minimal_document()), encoding="utf-8")
     manifest = {
         "name": "Demo", "description": "A **demo** service.", "root": str(root),
         "source_files": ["scripts/build.py", "scripts/missing.py"],

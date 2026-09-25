@@ -1,0 +1,1344 @@
+{
+  "$defs": {
+    "ci": {
+      "properties": {
+        "architectural": {
+          "type": "object"
+        },
+        "edges": {
+          "items": {
+            "properties": {
+              "kind": {
+                "pattern": "^\\S.*$",
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "source": {
+                "pattern": "^\\S.*$",
+                "type": "string"
+              },
+              "target": {
+                "pattern": "^\\S.*$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "source",
+              "target",
+              "kind"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "families": {
+          "type": "object"
+        },
+        "jobs": {
+          "items": {
+            "$ref": "#/$defs/ci_job"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "limitations": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "merge": {
+          "properties": {
+            "id": {
+              "pattern": "^\\S.*$",
+              "type": "string"
+            },
+            "inputs": {
+              "items": {
+                "pattern": "^\\S.*$",
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "label": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "label",
+            "inputs"
+          ],
+          "type": "object"
+        },
+        "ratchets": {
+          "items": {
+            "$ref": "#/$defs/ci_ratchet"
+          },
+          "type": "array"
+        },
+        "static_checks": {
+          "items": {
+            "properties": {
+              "command": {
+                "type": "string"
+              },
+              "evidence": {
+                "$ref": "#/$defs/evidence"
+              },
+              "job": {
+                "pattern": "^\\S.*$",
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "scripts": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "name",
+              "command",
+              "job"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "summary": {
+          "properties": {
+            "gates": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "jobs": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "ratchets": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "static_checks": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "workflows": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "workflows",
+            "jobs",
+            "gates"
+          ],
+          "type": "object"
+        },
+        "triggers": {
+          "items": {
+            "properties": {
+              "event": {
+                "type": "string"
+              },
+              "id": {
+                "pattern": "^\\S.*$",
+                "type": "string"
+              },
+              "workflows": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "event",
+              "workflows"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "workflows": {
+          "items": {
+            "$ref": "#/$defs/ci_workflow"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "workflows",
+        "jobs",
+        "edges",
+        "merge",
+        "ratchets",
+        "static_checks",
+        "summary"
+      ],
+      "type": "object"
+    },
+    "ci_job": {
+      "properties": {
+        "artifacts_in": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "artifacts_out": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "condition": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "evidence": {
+          "$ref": "#/$defs/evidence"
+        },
+        "family": {
+          "pattern": "^\\S.*$",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^\\S.*$",
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "needs": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "pins": {
+          "type": "array"
+        },
+        "role": {
+          "enum": [
+            "gate",
+            "post-merge",
+            "manual",
+            "disabled",
+            "local"
+          ],
+          "type": "string"
+        },
+        "runs_on": {
+          "type": "string"
+        },
+        "scripts": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "step_count": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "steps": {
+          "type": "array"
+        },
+        "workflow": {
+          "pattern": "^\\S.*$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "workflow",
+        "family",
+        "role",
+        "needs"
+      ],
+      "type": "object"
+    },
+    "ci_ratchet": {
+      "properties": {
+        "current": {
+          "type": "object"
+        },
+        "floor": {
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^\\S.*$",
+          "type": "string"
+        },
+        "job": {
+          "pattern": "^\\S.*$",
+          "type": "string"
+        },
+        "measures": {
+          "type": "string"
+        },
+        "patch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "type": "object"
+        },
+        "source_path": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "job",
+        "measures",
+        "floor"
+      ],
+      "type": "object"
+    },
+    "ci_workflow": {
+      "properties": {
+        "events": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "family": {
+          "pattern": "^\\S.*$",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^\\S.*$",
+          "type": "string"
+        },
+        "jobs": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "label": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "question": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "family",
+        "jobs"
+      ],
+      "type": "object"
+    },
+    "component": {
+      "properties": {
+        "declaration_count": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "declarations": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "description": {
+          "type": "string"
+        },
+        "external": {
+          "type": "boolean"
+        },
+        "file_count": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "files": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "pattern": "^\\S.*$",
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "layer": {
+          "type": "string"
+        },
+        "line_count": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "description",
+        "files",
+        "declarations",
+        "file_count",
+        "line_count",
+        "declaration_count"
+      ],
+      "type": "object"
+    },
+    "evidence": {
+      "properties": {
+        "excerpt": {
+          "type": "string"
+        },
+        "line": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "line"
+      ],
+      "type": "object"
+    },
+    "external": {
+      "properties": {
+        "category": {
+          "type": "string"
+        },
+        "component": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": "string"
+        },
+        "file_count": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "hit_count": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "id": {
+          "pattern": "^\\S.*$",
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "category"
+      ],
+      "type": "object"
+    },
+    "extraction": {
+      "properties": {
+        "authority": {
+          "enum": [
+            "observed",
+            "declared"
+          ],
+          "type": "string"
+        },
+        "derivation": {
+          "type": "string"
+        },
+        "entities": {
+          "items": {
+            "$ref": "#/$defs/extraction_entity"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "families": {
+          "type": "object"
+        },
+        "files": {
+          "items": {
+            "$ref": "#/$defs/extraction_file"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "passes": {
+          "items": {
+            "$ref": "#/$defs/extraction_pass"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "summary": {
+          "properties": {
+            "by_kind": {
+              "type": "object"
+            },
+            "citations": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "declarations": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "entities": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "entities_with_origin": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "files": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "functions": {
+              "type": "object"
+            },
+            "mapped_declarations": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "passes": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "semantic_citations": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "touched_files": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "types": {
+              "type": "object"
+            },
+            "untouched_files": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "files",
+            "touched_files",
+            "untouched_files",
+            "declarations",
+            "mapped_declarations",
+            "entities",
+            "entities_with_origin",
+            "passes"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "authority",
+        "derivation",
+        "files",
+        "passes",
+        "entities",
+        "summary"
+      ],
+      "type": "object"
+    },
+    "extraction_entity": {
+      "properties": {
+        "component": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "pattern": "^\\S.*$",
+          "type": "string"
+        },
+        "kind": {
+          "pattern": "^\\S.*$",
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "origins": {
+          "items": {
+            "properties": {
+              "family": {
+                "pattern": "^\\S.*$",
+                "type": "string"
+              },
+              "line": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "path": {
+                "type": "string"
+              },
+              "rule": {
+                "pattern": "^\\S.*$",
+                "type": "string"
+              },
+              "via": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "line",
+              "rule",
+              "family"
+            ],
+            "type": "object"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "label",
+        "origins"
+      ],
+      "type": "object"
+    },
+    "extraction_file": {
+      "properties": {
+        "citations": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "component": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "declaration_count": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "declarations": {
+          "items": {
+            "properties": {
+              "kind": {
+                "pattern": "^\\S.*$",
+                "type": "string"
+              },
+              "line": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "name": {
+                "type": "string"
+              },
+              "passes": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "kind",
+              "name",
+              "line",
+              "passes"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "line_count": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mapped_declarations": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "passes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "path": {
+          "type": "string"
+        },
+        "semantic_citations": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "touched": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "path",
+        "line_count",
+        "declarations",
+        "passes",
+        "citations",
+        "touched",
+        "declaration_count",
+        "mapped_declarations"
+      ],
+      "type": "object"
+    },
+    "extraction_pass": {
+      "properties": {
+        "citations": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "class": {
+          "enum": [
+            "mechanical",
+            "semantic"
+          ],
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "files": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "id": {
+          "pattern": "^\\S.*$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "class",
+        "description",
+        "files",
+        "citations"
+      ],
+      "type": "object"
+    },
+    "flow": {
+      "properties": {
+        "authority": {
+          "type": "string"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/evidence"
+          },
+          "type": "array"
+        },
+        "id": {
+          "pattern": "^\\S.*$",
+          "type": "string"
+        },
+        "interaction": {
+          "type": "string"
+        },
+        "journey": {
+          "type": "string"
+        },
+        "outcome": {
+          "type": "string"
+        },
+        "page": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "type": "string"
+        },
+        "steps": {
+          "items": {
+            "properties": {
+              "from": {
+                "pattern": "^\\S.*$",
+                "type": "string"
+              },
+              "note": {
+                "type": "string"
+              },
+              "relation": {
+                "pattern": "^\\S.*$",
+                "type": "string"
+              },
+              "to": {
+                "pattern": "^\\S.*$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "from",
+              "to",
+              "relation"
+            ],
+            "type": "object"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "steps"
+      ],
+      "type": "object"
+    },
+    "interplay": {
+      "properties": {
+        "boundary_groups": {
+          "items": {
+            "properties": {
+              "description": {
+                "type": "string"
+              },
+              "id": {
+                "pattern": "^\\S.*$",
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "members": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "label",
+              "members"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "clusters": {
+          "items": {
+            "properties": {
+              "id": {
+                "pattern": "^\\S.*$",
+                "type": "string"
+              },
+              "node_ids": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "owner_type": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "node_ids"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "edges": {
+          "items": {
+            "$ref": "#/$defs/interplay_edge"
+          },
+          "type": "array"
+        },
+        "flows": {
+          "items": {
+            "$ref": "#/$defs/flow"
+          },
+          "type": "array"
+        },
+        "invariants": {
+          "items": {
+            "$ref": "#/$defs/invariant"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "launch": {
+          "type": "object"
+        },
+        "machines": {
+          "type": "object"
+        },
+        "nodes": {
+          "items": {
+            "$ref": "#/$defs/node"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "pages": {
+          "items": {
+            "properties": {
+              "components": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "id": {
+                "pattern": "^\\S.*$",
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "roots": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "label"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "triggers": {
+          "type": "array"
+        }
+      },
+      "required": [
+        "nodes",
+        "edges",
+        "flows",
+        "invariants"
+      ],
+      "type": "object"
+    },
+    "interplay_edge": {
+      "properties": {
+        "class": {
+          "enum": [
+            "structure",
+            "interplay",
+            "lifecycle",
+            "boundary",
+            "usage"
+          ],
+          "type": "string"
+        },
+        "relation": {
+          "pattern": "^\\S.*$",
+          "type": "string"
+        },
+        "source": {
+          "pattern": "^\\S.*$",
+          "type": "string"
+        },
+        "target": {
+          "pattern": "^\\S.*$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "target",
+        "relation",
+        "class"
+      ],
+      "type": "object"
+    },
+    "invariant": {
+      "properties": {
+        "checked": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "id": {
+          "pattern": "^\\S.*$",
+          "type": "string"
+        },
+        "kind": {
+          "pattern": "^\\S.*$",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "holds",
+            "violated",
+            "unchecked"
+          ],
+          "type": "string"
+        },
+        "why": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "status",
+        "why"
+      ],
+      "type": "object"
+    },
+    "node": {
+      "properties": {
+        "cluster": {
+          "type": "string"
+        },
+        "component": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/evidence"
+          },
+          "type": "array"
+        },
+        "history_key": {
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^\\S.*$",
+          "type": "string"
+        },
+        "kind": {
+          "pattern": "^\\S.*$",
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "line": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "owner_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "page": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "type": "string"
+        },
+        "sub_kind": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "label"
+      ],
+      "type": "object"
+    },
+    "store": {
+      "properties": {
+        "component": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "evidence": {
+          "$ref": "#/$defs/evidence"
+        },
+        "id": {
+          "pattern": "^\\S.*$",
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "persistence": {
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "kind"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://hermes.dev/contracts/hermes.architecture/v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "behavior": {
+      "type": "object"
+    },
+    "ci": {
+      "$ref": "#/$defs/ci"
+    },
+    "components": {
+      "items": {
+        "$ref": "#/$defs/component"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "description": {
+      "type": "string"
+    },
+    "edges": {
+      "items": {
+        "properties": {
+          "authority": {
+            "type": "string"
+          },
+          "source": {
+            "pattern": "^\\S.*$",
+            "type": "string"
+          },
+          "target": {
+            "pattern": "^\\S.*$",
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "target",
+          "type"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "evidence_metadata": {
+      "properties": {
+        "class": {
+          "type": "string"
+        },
+        "limitations": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "rules": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "class",
+        "rules",
+        "limitations"
+      ],
+      "type": "object"
+    },
+    "externals": {
+      "properties": {
+        "edges": {
+          "type": "array"
+        },
+        "groups": {
+          "items": {
+            "properties": {
+              "id": {
+                "pattern": "^\\S.*$",
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "label"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "systems": {
+          "items": {
+            "$ref": "#/$defs/external"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "systems"
+      ],
+      "type": "object"
+    },
+    "extraction": {
+      "$ref": "#/$defs/extraction"
+    },
+    "interplay": {
+      "$ref": "#/$defs/interplay"
+    },
+    "inventory": {
+      "properties": {
+        "declarations": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "files": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "lines": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "files",
+        "lines",
+        "declarations"
+      ],
+      "type": "object"
+    },
+    "layers": {
+      "items": {
+        "properties": {
+          "id": {
+            "pattern": "^\\S.*$",
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "order": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "order"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "repository": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "schema_version": {
+      "pattern": "^(\\d+)\\.(\\d+)\\.(\\d+)$",
+      "type": "string"
+    },
+    "source_tree_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "stores": {
+      "properties": {
+        "count": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/store"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "title": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "title",
+    "description",
+    "source_tree_sha256",
+    "components",
+    "interplay",
+    "extraction",
+    "ci",
+    "inventory",
+    "evidence_metadata"
+  ],
+  "title": "hermes.architecture document v1.0",
+  "type": "object"
+}

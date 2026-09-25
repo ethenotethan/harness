@@ -33,6 +33,11 @@ required; the rest optional)::
       "inputs": [], "outputs": [], "side_effects": [], "relationships": []
     }
 
+Every model read is validated against the ``hermes.architecture`` contract
+(``architecture_contract.py``, vendored byte-for-byte into every consumer): a
+document that does not conform is refused with error 4033 and never
+snapshotted, so a stored revision is always a conforming one.
+
 Every revision read is stored as a **snapshot** under
 ``~/.hermes/architecture/<id>/<revision>.json`` with an index, so Portal can walk
 a service's models over time; the first snapshot (genesis) is never pruned.
@@ -56,6 +61,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from hermes_constants import get_hermes_home
+
+from tui_gateway import architecture_contract as contract
 
 logger = logging.getLogger(__name__)
 
@@ -343,7 +350,23 @@ def _parse_model(raw: bytes, where: str) -> Dict[str, Any]:
         raise ArchitectureError(4032, f"model at {where} is not valid JSON: {exc}") from exc
     if not isinstance(model, dict) or "schema_version" not in model:
         raise ArchitectureError(4032, f"model at {where} is not an architecture model (no schema_version)")
+    problems = contract.validate_document(model)
+    if problems:
+        raise ArchitectureError(4033, nonconforming_message(where, problems))
     return model
+
+
+def nonconforming_message(where: str, problems: List[str], shown: int = 5) -> str:
+    """One line a client can show verbatim: which contract, where, the first
+    problems, and how many more the compiler will list."""
+    head = "; ".join(problems[:shown])
+    more = f" (+{len(problems) - shown} more)" if len(problems) > shown else ""
+    return f"model at {where} does not conform to {contract.CONTRACT_NAME} v{contract.CONTRACT_VERSION}: {head}{more}"
+
+
+def contract_ref() -> Dict[str, Any]:
+    """The contract this gateway validates against, for envelopes and annotations."""
+    return {"name": contract.CONTRACT_NAME, "version": contract.CONTRACT_VERSION}
 
 
 def read_local_model(manifest: Dict[str, Any]) -> Dict[str, Any]:
@@ -447,6 +470,9 @@ def store_snapshot(service_id: str, revision: str, model: Dict[str, Any], source
                 "source": source,
                 "stored_at": _now_iso(),
                 "summary": summarize_model(model),
+                # Only a validated document reaches here (read_model validates
+                # before describe() stores), so the entry records which contract.
+                "contract": contract_ref(),
             }
             _write_json(_snapshot_file(service_id, revision, home), model)
             revisions.append(entry)
@@ -560,7 +586,28 @@ def status_for(manifest: Dict[str, Any], home: Optional[str] = None) -> Dict[str
     entry = next((r for r in snapshots.get("revisions") or [] if r.get("revision") == latest), None)
     if entry and isinstance(entry.get("summary"), dict):
         annotation["summary"] = entry["summary"]
+    annotation["contract"] = contract_ref()
+    annotation.update(conformance_for(manifest, snapshots, home))
     return annotation
+
+
+def conformance_for(manifest: Dict[str, Any], snapshots: Optional[Dict[str, Any]] = None,
+                    home: Optional[str] = None) -> Dict[str, Any]:
+    """``{"conforming": bool, "problem"?: str}`` for the node annotation, cheaply:
+    a local model is read and validated from its checkout (no network); a GitHub
+    model is conforming when a snapshot of it was stored (snapshots are only
+    stored for validated documents) and unread until ``architecture.describe``
+    fetches it. Fail-open: a read failure is a non-conformance with the reason."""
+    if manifest.get("root"):
+        try:
+            read_local_model(manifest)
+        except ArchitectureError as exc:
+            return {"conforming": False, "problem": exc.message}
+        return {"conforming": True}
+    snapshots = snapshots if snapshots is not None else list_snapshots(manifest["id"], home)
+    if snapshots.get("latest"):
+        return {"conforming": True}
+    return {"conforming": False, "problem": "model not read yet; architecture.describe fetches and validates it"}
 
 
 def describe(manifest: Dict[str, Any], revision: Optional[str] = None, home: Optional[str] = None,
@@ -596,5 +643,6 @@ def describe(manifest: Dict[str, Any], revision: Optional[str] = None, home: Opt
         "stored_at": entry.get("stored_at"),
         "summary": entry.get("summary") or summarize_model(model),
         "check": last_check(service_id, home),
+        "contract": contract.describe_contract(),
         "model": model,
     }
