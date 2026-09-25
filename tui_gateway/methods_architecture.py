@@ -21,7 +21,8 @@ method = _registry.method
 
 @method("architecture.list")
 def _(rid, params: dict) -> dict:
-    """Every manifest-declared service with its source, revision and last check."""
+    """Every manifest-declared service with its source, revision, last check and
+    whether its model conforms to the hermes.architecture contract."""
     try:
         from tui_gateway import architecture_store as store
 
@@ -40,7 +41,9 @@ def _(rid, params: dict) -> dict:
                 "runtime": manifest.get("runtime"),
                 "status": store.status_for(manifest),
             })
-        return _ok(rid, {"services": services})
+        # status carries each service's contract + conforming; the list names the
+        # contract this gateway validates against so a client can feature-gate once.
+        return _ok(rid, {"services": services, "contract": store.contract_ref()})
     except Exception as e:
         logger.exception("architecture.list failed")
         return _err(rid, 5040, str(e))
@@ -48,9 +51,10 @@ def _(rid, params: dict) -> dict:
 
 @method("architecture.describe")
 def _(rid, params: dict) -> dict:
-    """The model for one service: its current revision (read now and snapshotted)
-    or a stored ``revision``. A newly seen revision is announced to every client
-    as ``architecture.changed``."""
+    """The model for one service: its current revision (read now, validated
+    against the contract and snapshotted) or a stored ``revision``. A document
+    that does not conform is refused with 4033 and the message names the first
+    problems. A newly seen revision is announced as ``architecture.changed``."""
     try:
         from tui_gateway import architecture_store as store
 
