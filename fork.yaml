@@ -299,7 +299,6 @@ def:
         and the gates (local commands plus GitHub workflows) wired into one merge gate.
         `--check` fails when the committed model drifts from the tree.
       globs:
-        - "tui_gateway/architecture_contract.py"  # carried here until the contract PR (#43) merges; byte-identical
         - "tools/architecture_compile_python.py"
         - "tests/tools/test_architecture_compile_python.py"
     - title: "Architecture compiler — language packs"
