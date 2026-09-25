@@ -129,6 +129,14 @@ wires the declared gates into one merge gate, validates the result against the
     {"id": "capture", "label": "Capture", "description": "Frame capture and orchestration.", "patterns": ["capture/**", "main.py"]},
     {"id": "perception", "label": "Perception", "description": "Detection and tracking.", "patterns": ["perception/**"]}
   ],
+  "external_systems": [                            // declared boundaries (Portal-shaped); each must be observed ≥ 1 time
+    {"id": "rtsp-camera", "label": "RTSP camera", "category": "camera", "protocol": "RTSP",
+     "description": "The PTZ camera frames are pulled from.", "signatures": [{"pattern": "rtsp://", "scope": "strings"}]},
+    {"id": "opencv", "label": "OpenCV", "category": "vision", "description": "On-device perception.", "signatures": ["\\bcv2\\b"]}
+  ],
+  "external_groups": [                             // boundary hulls: a category belongs to one group, a group needs a member
+    {"id": "cameras", "label": "Cameras", "description": "Video sources.", "categories": ["camera"]}
+  ],
   "declared": {                                    // optional: a person's assertions, every reference must resolve
     "nodes": [{"id": "declared:camera", "kind": "device", "label": "PTZ camera", "path": "capture/ptz.py", "line": 12}],
     "edges": [{"source": "class:capture:Capture", "target": "declared:camera", "relation": "reads"}],
@@ -146,6 +154,23 @@ wires the declared gates into one merge gate, validates the result against the
 python3 tools/architecture_compile_python.py /path/to/service          # writes architecture/model/model.json
 python3 tools/architecture_compile_python.py /path/to/service --check  # exit 1 when stale or non-conforming
 ```
+
+**Extrinsic dependencies** are modelled the way Portal models them. A package import
+outside the standard library is an `external` node of `sub_kind` `package`. A declared
+`external_systems` entry is an `external` node of `sub_kind` `system`: its `signatures` are
+regexes matched against comment- and string-masked code (plain strings, or
+`{"pattern", "scope": "code"}`) or against string-literal contents only
+(`"scope": "strings"`, for hostnames, URL schemes and paths); every hit is a citation under
+the mechanical pass `py.boundary.external_signature`, and a `uses` edge of class `boundary`
+runs from the citing class (or the module, for a module-level hit) to the system. A declared
+system nothing matches fails the compile. When a code-scoped signature matches an imported
+package's root name (`\bcv2\b` against `import cv2`), the system **absorbs** the package: the
+import line becomes one of the system's origins and no separate package node is drawn.
+`external_groups` become `interplay.boundary_groups` with `members` = the external nodes
+whose `category` the group lists (packages carry the category `package`). Intrinsic versus
+extrinsic is the edge `class` — `structure`, `lifecycle` and `interplay` inside the service,
+`boundary` across it — plus the boundary-group hulls. The `externals` section lists each
+declared system with `hit_count`, `file_count`, `paths` and the owning `component`.
 
 Point the service's manifest at the model (`"model": "architecture/model/model.json"`) and at
 the check (`"check": ["python3", "…/tools/architecture_compile_python.py", ".", "--check"]`).

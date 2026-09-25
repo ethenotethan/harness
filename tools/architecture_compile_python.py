@@ -50,10 +50,12 @@ from __future__ import annotations
 import ast
 import fnmatch
 import hashlib
+import io
 import json
-import os
 import re
 import sys
+import tokenize
+from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
@@ -93,6 +95,7 @@ PASSES: Dict[str, Tuple[str, str]] = {
     "py.import_external": ("A module-level import of a package outside the standard library and outside this service", "boundary"),
     "py.state_machine": ("An Enum subclass whose members are assigned to an attribute somewhere in the tree: a lifecycle state, and each assignment a transition", "behaviour"),
     "py.persistent_store": ("A persistent store site: sqlite3.connect, json.dump, pickle.dump, shelve.open, dbm.open", "store"),
+    "py.boundary.external_signature": ("A configured external-system signature present in the code: a regex matched against comment- and string-masked code, or, string-scoped, against string-literal contents only", "boundary"),
     "declared.node": ("A construction a person declared in architecture/config.json, citing the file and line it lives at (semantic layer, not extraction)", "wiring"),
 }
 SEMANTIC_PASSES = {"declared.node"}
@@ -102,6 +105,8 @@ LIMITATIONS = [
     "External imports are attributed to the classes whose bodies name the imported alias; module-level use is attributed to the module.",
     "A route is recognised by its decorator's attribute name; frameworks that register handlers by call (app.add_url_rule) are not attributed.",
     "Stores and resources are recognised by call site; a wrapper in another file hides the mechanism from the caller.",
+    "External systems are attributed per configured signature; a system reached only through an unlisted API or a wrapper in another file is not attributed to the caller.",
+    "A declared system whose code-scoped signature matches an imported package absorbs that package: the import is an origin of the system and no separate package node is drawn.",
 ]
 
 ROUTE_ATTRIBUTES = {"route", "get", "post", "put", "delete", "patch", "websocket", "api_route", "head", "options"}
@@ -162,7 +167,119 @@ def load_config(root: Path) -> Dict[str, Any]:
     declared = config.get("declared") or {}
     if not isinstance(declared, dict):
         raise CompileError(f"{CONFIG_PATH}: 'declared' must be an object")
+    config["external_systems"] = normalize_external_systems(config.get("external_systems") or [])
+    config["external_groups"] = normalize_external_groups(config.get("external_groups") or [])
     return config
+
+
+def normalize_external_systems(raw: Any) -> List[Dict[str, Any]]:
+    """Declared external systems, Portal-shaped: each carries a human description
+    (specified authority) and regex signatures, either plain strings (matched
+    against comment- and string-masked code) or {pattern, scope} with scope
+    "code" or "strings" (string-literal contents only, for hostnames and paths)."""
+    if not isinstance(raw, list):
+        raise CompileError(f"{CONFIG_PATH}: 'external_systems' must be a list")
+    systems: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            raise CompileError(f"{CONFIG_PATH}: every external system must be an object")
+        for key in ("id", "label", "category", "description"):
+            if not isinstance(item.get(key), str) or not item[key].strip():
+                raise CompileError(f"{CONFIG_PATH}: external system {key!r} must be a non-empty string ({item.get('id')!r})")
+        if item["id"] in seen:
+            raise CompileError(f"{CONFIG_PATH}: duplicate external system id {item['id']!r}")
+        seen.add(item["id"])
+        signatures = item.get("signatures")
+        if not isinstance(signatures, list) or not signatures:
+            raise CompileError(f"{CONFIG_PATH}: external system {item['id']!r} needs a non-empty 'signatures' list")
+        compiled: List[Tuple[str, str, Any]] = []
+        for signature in signatures:
+            if isinstance(signature, str):
+                pattern, scope = signature, "code"
+            elif isinstance(signature, dict) and isinstance(signature.get("pattern"), str):
+                pattern, scope = signature["pattern"], str(signature.get("scope") or "code")
+            else:
+                raise CompileError(f"{CONFIG_PATH}: external system {item['id']!r} has a malformed signature {signature!r}")
+            if scope not in ("code", "strings"):
+                raise CompileError(f"{CONFIG_PATH}: external system {item['id']!r} signature scope must be 'code' or 'strings'")
+            try:
+                compiled.append((pattern, scope, re.compile(pattern)))
+            except re.error as exc:
+                raise CompileError(f"{CONFIG_PATH}: external system {item['id']!r} signature {pattern!r} is not a valid regex: {exc}") from exc
+        systems.append({"id": item["id"], "label": item["label"], "category": item["category"], "description": item["description"],
+                        "protocol": str(item["protocol"]) if item.get("protocol") else None, "signatures": compiled})
+    return systems
+
+
+def normalize_external_groups(raw: Any) -> List[Dict[str, Any]]:
+    """Boundary groups (Portal's boundary_groups): a category belongs to at most
+    one group, and every group must end up with a member."""
+    if not isinstance(raw, list):
+        raise CompileError(f"{CONFIG_PATH}: 'external_groups' must be a list")
+    groups: List[Dict[str, Any]] = []
+    seen_ids: Set[str] = set()
+    owner_of_category: Dict[str, str] = {}
+    for item in raw:
+        if not isinstance(item, dict):
+            raise CompileError(f"{CONFIG_PATH}: every external group must be an object")
+        for key in ("id", "label"):
+            if not isinstance(item.get(key), str) or not item[key].strip():
+                raise CompileError(f"{CONFIG_PATH}: external group {key!r} must be a non-empty string ({item.get('id')!r})")
+        if item["id"] in seen_ids:
+            raise CompileError(f"{CONFIG_PATH}: duplicate external group id {item['id']!r}")
+        seen_ids.add(item["id"])
+        categories = item.get("categories")
+        if not isinstance(categories, list) or not categories or not all(isinstance(c, str) and c for c in categories):
+            raise CompileError(f"{CONFIG_PATH}: external group {item['id']!r} needs a non-empty 'categories' list")
+        for category in categories:
+            if category in owner_of_category:
+                raise CompileError(f"{CONFIG_PATH}: category {category!r} belongs to both {owner_of_category[category]!r} and {item['id']!r}")
+            owner_of_category[category] = item["id"]
+        groups.append({"id": item["id"], "label": item["label"], "description": str(item.get("description") or ""), "categories": sorted(categories)})
+    return groups
+
+
+def mask_source(text: str) -> Tuple[str, List[Tuple[int, str]]]:
+    """The text with comments and string-literal contents blanked (offsets and
+    newlines preserved, so line numbers survive) plus every string literal's
+    contents with its starting line. Falls back to the raw text when the file
+    does not tokenize."""
+    chars = list(text)
+    line_starts = [0]
+    for index, char in enumerate(text):
+        if char == "\n":
+            line_starts.append(index + 1)
+
+    def offset(row: int, col: int) -> int:
+        return line_starts[row - 1] + col if 0 < row <= len(line_starts) else len(text)
+
+    def blank(start: int, end: int) -> None:
+        for index in range(start, min(end, len(chars))):
+            if chars[index] != "\n":
+                chars[index] = " "
+
+    strings: List[Tuple[int, str]] = []
+    try:
+        for token in tokenize.generate_tokens(io.StringIO(text).readline):
+            if token.type == tokenize.COMMENT:
+                blank(offset(*token.start), offset(*token.end))
+            elif token.type == tokenize.STRING:
+                body = token.string
+                quote_at = min((i for i, ch in enumerate(body) if ch in "\"'"), default=None)
+                if quote_at is None:
+                    continue
+                quote = body[quote_at:quote_at + 3] if body[quote_at:quote_at + 3] in ('"""', "'''") else body[quote_at]
+                content = body[quote_at + len(quote):len(body) - len(quote)]
+                start = offset(*token.start) + quote_at + len(quote)
+                blank(start, start + len(content))
+                strings.append((token.start[0], content))
+            elif token.type == getattr(tokenize, "FSTRING_MIDDLE", -1):
+                blank(offset(*token.start), offset(*token.end))
+                strings.append((token.start[0], token.string))
+    except (tokenize.TokenError, SyntaxError, IndentationError):
+        return text, []
+    return "".join(chars), strings
 
 
 # ── Sources ──────────────────────────────────────────────────────────────────
@@ -239,6 +356,7 @@ class FileExtraction:
         self.rel: str = record["rel"]
         self.component: str = record["component"]
         self.line_count: int = record["line_count"]
+        self.masked_code, self.strings = mask_source(record["text"])
         self.tree: ast.Module = record["tree"]
         self.locals = locals_
         self.declarations: List[Dict[str, Any]] = []
@@ -477,17 +595,71 @@ def build_model(root: Path, config: Dict[str, Any], files: List[Dict[str, Any]],
         qualname = ex.enclosing_class(line)
         return class_id(ex.component, qualname) if qualname else module_id(ex.component, ex.rel)
 
+    # Declared external systems: every signature hit is a citation, every system
+    # must be observed at least once, and a code-scoped signature that matches an
+    # imported package absorbs that package (the import becomes an origin of the
+    # system; no separate package node is drawn).
+    systems = config.get("external_systems") or []
+    system_hits: Dict[str, List[Tuple[str, int, str]]] = {system["id"]: [] for system in systems}
+    absorbed_roots: Set[str] = set()
+    for system in systems:
+        for ex in extractions:
+            seen_lines: Set[int] = set()
+            for _, scope, regex in system["signatures"]:
+                if scope == "code":
+                    for match in regex.finditer(ex.masked_code):
+                        seen_lines.add(ex.masked_code.count("\n", 0, match.start()) + 1)
+                else:
+                    for line, content in ex.strings:
+                        if regex.search(content):
+                            seen_lines.add(line)
+            for line in sorted(seen_lines):
+                ex.cite("py.boundary.external_signature", line)
+                system_hits[system["id"]].append((ex.rel, line, "py.boundary.external_signature"))
+            for imp in ex.imports:
+                if imp["external"] and any(scope == "code" and regex.search(imp["root"]) for _, scope, regex in system["signatures"]):
+                    absorbed_roots.add(imp["root"])
+                    system_hits[system["id"]].append((ex.rel, imp["line"], "py.import_external"))
+        if not system_hits[system["id"]]:
+            raise CompileError(f"external system {system['id']!r} is declared but none of its signatures matches the tree (a declaration must be observed)")
+
+    by_rel = {ex.rel: ex for ex in extractions}
     for ex in extractions:
         for imp in ex.imports:
-            if not imp["external"]:
+            if not imp["external"] or imp["root"] in absorbed_roots:
                 continue
             xid = f"external:{imp['root']}"
-            add_node(xid, kind="external", sub_kind="package", label=imp["root"], component=None, path=ex.rel, line=imp["line"], owner_type="External packages")
+            add_node(xid, kind="external", sub_kind="package", label=imp["root"], component=None, path=ex.rel, line=imp["line"],
+                     owner_type="External packages", category="package")
             add_origin(xid, ex.rel, imp["line"], "py.import_external")
         for owner, roots in ex.external_refs_by_owner.items():
             owner_id = class_id(ex.component, owner) if owner else module_id(ex.component, ex.rel)
             for root_name in roots:
-                add_edge(owner_id, f"external:{root_name}", "uses", "boundary")
+                if root_name not in absorbed_roots:
+                    add_edge(owner_id, f"external:{root_name}", "uses", "boundary")
+    externals_systems: List[Dict[str, Any]] = []
+    for system in systems:
+        hits = sorted(set(system_hits[system["id"]]))
+        xid = f"external:{system['id']}"
+        first_path, first_line, _ = hits[0]
+        add_node(xid, kind="external", sub_kind="system", label=system["label"], component=None, path=first_path, line=first_line,
+                 owner_type="External systems", category=system["category"], description=system["description"], protocol=system["protocol"])
+        components_hit: Counter = Counter()
+        for path, line, rule in hits:
+            add_origin(xid, path, line, rule)
+            ex = by_rel[path]
+            components_hit[ex.component] += 1
+            add_edge(owner_of(ex, line), xid, "uses", "boundary")
+        paths = sorted({path for path, _, _ in hits})
+        top = sorted(components_hit.items(), key=lambda item: (-item[1], item[0]))
+        externals_systems.append({
+            "id": system["id"], "label": system["label"], "category": system["category"], "description": system["description"],
+            "protocol": system["protocol"], "hit_count": len(hits), "file_count": len(paths), "paths": paths,
+            "component": top[0][0] if top else None, "component_ids": sorted(components_hit),
+            "signatures": [{"pattern": pattern, "scope": scope} for pattern, scope, _ in system["signatures"]],
+            "authority": "observed", "description_authority": "specified", "evidence_class": "static_source",
+        })
+    for ex in extractions:
         for store in ex.stores:
             sid = f"store:{ex.component}:{ex.rel}:{store['line']}"
             add_node(sid, kind="store", sub_kind=store["mechanism"], label=store["label"], component=ex.component, path=ex.rel, line=store["line"], owner_type=ex.enclosing_class(store["line"]))
@@ -565,7 +737,16 @@ def build_model(root: Path, config: Dict[str, Any], files: List[Dict[str, Any]],
     flows.sort(key=lambda f: f["id"])
 
     # Invariants: what the compiler proved, plus what a person declared unchecked.
+    boundary_groups: List[Dict[str, Any]] = []
+    for group in config.get("external_groups") or []:
+        members = sorted(n["id"] for n in node_list if n["kind"] == "external" and n.get("category") in group["categories"])
+        if not members:
+            raise CompileError(f"external group {group['id']!r} has no member: no external system or package carries a category in {group['categories']}")
+        boundary_groups.append({**group, "members": members})
+
     invariants = [
+        {"id": "externals-declared-and-observed", "kind": "externals_declared_and_observed", "status": "holds", "checked": len(systems),
+         "why": "Every declared external system is observed by at least one signature hit; a declaration nothing matches fails the build."},
         {"id": "components-assign-every-file", "kind": "components_assign_every_file", "status": "holds", "checked": len(files),
          "why": "Every Python file belongs to exactly one declared component; an unassigned file fails the build."},
         {"id": "entities-have-origin", "kind": "entities_have_origin", "status": "holds", "checked": len(node_list),
@@ -581,10 +762,12 @@ def build_model(root: Path, config: Dict[str, Any], files: List[Dict[str, Any]],
     ids = [i["id"] for i in invariants]
     if len(ids) != len(set(ids)):
         raise CompileError("duplicate invariant id")
+    invariants.sort(key=lambda i: i["id"])
 
     ci = build_ci(root, config)
     invariants.append({"id": "gates-declared", "kind": "gates_declared", "status": "holds", "checked": len(ci["merge"]["inputs"]),
                        "why": "At least one gate must pass before Harness accepts a snapshot of this model."})
+    invariants.sort(key=lambda i: i["id"])
 
     extraction = build_extraction(extractions, node_list, origins, semantic_by_file)
     components = []
@@ -610,7 +793,10 @@ def build_model(root: Path, config: Dict[str, Any], files: List[Dict[str, Any]],
         "compiler": "tools/architecture_compile_python.py",
         "components": components,
         "layers": layers,
-        "interplay": {"nodes": node_list, "edges": edge_list, "flows": flows, "invariants": invariants, "pages": [], "boundary_groups": [], "clusters": []},
+        "interplay": {"nodes": node_list, "edges": edge_list, "flows": flows, "invariants": invariants, "pages": [], "boundary_groups": boundary_groups, "clusters": []},
+        "externals": {"systems": externals_systems,
+                      "groups": [{k: g[k] for k in ("id", "label", "description", "categories")} for g in boundary_groups],
+                      "edges": []},
         "extraction": extraction,
         "ci": ci,
         "inventory": {"files": len(files), "lines": sum(f["line_count"] for f in files), "declarations": extraction["summary"]["declarations"],
