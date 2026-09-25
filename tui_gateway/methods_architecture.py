@@ -3,9 +3,10 @@
 A service declared by a manifest under ``~/.hermes/services/architecture/`` has
 a compiler-emitted architecture model (system map, invariants, stores,
 externals, CI plane). These handlers read it, snapshot it per revision, run the
-service's own ``--check`` on demand, and list what was recorded — for a local
-checkout that is never pushed as much as for a GitHub repository. Portal opens
-the model from the service node on the dataflow graph. Contract: docs/api/architecture.md.
+service's own ``--check`` on demand, list what was recorded, and tail or follow
+the log sinks a local service declares — for a local checkout that is never
+pushed as much as for a GitHub repository. Portal opens the model from the
+service node on the dataflow graph. Contract: docs/api/architecture.md.
 """
 from __future__ import annotations
 
@@ -39,6 +40,7 @@ def _(rid, params: dict) -> dict:
                 "model": manifest["model"],
                 "check_configured": bool(manifest.get("check")),
                 "runtime": manifest.get("runtime"),
+                "logs": store.resolved_logs(manifest),
                 "status": store.status_for(manifest),
             })
         # status carries each service's contract + conforming; the list names the
@@ -137,6 +139,76 @@ def _(rid, params: dict) -> dict:
     except Exception as e:
         logger.exception("architecture.history failed")
         return _err(rid, 5043, str(e))
+
+
+@method("architecture.logs")
+def _(rid, params: dict) -> dict:
+    """A bounded read of one declared log sink of a local service: without a
+    ``cursor`` the last ``lines`` complete lines (default 200, max 2000) and the
+    cursor to continue from; with one, every complete line appended since. Only
+    the manifest's declared sinks are ever read. **4040** unknown sink (or none
+    declared), **4041** the sink has no file yet, **4001** bad params."""
+    try:
+        from tui_gateway import architecture_logs as logs
+        from tui_gateway import architecture_store as store
+
+        service_id = store.service_param(params)
+        if service_id is None:
+            return _err(rid, 4029, "architecture.logs needs a 'service' id")
+        manifest = store.load_manifest(service_id)
+        if manifest is None:
+            return _err(rid, 4030, f"unknown service: {service_id}")
+        sink_id = (params or {}).get("sink")
+        sink_id = sink_id.strip() if isinstance(sink_id, str) and sink_id.strip() else None
+        try:
+            lines = logs.parse_lines((params or {}).get("lines"))
+            cursor = logs.parse_cursor((params or {}).get("cursor"))
+            result = logs.read_logs(manifest, sink_id, lines, cursor)
+        except logs.LogError as exc:
+            return _err(rid, exc.code, exc.message)
+        result["service"] = store.graph_id(manifest)
+        return _ok(rid, result)
+    except Exception as e:
+        logger.exception("architecture.logs failed")
+        return _err(rid, 5044, str(e))
+
+
+@method("architecture.logs.follow")
+def _(rid, params: dict) -> dict:
+    """Start or stop following a declared sink. While following, a daemon thread
+    polls it every second and broadcasts ``architecture.log`` with the appended
+    lines (coalesced, at most 500 per event); one follower per (service, sink);
+    it stops on ``enabled: false`` or after ten minutes without a client asking
+    again (a final event carries ``stopped``)."""
+    try:
+        from tui_gateway import architecture_logs as logs
+        from tui_gateway import architecture_store as store
+
+        service_id = store.service_param(params)
+        if service_id is None:
+            return _err(rid, 4029, "architecture.logs.follow needs a 'service' id")
+        manifest = store.load_manifest(service_id)
+        if manifest is None:
+            return _err(rid, 4030, f"unknown service: {service_id}")
+        enabled = (params or {}).get("enabled", True)
+        if not isinstance(enabled, bool):
+            return _err(rid, 4001, "enabled must be a boolean")
+        sink_id = (params or {}).get("sink")
+        sink_id = sink_id.strip() if isinstance(sink_id, str) and sink_id.strip() else None
+        service = store.graph_id(manifest)
+        try:
+            sink = logs.select_sink(manifest, sink_id)
+            if not enabled:
+                stopped = logs.stop_follow(service, sink["id"])
+                return _ok(rid, {"service": service, "following": False, "sink": sink["id"], "stopped": stopped})
+            cursor = logs.parse_cursor((params or {}).get("cursor"))
+            follower = logs.start_follow(manifest, service, sink["id"], _broadcast_global_event, cursor=cursor)
+        except logs.LogError as exc:
+            return _err(rid, exc.code, exc.message)
+        return _ok(rid, {"service": service, "following": True, "sink": follower.sink["id"], "cursor": str(follower.cursor)})
+    except Exception as e:
+        logger.exception("architecture.logs.follow failed")
+        return _err(rid, 5045, str(e))
 
 
 def register(server) -> None:

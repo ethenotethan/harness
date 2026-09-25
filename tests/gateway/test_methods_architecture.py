@@ -5,7 +5,7 @@ import logging
 import pytest
 
 import tui_gateway.methods_architecture as ma
-from tests.gateway.architecture_fixtures import minimal_document
+from tests.gateway.architecture_fixtures import local_manifest, minimal_document
 from tui_gateway import architecture_store as store
 
 
@@ -49,7 +49,7 @@ def _write_service(tmp_path, check=None):
     for node in document["interplay"]["nodes"] + document["extraction"]["entities"]:
         node["component"] = "a"
     (root / "architecture" / "model" / "model.json").write_text(json.dumps(document), encoding="utf-8")
-    manifest = {"name": "Demo", "description": "A demo.", "root": str(root)}
+    manifest = local_manifest(root, description="A demo.")
     if check:
         manifest["check"] = check
     store.manifests_dir().mkdir(parents=True, exist_ok=True)
@@ -74,7 +74,8 @@ def test_installed_handlers_resolve_every_name_at_runtime(home, tmp_path):
     fake._profile_scoped = lambda fn: fn
     fake.logger = logging.getLogger("fake")
     ma.register(fake)
-    assert set(fake._methods) == {"architecture.list", "architecture.describe", "architecture.check", "architecture.history"}
+    assert set(fake._methods) == {"architecture.list", "architecture.describe", "architecture.check", "architecture.history",
+                                  "architecture.logs", "architecture.logs.follow"}
     listed = fake._methods["architecture.list"](1, {})
     assert listed["result"]["services"][0]["id"] == "arch:demo"
     described = fake._methods["architecture.describe"](2, {"service": "arch:demo"})
@@ -85,11 +86,17 @@ def test_installed_handlers_resolve_every_name_at_runtime(home, tmp_path):
     history = fake._methods["architecture.history"](5, {"service": "arch:demo"})
     assert history["result"]["latest"] == described["result"]["revision"]
     assert [e[1]["reason"] for e in events] == ["snapshot", "check"]
+    tailed = fake._methods["architecture.logs"](6, {"service": "arch:demo", "lines": 5})
+    assert tailed["result"]["lines"] == ["started"] and tailed["result"]["sink"]["id"] == "app"
+    followed = fake._methods["architecture.logs.follow"](7, {"service": "demo"})
+    assert followed["result"]["following"] is True
+    assert fake._methods["architecture.logs.follow"](8, {"service": "demo", "enabled": False})["result"]["stopped"] is True
 
 
 def test_registry_names_match_docs_and_capabilities():
     names = {name for name, _ in ma._registry._pending}
-    assert names == {"architecture.list", "architecture.describe", "architecture.check", "architecture.history"}
+    assert names == {"architecture.list", "architecture.describe", "architecture.check", "architecture.history",
+                     "architecture.logs", "architecture.logs.follow"}
     capabilities = open("tui_gateway/methods_harness.py", encoding="utf-8").read()
     for name in names:
         assert f'"{name}"' in capabilities, f"{name} not advertised by gateway.capabilities"

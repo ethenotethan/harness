@@ -11,7 +11,7 @@ import pytest
 
 import tui_gateway.methods_architecture as ma
 import tui_gateway.methods_harness as mh
-from tests.gateway.architecture_fixtures import minimal_document
+from tests.gateway.architecture_fixtures import local_manifest, minimal_document
 from tui_gateway import architecture_contract as contract
 from tui_gateway import architecture_store as store
 
@@ -30,9 +30,9 @@ def _write_service(tmp_path, document, service_id="demo"):
     (root / "architecture" / "model").mkdir(parents=True)
     (root / "architecture" / "model" / "model.json").write_text(json.dumps(document), encoding="utf-8")
     store.manifests_dir().mkdir(parents=True, exist_ok=True)
-    (store.manifests_dir() / f"{service_id}.json").write_text(json.dumps({
-        "name": service_id.title(), "description": "A demo.", "root": str(root),
-    }), encoding="utf-8")
+    (store.manifests_dir() / f"{service_id}.json").write_text(json.dumps(
+        local_manifest(root, name=service_id.title(), description="A demo.")
+    ), encoding="utf-8")
     return root
 
 
@@ -194,7 +194,8 @@ def test_handlers_carry_the_contract_and_surface_4033(home, tmp_path):
 def test_capabilities_advertise_the_contract():
     pending = _stub(mh)
     result = pending["gateway.capabilities"](1, {})["result"]
-    assert result["architecture"]["methods"] == ["architecture.list", "architecture.describe", "architecture.check", "architecture.history"]
+    assert result["architecture"]["methods"] == ["architecture.list", "architecture.describe", "architecture.check", "architecture.history",
+                                                 "architecture.logs", "architecture.logs.follow"]
     assert result["architecture"]["contract"] == contract.describe_contract()
     for name in result["architecture"]["methods"]:
         assert name in result["capability_names"], "the flat list old clients read is unchanged"

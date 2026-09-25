@@ -258,6 +258,9 @@ _LONG_HANDLERS = frozenset(
         "architecture.describe",
         "architecture.check",
         "architecture.history",
+        # Log reads seek and scan up to 4 MiB of a sink; keep them off the reader thread.
+        "architecture.logs",
+        "architecture.logs.follow",
         "projects.discover_repos",
         "projects.record_repos",
         "projects.for_cwd",

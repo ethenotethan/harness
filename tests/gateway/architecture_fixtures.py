@@ -11,7 +11,9 @@ override sections, or mutate the result.
 from __future__ import annotations
 
 import copy
-from typing import Any, Dict
+import json
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 DIGEST = "0" * 64
 
@@ -94,3 +96,29 @@ def minimal_document(**overrides: Any) -> Dict[str, Any]:
     document = copy.deepcopy(_MINIMAL)
     document.update(overrides)
     return document
+
+
+def log_sink(root: Path, sink_id: str = "app", text: str = "started\n") -> Dict[str, Any]:
+    """A ``file`` log sink under ``root/logs`` with ``text`` already written —
+    log capture is enforced for local services, so every local test manifest
+    declares one."""
+    path = Path(root) / "logs" / f"{sink_id}.log"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return {"id": sink_id, "kind": "file", "path": str(path)}
+
+
+def local_manifest(root: Path, name: str = "Demo", description: str = "A demo service.",
+                   logs: Optional[List[Dict[str, Any]]] = None, **extra: Any) -> Dict[str, Any]:
+    """A conforming local manifest dict: root, a declared log sink, plus ``extra``."""
+    manifest: Dict[str, Any] = {"name": name, "description": description, "root": str(root),
+                                "logs": logs if logs is not None else [log_sink(Path(root))]}
+    manifest.update(extra)
+    return manifest
+
+
+def write_manifest(manifests_dir: Path, service_id: str, manifest: Dict[str, Any]) -> Path:
+    manifests_dir.mkdir(parents=True, exist_ok=True)
+    path = manifests_dir / f"{service_id}.json"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    return path
