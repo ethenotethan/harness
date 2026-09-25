@@ -108,6 +108,50 @@ Like `source_files`, the annotation is node metadata and stays outside the chang
 commitment digest. A local service's checkout is also exposed as a read-only browse root
 named `arch-<id>` for `files.list` / `files.read`.
 
+## Compiling a Python service
+
+A Portal-style compiler is Swift-specific. Any Python service gets a conforming model from
+`tools/architecture_compile_python.py`: it reads the tree plus `architecture/config.json`,
+extracts with `ast` (declarations, entrypoints, routes, subprocess spawns, file writes,
+HTTP clients, sockets, threads and tasks, environment reads, external imports, enum-typed
+state machines, persistent stores), draws the map (modules, classes, entrypoints,
+endpoints, stores, resources, external packages) with provenance for every construction,
+wires the declared gates into one merge gate, validates the result against the
+`hermes.architecture` contract (`tui_gateway/architecture_contract.py`) and writes
+`architecture/model/model.json`. `--check` fails when the committed model drifts.
+
+```jsonc
+// <service>/architecture/config.json
+{
+  "title": "Home Awareness", "description": "Camera capture, perception and room state.",
+  "source_root": ".", "exclude": ["tests/**"],
+  "components": [
+    {"id": "capture", "label": "Capture", "description": "Frame capture and orchestration.", "patterns": ["capture/**", "main.py"]},
+    {"id": "perception", "label": "Perception", "description": "Detection and tracking.", "patterns": ["perception/**"]}
+  ],
+  "declared": {                                    // optional: a person's assertions, every reference must resolve
+    "nodes": [{"id": "declared:camera", "kind": "device", "label": "PTZ camera", "path": "capture/ptz.py", "line": 12}],
+    "edges": [{"source": "class:capture:Capture", "target": "declared:camera", "relation": "reads"}],
+    "flows": [{"id": "boot", "title": "Boot", "steps": [{"from": "class:capture:Capture", "to": "declared:camera", "relation": "reads"}]}]
+  },
+  "gates": {
+    "commands": [{"id": "check", "name": "Model is current", "command": "python3 tools/architecture_compile_python.py . --check"},
+                 {"id": "tests", "name": "Unit tests", "command": "python3 -m pytest -q", "role": "gate"}],
+    "workflows": ".github/workflows"                // optional: GitHub jobs join the gates
+  }
+}
+```
+
+```sh
+python3 tools/architecture_compile_python.py /path/to/service          # writes architecture/model/model.json
+python3 tools/architecture_compile_python.py /path/to/service --check  # exit 1 when stale or non-conforming
+```
+
+Point the service's manifest at the model (`"model": "architecture/model/model.json"`) and at
+the check (`"check": ["python3", "…/tools/architecture_compile_python.py", ".", "--check"]`).
+Every file must belong to one component and at least one gate must be declared; the
+compiler refuses to write a model that does not conform.
+
 ## Methods
 
 | Method | Params | Returns |
