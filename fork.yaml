@@ -366,6 +366,15 @@ def:
         - "docs/forkdiff.md"
         - "README.md"
 
+    - title: "Test determinism"
+      description: |
+        Upstream tests that reached the network are pinned to the seams the rest of the
+        suite already uses, so CI does not depend on what a live provider answers today
+        (the primary-runtime-restore file probed the Nous inference API for a model's
+        context window and failed when the API reported a window below the 64K floor).
+      globs:
+        - "tests/run_agent/test_primary_runtime_restore.py"
+
 # ignored globally, does not count towards line count
 ignore:
   - "fork.yaml"
