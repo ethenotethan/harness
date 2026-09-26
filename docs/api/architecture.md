@@ -256,9 +256,11 @@ Swift compiler until the Swift pack plus a project rule table reproduces its map
 | `architecture.list` | — | `{services: [{id, label, description, source, root, repository, ref, model, check_configured, runtime, status}], contract: {name, version}}` — `status` is the node annotation above (with `contract` and `conforming`); `runtime` is the binding (`{provider, id, graph_id}`) or null |
 | `architecture.describe` | `service` (graph id or bare id), `revision?` | `{service: {…}, revision, source, stored_at, summary, check, contract, model}` — without `revision` the current model is read now, validated against the contract and snapshotted; with it a stored snapshot is returned. **4032** model missing/invalid/unfetchable, **4033** does not conform to the contract (message names the problems), **4404** no such stored revision |
 | `architecture.check` | `service` | `{service, check: {status: passed\|failed\|unavailable, exit_code?, output?, reason?, revision, checked_at, duration_s, command}}` — runs the manifest's `check` in `root`, bounded at 300 s. A GitHub service or a manifest without `check` is `unavailable` with a `reason` |
-| `architecture.history` | `service` | `{service, source, latest, revisions: [{revision, source, stored_at, summary}], checks: [runs, newest first]}` |
-Common errors: **4029** missing `service`, **4030** unknown service; **5040–5043**
-internal, per method. All four run on the RPC pool (`_LONG_HANDLERS`). Reading a service's
+| `architecture.history` | `service` | `{service, source, latest, head, revisions: [{revision, source, stored_at, summary, contract, commit?, commits_since_previous?, deployed, deployed_at?}], runtime?, checks: [runs, newest first]}` — see *Revision history* |
+| `architecture.diff` | `service`, `from?`, `to?` | `{service, from, to, nodes: {added, removed}, edges: {added, removed}, invariants: {added, removed, changed}, files: {added, removed, changed}, gates: {jobs_added, jobs_removed, ratchets_added, ratchets_removed}, summary: {from, to}, git?}` — `to` defaults to the latest snapshot, `from` to the one before it. **4404** a revision is not stored (or nothing precedes `to`), **4001** a malformed revision |
+
+Common errors: **4029** missing `service`, **4030** unknown service; **5040–5044**
+internal, per method. All five run on the RPC pool (`_LONG_HANDLERS`). Reading a service's
 logs is `service.logs` — see [service-logs.md](service-logs.md).
 
 `summary` is derived from the model without the client loading it: schema version,
@@ -344,6 +346,32 @@ Reading and following the sinks is the `service.*` namespace (`service.logs`,
 plist-derived stdout/stderr and a manifest's declared sinks resolve through one method — see
 [service-logs.md](service-logs.md).
 
+## Revision history
+
+`architecture.history` walks the stored snapshots (genesis first, newest last) and, for a
+**local root**, joins each to git:
+
+- `commit` — `{sha, author, date, subject}` of the snapshot's revision (`git log -1`); absent
+  for a `working-tree` or `sha256:` revision, or when git fails.
+- `commits_since_previous` — the commits `previous..revision` between the prior snapshot and
+  this one, oldest first, at most 50.
+- `deployed` / `deployed_at` — the newest snapshot whose revision equals the checkout's
+  current `HEAD` (`head` is also returned). **This means "the revision the checkout is at
+  now", not proof that a process restarted.** When the manifest binds a runtime service,
+  `runtime: {provider, graph_id, pid?}` carries what the provider can say: launchd reports
+  the running pid when `launchctl print` shows one; no provider reports a start time, so
+  none is invented.
+
+`architecture.diff` compares two stored snapshots by stable identity, so a rename is not
+churn: nodes by `history_key` (falling back to `id`), edges by `(source key, target key,
+relation)`, invariants by id (with status flips under `changed`), extraction files by path
+(with `lines_from`/`lines_to` when the line count moved), CI jobs and ratchets by id.
+`summary.from`/`summary.to` are the two revisions' summaries. For a local root whose two
+revisions are git commits, `git` adds `commits` (oldest first, at most 50) and `stat`
+(`git diff --numstat`, at most 500 paths, binary files as null counts) with `truncated`
+when either bound was hit. `architecture.describe` reports `is_latest` so a client viewing
+an older revision can say so.
+
 ## Snapshots and checks
 
 Every revision read is stored under `~/.hermes/architecture/<id>/<revision>.json` with
@@ -366,8 +394,8 @@ Emitted when `architecture.describe` stores a revision it had not seen and when
 
 ## Capabilities
 
-`architecture.list`, `architecture.describe`, `architecture.check`, `architecture.history`
-are advertised by `gateway.capabilities` in `capability_names`, and
+`architecture.list`, `architecture.describe`, `architecture.check`, `architecture.history`,
+`architecture.diff` are advertised by `gateway.capabilities` in `capability_names`, and
 `architecture: {methods, events, contract}` names the methods, the event
 (`architecture.changed`) and the contract (see above) so a client can decode a served
 document knowing its major before the first call. The log methods are advertised under
