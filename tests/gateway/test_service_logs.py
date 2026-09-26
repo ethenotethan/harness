@@ -494,5 +494,7 @@ def test_capabilities_advertise_service_logs():
     result = fn(1, {})["result"]
     assert result["service"] == {"methods": ["service.logs", "service.logs.follow"], "events": ["service.log"]}
     assert "service.logs" in result["capability_names"] and "service.logs.follow" in result["capability_names"]
-    assert result["architecture"]["methods"] == ["architecture.list", "architecture.describe", "architecture.check", "architecture.history"]
+    assert result["architecture"]["methods"] == [
+        "architecture.list", "architecture.describe", "architecture.check", "architecture.history", "architecture.diff",
+    ]
     assert result["architecture"]["events"] == ["architecture.changed"]
