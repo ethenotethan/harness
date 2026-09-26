@@ -260,7 +260,8 @@ Swift compiler until the Swift pack plus a project rule table reproduces its map
 | `architecture.diff` | `service`, `from?`, `to?` | `{service, from, to, nodes: {added, removed}, edges: {added, removed}, invariants: {added, removed, changed}, files: {added, removed, changed}, gates: {jobs_added, jobs_removed, ratchets_added, ratchets_removed}, summary: {from, to}, git?}` — `to` defaults to the latest snapshot, `from` to the one before it. **4404** a revision is not stored (or nothing precedes `to`), **4001** a malformed revision |
 
 Common errors: **4029** missing `service`, **4030** unknown service; **5040–5044**
-internal, per method. All five run on the RPC pool (`_LONG_HANDLERS`).
+internal, per method. All five run on the RPC pool (`_LONG_HANDLERS`). Reading a service's
+logs is `service.logs` — see [service-logs.md](service-logs.md).
 
 `summary` is derived from the model without the client loading it: schema version,
 component/file/line counts, map nodes/edges/flows, invariants with the violated ids,
@@ -311,6 +312,40 @@ a snapshot exists, otherwise `problem` says the model has not been read yet).
 `gateway.capabilities` advertises `architecture: {methods, contract}` beside the flat
 `capability_names` list.
 
+## Log capture
+
+Log capture is part of the standard for **local** services (manifests with a `root`):
+the manifest declares where the service's logs land, and a local service that declares
+no resolvable sink is **not conforming** (`status.conforming: false`,
+`problem: "no log capture declared: add a logs sink to the manifest"` — joined with the
+contract problem when the model fails too). GitHub-only manifests are exempt: logs are a
+runtime property and the runtime is not here; a `logs` block on one is ignored with a warning.
+
+```jsonc
+"logs": [
+  {"id": "app", "kind": "file", "path": "~/Library/Logs/Portal/portal.log", "label": "Application"},
+  {"id": "runs", "kind": "directory", "path": "~/.hermes/services/demo/logs"},   // newest file by mtime
+  {"id": "out", "kind": "launchd_stdout"},                                      // from the bound job's plist
+  {"id": "err", "kind": "launchd_stderr", "path": "/var/log/demo.err"}          // explicit path wins
+]
+```
+
+Kinds: `file`, `directory` (the newest regular file by mtime is the active file),
+`launchd_stdout` / `launchd_stderr` (path derived from the bound launchd job's
+`StandardOutPath` / `StandardErrorPath` — `~/Library/LaunchAgents`, then
+`/Library/LaunchAgents`, `/Library/LaunchDaemons` — when `path` is omitted; these kinds need a
+`runtime` binding with provider `launchd`). Ids are unique, paths absolute (`~` allowed),
+unknown kinds fail closed. A launchd sink whose plist cannot be read keeps the manifest valid
+and records a `problem`; the service is then reported non-conforming rather than vanishing.
+`architecture.describe` (the `service.logs` field) and `architecture.list` (`logs`) carry every sink
+resolved at call time: `exists`, `size_bytes`, `modified_at` (a missing file is
+`exists: false`, never an error); the node annotation carries the sink ids (`status.logs`).
+
+Reading and following the sinks is the `service.*` namespace (`service.logs`,
+`service.logs.follow`, event `service.log`), keyed by graph service id, so a launchd node's
+plist-derived stdout/stderr and a manifest's declared sinks resolve through one method — see
+[service-logs.md](service-logs.md).
+
 ## Revision history
 
 `architecture.history` walks the stored snapshots (genesis first, newest last) and, for a
@@ -346,7 +381,8 @@ runs land in `checks.json` (20 newest).
 
 ## Event
 
-`architecture.changed` — session-less, broadcast to every client:
+`architecture.changed` — session-less, broadcast to every client (the log follow stream is
+`service.log`, see [service-logs.md](service-logs.md)):
 
 ```jsonc
 {"service": "arch:portal", "revision": "62911e4…", "source": "local", "reason": "snapshot"}
@@ -360,15 +396,19 @@ Emitted when `architecture.describe` stores a revision it had not seen and when
 
 `architecture.list`, `architecture.describe`, `architecture.check`, `architecture.history`,
 `architecture.diff` are advertised by `gateway.capabilities` in `capability_names`, and
-`architecture: {methods, contract}` names the contract (see above) so a client can decode a
-served document knowing its major before the first call.
+`architecture: {methods, events, contract}` names the methods, the event
+(`architecture.changed`) and the contract (see above) so a client can decode a served
+document knowing its major before the first call. The log methods are advertised under
+`service: {methods, events}`.
 
 ## Security
 
 Manifests are operator-owned state under `HERMES_HOME`. Model paths are resolved inside
 the declared root and rejected when they escape it; models are capped at 16 MiB and must
 be JSON objects with a `schema_version` that conform to the contract. Check commands run only for local services, in
-the declared root, with output truncated to 4 000 characters. GitHub fetches go to
+the declared root, with output truncated to 4 000 characters. Log reads (`service.logs`) open only the
+paths the manifest declares or the bound launchd plist names, scan at most 4 MiB, and return
+at most 2 000 lines. GitHub fetches go to
 `raw.githubusercontent.com` over HTTPS and send `GITHUB_TOKEN`/`GH_TOKEN` when set.
 
 Implementation: `tui_gateway/architecture_contract.py` (the contract), `tui_gateway/architecture_store.py`

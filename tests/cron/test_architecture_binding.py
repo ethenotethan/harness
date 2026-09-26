@@ -9,7 +9,7 @@ from cron.changesets import configuration_digest
 from cron.jobs import build_cron_graph
 from tools import service_graph
 from tools.architecture_services import collect_architecture_definitions, collect_architecture_services
-from tests.gateway.architecture_fixtures import minimal_document
+from tests.gateway.architecture_fixtures import log_sink, minimal_document
 from tui_gateway import architecture_store as store
 from tui_gateway import files_browse
 
@@ -27,7 +27,7 @@ def _write_manifest(tmp_path, stem, runtime=None, **extra):
     (root / "scripts").mkdir(exist_ok=True)
     (root / "scripts" / "build.py").write_text("print('hi')\n", encoding="utf-8")
     (root / "architecture" / "model" / "model.json").write_text(json.dumps(minimal_document()), encoding="utf-8")
-    manifest = {"name": stem.title(), "description": f"The {stem} codebase.", "root": str(root),
+    manifest = {"name": stem.title(), "description": f"The {stem} codebase.", "root": str(root), "logs": [log_sink(root)],
                 "source_files": ["scripts/build.py"], "outputs": ["https:127.0.0.1:7000"]}
     if runtime is not None:
         manifest["runtime"] = runtime

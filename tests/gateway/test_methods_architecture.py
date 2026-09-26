@@ -5,7 +5,7 @@ import logging
 import pytest
 
 import tui_gateway.methods_architecture as ma
-from tests.gateway.architecture_fixtures import minimal_document
+from tests.gateway.architecture_fixtures import local_manifest, minimal_document
 from tui_gateway import architecture_store as store
 
 
@@ -49,7 +49,7 @@ def _write_service(tmp_path, check=None):
     for node in document["interplay"]["nodes"] + document["extraction"]["entities"]:
         node["component"] = "a"
     (root / "architecture" / "model" / "model.json").write_text(json.dumps(document), encoding="utf-8")
-    manifest = {"name": "Demo", "description": "A demo.", "root": str(root)}
+    manifest = local_manifest(root, description="A demo.")
     if check:
         manifest["check"] = check
     store.manifests_dir().mkdir(parents=True, exist_ok=True)
@@ -97,6 +97,7 @@ def test_registry_names_match_docs_and_capabilities():
     for name in names:
         assert f'"{name}",' in server, f"{name} is not pool-routed (_LONG_HANDLERS)"
     assert "methods_architecture as _methods_architecture" in server and "_methods_architecture," in server
+    assert "methods_service as _methods_service" in server and "_methods_service," in server
 
 
 def test_list_describe_history_and_check(home, tmp_path, handlers):

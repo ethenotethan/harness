@@ -1111,7 +1111,14 @@ def _(rid, params: dict) -> dict:
         "gateway_version": version,
         "architecture": {
             "methods": ["architecture.list", "architecture.describe", "architecture.check", "architecture.history", "architecture.diff"],
+            "events": ["architecture.changed"],
             "contract": describe_contract(),
+        },
+        # Logs are a property of the running service (any graph service id), not of
+        # its architecture: their own namespace. See docs/api/service-logs.md.
+        "service": {
+            "methods": ["service.logs", "service.logs.follow"],
+            "events": ["service.log"],
         },
         "capability_names": [
             "artifact.set",
@@ -1146,6 +1153,8 @@ def _(rid, params: dict) -> dict:
             "architecture.describe",
             "architecture.check",
             "architecture.history",
+            "service.logs",
+            "service.logs.follow",
             "architecture.diff",
         ],
     })

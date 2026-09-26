@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.gateway.architecture_fixtures import DIGEST, minimal_document
+from tests.gateway.architecture_fixtures import DIGEST, local_manifest, minimal_document
 from tui_gateway import architecture_store as store
 
 
@@ -25,7 +25,7 @@ def _write_service(home: Path, tmp_path: Path, service_id="demo", **manifest_ext
     root = tmp_path / "svc"
     (root / "architecture" / "model").mkdir(parents=True)
     (root / "architecture" / "model" / "model.json").write_text(json.dumps(_model()), encoding="utf-8")
-    manifest = {"name": "Demo", "description": "A demo service.", "root": str(root)}
+    manifest = local_manifest(root)
     manifest.update(manifest_extra)
     store.manifests_dir().mkdir(parents=True, exist_ok=True)
     (store.manifests_dir() / f"{service_id}.json").write_text(json.dumps(manifest), encoding="utf-8")
@@ -210,7 +210,10 @@ def test_status_and_describe_round_trip(home, tmp_path):
     assert "check" not in before
 
     document = store.describe(manifest, git_runner=lambda _root: "rev1")
-    assert document["service"] == {
+    service = dict(document["service"])
+    [sink] = service.pop("logs")
+    assert sink["id"] == "app" and sink["kind"] == "file" and sink["exists"] is True and sink["path"] == str(root / "logs" / "app.log")
+    assert service == {
         "id": "arch:demo", "label": "Demo", "description": "A demo service.", "source": "local",
         "root": str(root), "repository": None, "ref": None, "model_path": store.DEFAULT_MODEL_PATH,
         "check_configured": True, "runtime": None,

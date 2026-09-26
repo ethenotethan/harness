@@ -196,8 +196,9 @@ def normalize_runtime_binding(value: Any) -> Dict[str, str]:
     return {"provider": provider, "id": runtime_id, "graph_id": runtime_graph_id(provider, runtime_id)}
 
 
-def normalize_manifest(doc: Any, stem: str) -> Dict[str, Any]:
-    """Validate one manifest document. Raises ValueError with a reason."""
+def normalize_manifest(doc: Any, stem: str, launchd_dirs: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Validate one manifest document. Raises ValueError with a reason.
+    ``launchd_dirs`` overrides where launchd plists are looked up (tests)."""
     if not isinstance(doc, dict):
         raise ValueError("manifest must be a JSON object")
     service_id = doc.get("id", stem)
@@ -252,6 +253,16 @@ def normalize_manifest(doc: Any, stem: str) -> Dict[str, Any]:
         manifest["relationships"] = doc["relationships"]
     if doc.get("runtime") is not None:
         manifest["runtime"] = normalize_runtime_binding(doc["runtime"])
+    # Log capture: declared sinks (validated here; enforced for local services
+    # in conformance_for). A GitHub-only service has no runtime here, so its
+    # sinks are dropped with a warning rather than pretending to be readable.
+    from tui_gateway import service_logs
+
+    sinks = service_logs.normalize_log_sinks(doc.get("logs"), manifest.get("runtime"), launchd_dirs)
+    if sinks and root is None:
+        logger.warning("architecture manifest %s declares logs but has no local root; sinks ignored", service_id)
+        sinks = []
+    manifest["logs"] = sinks
     return manifest
 
 
@@ -566,6 +577,13 @@ def run_check(manifest: Dict[str, Any], runner: Optional[Callable[..., Any]] = N
 # ── Composite reads ──────────────────────────────────────────────────────────
 
 
+def resolved_logs(manifest: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The manifest's log sinks as clients see them: existence, size, mtime."""
+    from tui_gateway import service_logs
+
+    return service_logs.resolve_sinks(manifest)
+
+
 def status_for(manifest: Dict[str, Any], home: Optional[str] = None) -> Dict[str, Any]:
     """The cheap annotation a service node carries: source, revision, last check."""
     snapshots = list_snapshots(manifest["id"], home)
@@ -580,6 +598,7 @@ def status_for(manifest: Dict[str, Any], home: Optional[str] = None) -> Dict[str
     }
     if manifest.get("runtime"):
         annotation["runtime"] = manifest["runtime"]["graph_id"]
+    annotation["logs"] = [sink["id"] for sink in manifest.get("logs") or []]
     if check is not None:
         annotation["check"] = {"status": check.get("status"), "checked_at": check.get("checked_at")}
     latest = snapshots.get("latest")
@@ -594,15 +613,25 @@ def status_for(manifest: Dict[str, Any], home: Optional[str] = None) -> Dict[str
 def conformance_for(manifest: Dict[str, Any], snapshots: Optional[Dict[str, Any]] = None,
                     home: Optional[str] = None) -> Dict[str, Any]:
     """``{"conforming": bool, "problem"?: str}`` for the node annotation, cheaply:
-    a local model is read and validated from its checkout (no network); a GitHub
-    model is conforming when a snapshot of it was stored (snapshots are only
-    stored for validated documents) and unread until ``architecture.describe``
-    fetches it. Fail-open: a read failure is a non-conformance with the reason."""
+    a local model is read and validated from its checkout (no network) AND the
+    manifest must declare at least one resolvable log sink (log capture is part
+    of the standard for local services); a GitHub model is conforming when a
+    snapshot of it was stored (snapshots are only stored for validated documents)
+    and unread until ``architecture.describe`` fetches it. Fail-open: a read
+    failure is a non-conformance with the reason; several reasons are joined."""
     if manifest.get("root"):
+        from tui_gateway import service_logs
+
+        problems: List[str] = []
         try:
             read_local_model(manifest)
         except ArchitectureError as exc:
-            return {"conforming": False, "problem": exc.message}
+            problems.append(exc.message)
+        capture = service_logs.capture_problem(manifest)
+        if capture:
+            problems.append(capture)
+        if problems:
+            return {"conforming": False, "problem": "; ".join(problems)}
         return {"conforming": True}
     snapshots = snapshots if snapshots is not None else list_snapshots(manifest["id"], home)
     if snapshots.get("latest"):
@@ -637,6 +666,7 @@ def describe(manifest: Dict[str, Any], revision: Optional[str] = None, home: Opt
             "model_path": manifest["model"],
             "check_configured": bool(manifest.get("check")),
             "runtime": manifest.get("runtime"),
+            "logs": resolved_logs(manifest),
         },
         "revision": entry["revision"],
         "source": entry.get("source", source_of(manifest)),

@@ -5,7 +5,7 @@ import pytest
 
 from cron.jobs import build_cron_graph
 from tools.architecture_services import collect_architecture_services
-from tests.gateway.architecture_fixtures import minimal_document
+from tests.gateway.architecture_fixtures import log_sink, minimal_document
 from tui_gateway import architecture_store as store
 from tui_gateway import files_browse
 
@@ -24,7 +24,7 @@ def _write_service(tmp_path, **extra):
     (root / "scripts" / "build.py").write_text("print('hi')\n", encoding="utf-8")
     (root / "architecture" / "model" / "model.json").write_text(json.dumps(minimal_document()), encoding="utf-8")
     manifest = {
-        "name": "Demo", "description": "A **demo** service.", "root": str(root),
+        "name": "Demo", "description": "A **demo** service.", "root": str(root), "logs": [log_sink(root)],
         "source_files": ["scripts/build.py", "scripts/missing.py"],
         "inputs": ["file:~/.hermes/config.yaml"], "outputs": ["https:127.0.0.1:9000"], "side_effects": ["notify:ops"],
     }

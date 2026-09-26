@@ -6,6 +6,7 @@ externals, CI plane). These handlers read it, snapshot it per revision, run the
 service's own ``--check`` on demand, and list what was recorded — for a local
 checkout that is never pushed as much as for a GitHub repository. Portal opens
 the model from the service node on the dataflow graph. Contract: docs/api/architecture.md.
+Log sinks a manifest declares are read by ``service.logs`` (methods_service.py).
 """
 from __future__ import annotations
 
@@ -39,6 +40,7 @@ def _(rid, params: dict) -> dict:
                 "model": manifest["model"],
                 "check_configured": bool(manifest.get("check")),
                 "runtime": manifest.get("runtime"),
+                "logs": store.resolved_logs(manifest),
                 "status": store.status_for(manifest),
             })
         # status carries each service's contract + conforming; the list names the
