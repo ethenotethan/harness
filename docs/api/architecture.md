@@ -257,11 +257,9 @@ Swift compiler until the Swift pack plus a project rule table reproduces its map
 | `architecture.describe` | `service` (graph id or bare id), `revision?` | `{service: {…}, revision, source, stored_at, summary, check, contract, model}` — without `revision` the current model is read now, validated against the contract and snapshotted; with it a stored snapshot is returned. **4032** model missing/invalid/unfetchable, **4033** does not conform to the contract (message names the problems), **4404** no such stored revision |
 | `architecture.check` | `service` | `{service, check: {status: passed\|failed\|unavailable, exit_code?, output?, reason?, revision, checked_at, duration_s, command}}` — runs the manifest's `check` in `root`, bounded at 300 s. A GitHub service or a manifest without `check` is `unavailable` with a `reason` |
 | `architecture.history` | `service` | `{service, source, latest, revisions: [{revision, source, stored_at, summary}], checks: [runs, newest first]}` |
-| `architecture.logs` | `service`, `sink?`, `lines?` (default 200, max 2000), `cursor?` | `{service, sink: {id, kind, label, path, exists, size_bytes, modified_at}, sinks: [...], lines: [str], cursor, truncated, rotated?, encoding: "utf-8-replace"}` — see [Log capture](#log-capture). **4040** unknown sink or none declared, **4041** the sink has no file yet, **4001** bad params |
-| `architecture.logs.follow` | `service`, `sink?`, `enabled` (default true), `cursor?` | `{service, following, sink, cursor}` when started (or the existing follower refreshed); `{service, following: false, sink, stopped}` when stopped |
-
-Common errors: **4029** missing `service`, **4030** unknown service; **5040–5045**
-internal, per method. All six run on the RPC pool (`_LONG_HANDLERS`).
+Common errors: **4029** missing `service`, **4030** unknown service; **5040–5043**
+internal, per method. All four run on the RPC pool (`_LONG_HANDLERS`). Reading a service's
+logs is `service.logs` — see [service-logs.md](service-logs.md).
 
 `summary` is derived from the model without the client loading it: schema version,
 component/file/line counts, map nodes/edges/flows, invariants with the violated ids,
@@ -337,34 +335,14 @@ Kinds: `file`, `directory` (the newest regular file by mtime is the active file)
 `runtime` binding with provider `launchd`). Ids are unique, paths absolute (`~` allowed),
 unknown kinds fail closed. A launchd sink whose plist cannot be read keeps the manifest valid
 and records a `problem`; the service is then reported non-conforming rather than vanishing.
-`architecture.describe` (`service.logs`) and `architecture.list` (`logs`) carry every sink
+`architecture.describe` (the `service.logs` field) and `architecture.list` (`logs`) carry every sink
 resolved at call time: `exists`, `size_bytes`, `modified_at` (a missing file is
 `exists: false`, never an error); the node annotation carries the sink ids (`status.logs`).
 
-**Reads are bounded and never leave the declared sinks.** Without a `cursor`,
-`architecture.logs` returns the last `lines` complete lines, scanning at most 4 MiB from the
-end, and `cursor` (the byte offset after the last complete line) to continue from. With a
-cursor it returns every complete line appended since (bounded by `lines`; `truncated: true`
-when more remain, the new cursor resumes exactly). A file shorter than the cursor was rotated
-or truncated: the read restarts from the tail with `rotated: true`. Bytes are decoded UTF-8
-with replacement; a partial trailing line is never returned until its newline arrives. A
-caller supplies a sink **id**; a path where an id is expected is simply an unknown sink (4040).
-
-**Follow.** `architecture.logs.follow {enabled: true}` starts a daemon thread that polls the
-sink every second and broadcasts the session-less event `architecture.log`:
-
-```jsonc
-{"service": "arch:demo", "sink": "app", "lines": ["…", "…"], "cursor": "18342"}
-{"service": "arch:demo", "sink": "app", "lines": ["fresh"], "cursor": "6", "rotated": true}
-{"service": "arch:demo", "sink": "app", "lines": [], "cursor": "18342", "stopped": "idle-timeout"}
-```
-
-Events are coalesced (at most 500 lines each) and sent only when complete new lines exist.
-One follower per `(service, sink)`: asking again refreshes its idle clock and returns the same
-cursor. It stops on `{enabled: false}` or after ten minutes without a client asking again;
-the final event carries `stopped` (`"stopped"` or `"idle-timeout"`). Followers are daemon
-threads; the gateway does not persist them across restarts, and there is no explicit
-shutdown hook — process exit ends them (the same posture as the wiki watcher).
+Reading and following the sinks is the `service.*` namespace (`service.logs`,
+`service.logs.follow`, event `service.log`), keyed by graph service id, so a launchd node's
+plist-derived stdout/stderr and a manifest's declared sinks resolve through one method — see
+[service-logs.md](service-logs.md).
 
 ## Snapshots and checks
 
@@ -373,11 +351,10 @@ Every revision read is stored under `~/.hermes/architecture/<id>/<revision>.json
 service; pruning removes the oldest **after the first**, so genesis is never lost. Check
 runs land in `checks.json` (20 newest).
 
-## Events
+## Event
 
-`architecture.log` — the follow stream, see [Log capture](#log-capture).
-
-`architecture.changed` — session-less, broadcast to every client:
+`architecture.changed` — session-less, broadcast to every client (the log follow stream is
+`service.log`, see [service-logs.md](service-logs.md)):
 
 ```jsonc
 {"service": "arch:portal", "revision": "62911e4…", "source": "local", "reason": "snapshot"}
@@ -389,20 +366,21 @@ Emitted when `architecture.describe` stores a revision it had not seen and when
 
 ## Capabilities
 
-`architecture.list`, `architecture.describe`, `architecture.check`, `architecture.history`,
-`architecture.logs`, `architecture.logs.follow` are advertised by `gateway.capabilities` in
-`capability_names`, and `architecture: {methods, events, contract}` names the methods, the
-events (`architecture.changed`, `architecture.log`) and the contract (see above) so a client
-can decode a served document knowing its major before the first call.
+`architecture.list`, `architecture.describe`, `architecture.check`, `architecture.history`
+are advertised by `gateway.capabilities` in `capability_names`, and
+`architecture: {methods, events, contract}` names the methods, the event
+(`architecture.changed`) and the contract (see above) so a client can decode a served
+document knowing its major before the first call. The log methods are advertised under
+`service: {methods, events}`.
 
 ## Security
 
 Manifests are operator-owned state under `HERMES_HOME`. Model paths are resolved inside
 the declared root and rejected when they escape it; models are capped at 16 MiB and must
 be JSON objects with a `schema_version` that conform to the contract. Check commands run only for local services, in
-the declared root, with output truncated to 4 000 characters. Log reads open only the paths
-the manifest declares (or the bound launchd plist names), scan at most 4 MiB, and return at
-most 2 000 lines. GitHub fetches go to
+the declared root, with output truncated to 4 000 characters. Log reads (`service.logs`) open only the
+paths the manifest declares or the bound launchd plist names, scan at most 4 MiB, and return
+at most 2 000 lines. GitHub fetches go to
 `raw.githubusercontent.com` over HTTPS and send `GITHUB_TOKEN`/`GH_TOKEN` when set.
 
 Implementation: `tui_gateway/architecture_contract.py` (the contract), `tui_gateway/architecture_store.py`

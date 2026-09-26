@@ -259,8 +259,8 @@ _LONG_HANDLERS = frozenset(
         "architecture.check",
         "architecture.history",
         # Log reads seek and scan up to 4 MiB of a sink; keep them off the reader thread.
-        "architecture.logs",
-        "architecture.logs.follow",
+        "service.logs",
+        "service.logs.follow",
         "projects.discover_repos",
         "projects.record_repos",
         "projects.for_cwd",
@@ -14473,6 +14473,7 @@ from . import (  # noqa: E402
     methods_harness as _methods_harness,
     methods_learning as _methods_learning,
     methods_architecture as _methods_architecture,
+    methods_service as _methods_service,
 )
 
 for _m in (
@@ -14484,6 +14485,7 @@ for _m in (
     _methods_harness,
     _methods_learning,
     _methods_architecture,
+    _methods_service,
 ):
     _m.register(sys.modules[__name__])
 del _m

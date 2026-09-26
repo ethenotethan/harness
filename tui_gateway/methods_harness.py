@@ -1110,10 +1110,15 @@ def _(rid, params: dict) -> dict:
     return _ok(rid, {
         "gateway_version": version,
         "architecture": {
-            "methods": ["architecture.list", "architecture.describe", "architecture.check", "architecture.history",
-                        "architecture.logs", "architecture.logs.follow"],
-            "events": ["architecture.changed", "architecture.log"],
+            "methods": ["architecture.list", "architecture.describe", "architecture.check", "architecture.history"],
+            "events": ["architecture.changed"],
             "contract": describe_contract(),
+        },
+        # Logs are a property of the running service (any graph service id), not of
+        # its architecture: their own namespace. See docs/api/service-logs.md.
+        "service": {
+            "methods": ["service.logs", "service.logs.follow"],
+            "events": ["service.log"],
         },
         "capability_names": [
             "artifact.set",
@@ -1148,8 +1153,8 @@ def _(rid, params: dict) -> dict:
             "architecture.describe",
             "architecture.check",
             "architecture.history",
-            "architecture.logs",
-            "architecture.logs.follow",
+            "service.logs",
+            "service.logs.follow",
         ],
     })
 

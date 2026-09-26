@@ -74,8 +74,7 @@ def test_installed_handlers_resolve_every_name_at_runtime(home, tmp_path):
     fake._profile_scoped = lambda fn: fn
     fake.logger = logging.getLogger("fake")
     ma.register(fake)
-    assert set(fake._methods) == {"architecture.list", "architecture.describe", "architecture.check", "architecture.history",
-                                  "architecture.logs", "architecture.logs.follow"}
+    assert set(fake._methods) == {"architecture.list", "architecture.describe", "architecture.check", "architecture.history"}
     listed = fake._methods["architecture.list"](1, {})
     assert listed["result"]["services"][0]["id"] == "arch:demo"
     described = fake._methods["architecture.describe"](2, {"service": "arch:demo"})
@@ -86,17 +85,11 @@ def test_installed_handlers_resolve_every_name_at_runtime(home, tmp_path):
     history = fake._methods["architecture.history"](5, {"service": "arch:demo"})
     assert history["result"]["latest"] == described["result"]["revision"]
     assert [e[1]["reason"] for e in events] == ["snapshot", "check"]
-    tailed = fake._methods["architecture.logs"](6, {"service": "arch:demo", "lines": 5})
-    assert tailed["result"]["lines"] == ["started"] and tailed["result"]["sink"]["id"] == "app"
-    followed = fake._methods["architecture.logs.follow"](7, {"service": "demo"})
-    assert followed["result"]["following"] is True
-    assert fake._methods["architecture.logs.follow"](8, {"service": "demo", "enabled": False})["result"]["stopped"] is True
 
 
 def test_registry_names_match_docs_and_capabilities():
     names = {name for name, _ in ma._registry._pending}
-    assert names == {"architecture.list", "architecture.describe", "architecture.check", "architecture.history",
-                     "architecture.logs", "architecture.logs.follow"}
+    assert names == {"architecture.list", "architecture.describe", "architecture.check", "architecture.history"}
     capabilities = open("tui_gateway/methods_harness.py", encoding="utf-8").read()
     for name in names:
         assert f'"{name}"' in capabilities, f"{name} not advertised by gateway.capabilities"
@@ -104,6 +97,7 @@ def test_registry_names_match_docs_and_capabilities():
     for name in names:
         assert f'"{name}",' in server, f"{name} is not pool-routed (_LONG_HANDLERS)"
     assert "methods_architecture as _methods_architecture" in server and "_methods_architecture," in server
+    assert "methods_service as _methods_service" in server and "_methods_service," in server
 
 
 def test_list_describe_history_and_check(home, tmp_path, handlers):

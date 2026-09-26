@@ -256,9 +256,9 @@ def normalize_manifest(doc: Any, stem: str, launchd_dirs: Optional[List[str]] = 
     # Log capture: declared sinks (validated here; enforced for local services
     # in conformance_for). A GitHub-only service has no runtime here, so its
     # sinks are dropped with a warning rather than pretending to be readable.
-    from tui_gateway import architecture_logs
+    from tui_gateway import service_logs
 
-    sinks = architecture_logs.normalize_log_sinks(doc.get("logs"), manifest.get("runtime"), launchd_dirs)
+    sinks = service_logs.normalize_log_sinks(doc.get("logs"), manifest.get("runtime"), launchd_dirs)
     if sinks and root is None:
         logger.warning("architecture manifest %s declares logs but has no local root; sinks ignored", service_id)
         sinks = []
@@ -579,9 +579,9 @@ def run_check(manifest: Dict[str, Any], runner: Optional[Callable[..., Any]] = N
 
 def resolved_logs(manifest: Dict[str, Any]) -> List[Dict[str, Any]]:
     """The manifest's log sinks as clients see them: existence, size, mtime."""
-    from tui_gateway import architecture_logs
+    from tui_gateway import service_logs
 
-    return architecture_logs.resolve_sinks(manifest)
+    return service_logs.resolve_sinks(manifest)
 
 
 def status_for(manifest: Dict[str, Any], home: Optional[str] = None) -> Dict[str, Any]:
@@ -620,14 +620,14 @@ def conformance_for(manifest: Dict[str, Any], snapshots: Optional[Dict[str, Any]
     and unread until ``architecture.describe`` fetches it. Fail-open: a read
     failure is a non-conformance with the reason; several reasons are joined."""
     if manifest.get("root"):
-        from tui_gateway import architecture_logs
+        from tui_gateway import service_logs
 
         problems: List[str] = []
         try:
             read_local_model(manifest)
         except ArchitectureError as exc:
             problems.append(exc.message)
-        capture = architecture_logs.capture_problem(manifest)
+        capture = service_logs.capture_problem(manifest)
         if capture:
             problems.append(capture)
         if problems:

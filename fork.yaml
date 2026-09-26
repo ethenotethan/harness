@@ -275,15 +275,18 @@ def:
         `architecture` annotation, and exposes its checkout as a browse root. Every model is
         validated against the `hermes.architecture` contract (vendored into every consumer,
         pinned by digest) before it is snapshotted or served. Log capture is part of the
-        standard for local services: the manifest declares log sinks, a local service without
-        one is non-conforming, and `architecture.logs` / `architecture.logs.follow` read only
-        those declared sinks (bounded tails, follow events).
+        standard for local services: the manifest declares log sinks and a local service
+        without one is non-conforming; `service.logs` / `service.logs.follow` (the `service.*`
+        namespace, keyed by graph service id) read only declared or launchd-plist-derived
+        sinks (bounded tails, follow events).
       globs:
         - "tui_gateway/architecture_contract.py"
         - "tui_gateway/architecture_store.py"
-        - "tui_gateway/architecture_logs.py"
+        - "tui_gateway/service_logs.py"
         - "tui_gateway/methods_architecture.py"
-        - "tests/gateway/test_architecture_logs.py"
+        - "tui_gateway/methods_service.py"
+        - "tests/gateway/test_service_logs.py"
+        - "docs/api/service-logs.md"
         - "docs/api/architecture-document-v1.schema.json"
         - "tests/gateway/architecture_fixtures.py"
         - "tests/gateway/test_architecture_contract.py"

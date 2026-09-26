@@ -1,10 +1,21 @@
-"""Log capture for architecture services: declared sinks, bounded tails, follow.
+"""Service logs: declared and derived sinks, bounded tails, follow — by graph id.
 
-Log capture is part of the architecture standard for LOCAL services (manifests
-with a ``root``): the manifest declares where the service's logs land, Harness
-enforces that at least one sink resolves, and ``architecture.logs`` reads only
-those declared paths — never a caller-supplied one. A GitHub-only service has
-no runtime here, so it is exempt.
+Logs are a property of the RUNNING service, so the RPCs live under ``service.*``
+and take the graph ids the cron dataflow graph uses: ``arch:<id>`` (an
+architecture manifest), ``launchd:<label>``, ``docker:<12>``, ``nomad:<job>``,
+``proc_<id>``. Sinks resolve per provider:
+
+  arch:<id>        the manifest's declared sinks; when the manifest binds a launchd
+                   runtime, its plist's StandardOutPath/StandardErrorPath are added as
+                   ``launchd_stdout``/``launchd_stderr`` unless already declared
+  launchd:<label>  the plist's paths as ``stdout``/``stderr``; if a manifest binds
+                   that label, its declared sinks are unioned in
+  docker/nomad/proc  not implemented yet (4042) — honest, never a fake empty list
+
+Enforcement stays with the architecture manifest: a LOCAL service (a manifest
+with a ``root``) must declare at least one resolvable sink or it is reported
+non-conforming (``architecture_store.conformance_for``). GitHub-only manifests
+are exempt (no runtime here).
 
 Sinks (``logs: [{id, kind, path?, label?}]`` in the manifest):
 
@@ -16,8 +27,9 @@ Sinks (``logs: [{id, kind, path?, label?}]`` in the manifest):
 Reads are bounded: a tail scans at most ``TAIL_SCAN_BYTES`` from the end and
 returns at most ``MAX_LINES`` lines; a cursor read returns only complete lines
 appended since a byte offset. Following polls a sink from a daemon thread and
-broadcasts ``architecture.log`` events with the new lines, coalesced, stopping
-after ``FOLLOW_IDLE_S`` without a client asking again or when told to stop.
+broadcasts ``service.log`` events with the new lines, coalesced, stopping after
+``FOLLOW_IDLE_S`` without a client asking again or when told to stop. Only
+declared or plist-derived paths are ever opened — never a caller-supplied one.
 """
 from __future__ import annotations
 
@@ -42,6 +54,8 @@ FOLLOW_INTERVAL_S = 1.0
 FOLLOW_IDLE_S = 600.0
 MAX_EVENT_LINES = 500
 NO_CAPTURE_PROBLEM = "no log capture declared: add a logs sink to the manifest"
+EVENT = "service.log"
+UNSUPPORTED_PROVIDER_PROBLEM = "log capture is not implemented for this provider yet"
 
 _LAUNCHD_DIRS: Tuple[str, ...] = ("~/Library/LaunchAgents", "/Library/LaunchAgents", "/Library/LaunchDaemons")
 
@@ -198,18 +212,76 @@ def resolve_sinks(manifest: Dict[str, Any]) -> List[Dict[str, Any]]:
     return [resolve_sink(sink) for sink in manifest.get("logs") or []]
 
 
-def select_sink(manifest: Dict[str, Any], sink_id: Optional[str]) -> Dict[str, Any]:
-    """The declared sink to read: by id, or the first declared one. Raises
-    LogError 4040 when the id is unknown or nothing is declared."""
-    sinks = manifest.get("logs") or []
+def select_sink(sinks: List[Dict[str, Any]], sink_id: Optional[str], service: str) -> Dict[str, Any]:
+    """The sink to read: by id, or the first one. Raises LogError 4040 when the
+    id is unknown or the service has no sinks at all."""
     if not sinks:
-        raise LogError(4040, f"{manifest['id']}: {NO_CAPTURE_PROBLEM}")
+        raise LogError(4040, f"{service}: {NO_CAPTURE_PROBLEM}")
     if sink_id is None:
         return sinks[0]
     for sink in sinks:
         if sink["id"] == sink_id:
             return sink
     raise LogError(4040, f"unknown log sink {sink_id!r}; declared: {', '.join(s['id'] for s in sinks)}")
+
+
+# ── Resolution by graph id ───────────────────────────────────────────────────
+
+
+def launchd_sinks(label: str, launchd_dirs: Optional[List[str]] = None,
+                  ids: Tuple[str, str] = ("stdout", "stderr")) -> List[Dict[str, Any]]:
+    """The sinks a launchd label's plist names (StandardOutPath → ids[0],
+    StandardErrorPath → ids[1]). Only paths the plist actually declares."""
+    sinks: List[Dict[str, Any]] = []
+    for sink_id, (kind, key) in zip(ids, LAUNCHD_KINDS.items()):
+        path, _problem = launchd_log_path(label, key, launchd_dirs)
+        if path:
+            sinks.append({"id": sink_id, "kind": kind, "label": f"launchd {key}", "path": path})
+    return sinks
+
+
+def _union(primary: List[Dict[str, Any]], extra: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """``primary`` plus every ``extra`` sink whose id and (kind, path) are new."""
+    seen_ids = {s["id"] for s in primary}
+    seen_paths = {(s["kind"], s.get("path")) for s in primary}
+    merged = list(primary)
+    for sink in extra:
+        if sink["id"] in seen_ids or (sink["kind"], sink.get("path")) in seen_paths:
+            continue
+        merged.append(sink)
+        seen_ids.add(sink["id"])
+        seen_paths.add((sink["kind"], sink.get("path")))
+    return merged
+
+
+def service_sinks(graph_id: str, home: Optional[str] = None, launchd_dirs: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    """Every sink a graph service id resolves to, per provider (see module doc).
+    LogError 4030 for an unknown ``arch:`` service, 4042 for a provider without
+    log capture, 4001 for an id that is not a graph service id."""
+    from tui_gateway import architecture_store as store
+
+    if graph_id.startswith(store.ID_PREFIX):
+        manifest = store.load_manifest(graph_id, home)
+        if manifest is None:
+            raise LogError(4030, f"unknown service: {graph_id}")
+        sinks = list(manifest.get("logs") or [])
+        runtime = manifest.get("runtime") or {}
+        if runtime.get("provider") == "launchd":
+            sinks = _union(sinks, launchd_sinks(str(runtime["id"]), launchd_dirs, ids=("launchd_stdout", "launchd_stderr")))
+        return sinks
+    if graph_id.startswith("launchd:"):
+        label = graph_id[len("launchd:"):]
+        if not label:
+            raise LogError(4001, "launchd service id needs a label")
+        sinks = launchd_sinks(label, launchd_dirs)
+        for manifest in store.list_manifests(home):
+            runtime = manifest.get("runtime") or {}
+            if runtime.get("graph_id") == graph_id:
+                sinks = _union(sinks, list(manifest.get("logs") or []))
+        return sinks
+    if graph_id.startswith(("docker:", "nomad:", "proc_")):
+        raise LogError(4042, f"{graph_id}: {UNSUPPORTED_PROVIDER_PROBLEM}")
+    raise LogError(4001, f"{graph_id!r} is not a graph service id (arch:, launchd:, docker:, nomad:, proc_)")
 
 
 # ── Bounded reads ────────────────────────────────────────────────────────────
@@ -299,10 +371,10 @@ def parse_cursor(value: Any) -> Optional[int]:
     return cursor
 
 
-def read_logs(manifest: Dict[str, Any], sink_id: Optional[str], lines: int, cursor: Optional[int]) -> Dict[str, Any]:
-    """``architecture.logs``: a bounded tail or the lines since a cursor, from a
-    declared sink only. LogError 4040 unknown sink, 4041 sink not present."""
-    sink = select_sink(manifest, sink_id)
+def read_logs(sinks: List[Dict[str, Any]], service: str, sink_id: Optional[str], lines: int, cursor: Optional[int]) -> Dict[str, Any]:
+    """``service.logs``: a bounded tail or the lines since a cursor, from one of
+    the service's sinks only. LogError 4040 unknown sink, 4041 sink not present."""
+    sink = select_sink(sinks, sink_id, service)
     target = active_file(sink)
     if target is None or not target.is_file():
         raise LogError(4041, f"log sink {sink['id']!r} has no file yet" + (f" ({sink['problem']})" if sink.get("problem") else ""))
@@ -313,7 +385,7 @@ def read_logs(manifest: Dict[str, Any], sink_id: Optional[str], lines: int, curs
     result.pop("scanned_from", None)
     resolved = resolve_sink(sink)
     resolved["path"] = str(target)
-    result.update({"sink": resolved, "sinks": resolve_sinks(manifest), "encoding": "utf-8-replace"})
+    result.update({"service": service, "sink": resolved, "sinks": [resolve_sink(s) for s in sinks], "encoding": "utf-8-replace"})
     return result
 
 
@@ -363,14 +435,14 @@ class Follower:
         payload: Dict[str, Any] = {"service": self.service, "sink": self.sink["id"], "lines": result["lines"], "cursor": result["cursor"]}
         if result.get("rotated"):
             payload["rotated"] = True
-        self.broadcast("architecture.log", payload)
+        self.broadcast(EVENT, payload)
         return payload
 
     def stop(self, reason: str) -> None:
         if self.stop_requested.is_set():
             return
         self.stop_requested.set()
-        self.broadcast("architecture.log", {"service": self.service, "sink": self.sink["id"], "lines": [], "cursor": str(self.cursor), "stopped": reason})
+        self.broadcast(EVENT, {"service": self.service, "sink": self.sink["id"], "lines": [], "cursor": str(self.cursor), "stopped": reason})
 
     def run(self, interval: float = FOLLOW_INTERVAL_S, sleep: Callable[[float], None] = time.sleep) -> None:
         """The polling loop: until stopped or idle for FOLLOW_IDLE_S."""
@@ -396,14 +468,14 @@ def _forget(follower: Follower) -> None:
             del _followers[follower.key]
 
 
-def start_follow(manifest: Dict[str, Any], service: str, sink_id: Optional[str],
+def start_follow(sinks: List[Dict[str, Any]], service: str, sink_id: Optional[str],
                  broadcast: Callable[[str, Dict[str, Any]], None], cursor: Optional[int] = None,
                  spawn: bool = True, clock: Callable[[], float] = time.monotonic) -> Follower:
-    """Follow a declared sink from its current end (or ``cursor``). One follower
-    per (service, sink): asking again refreshes the idle clock and returns the
-    existing follower. ``spawn=False`` creates without a thread (tests drive
-    ``poll_once`` themselves)."""
-    sink = select_sink(manifest, sink_id)
+    """Follow one of the service's sinks from its current end (or ``cursor``).
+    One follower per (service, sink): asking again refreshes the idle clock and
+    returns the existing follower. ``spawn=False`` creates without a thread
+    (tests drive ``poll_once`` themselves)."""
+    sink = select_sink(sinks, sink_id, service)
     target = active_file(sink)
     if target is None or not target.is_file():
         raise LogError(4041, f"log sink {sink['id']!r} has no file yet; nothing to follow")
@@ -422,13 +494,10 @@ def start_follow(manifest: Dict[str, Any], service: str, sink_id: Optional[str],
     return follower
 
 
-def stop_follow(service: str, sink_id: Optional[str], manifest: Optional[Dict[str, Any]] = None) -> bool:
+def stop_follow(service: str, sink_id: str) -> bool:
     """Stop following; True when a follower existed."""
-    if sink_id is None and manifest is not None:
-        sinks = manifest.get("logs") or []
-        sink_id = sinks[0]["id"] if sinks else None
     with _followers_lock:
-        follower = _followers.pop((service, sink_id), None) if sink_id is not None else None
+        follower = _followers.pop((service, sink_id), None)
     if follower is None:
         return False
     follower.stop("stopped")
