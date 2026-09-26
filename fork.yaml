@@ -282,6 +282,7 @@ def:
         - "docs/api/architecture-document-v1.schema.json"
         - "tests/gateway/architecture_fixtures.py"
         - "tests/gateway/test_architecture_contract.py"
+        - "tests/gateway/test_architecture_history.py"
         - "tools/architecture_services.py"
         - "tools/service_graph.py"
         - "tests/cron/test_architecture_binding.py"

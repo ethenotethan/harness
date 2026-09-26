@@ -258,6 +258,7 @@ _LONG_HANDLERS = frozenset(
         "architecture.describe",
         "architecture.check",
         "architecture.history",
+        "architecture.diff",
         "projects.discover_repos",
         "projects.record_repos",
         "projects.for_cwd",

@@ -644,5 +644,265 @@ def describe(manifest: Dict[str, Any], revision: Optional[str] = None, home: Opt
         "summary": entry.get("summary") or summarize_model(model),
         "check": last_check(service_id, home),
         "contract": contract.describe_contract(),
+        # Whether this is the newest stored revision, so a client viewing an older
+        # snapshot can say so (architecture.history lists them all).
+        "is_latest": entry["revision"] == list_snapshots(service_id, home).get("latest"),
         "model": model,
     }
+
+
+# ── Revision history ─────────────────────────────────────────────────────────
+#
+# A snapshot per revision is what the store already keeps; history joins those
+# snapshots to the commits behind them (local checkouts only) and says which one
+# the checkout is at now. "Deployed" here means exactly that — the revision the
+# root is checked out at — not proof that a process restarted; a runtime
+# provider that can report a pid does so under ``runtime``.
+
+MAX_HISTORY_COMMITS = 50
+MAX_DIFF_STAT = 500
+WORKING_TREE_REVISION = "working-tree"
+_GIT_LOG_FORMAT = "%H%x1f%an%x1f%aI%x1f%s"
+
+GitRunner = Callable[..., str]
+
+
+def _run_git(root: str, *args: str) -> str:
+    """``git <args>`` in ``root``; empty string on any failure (fail-open)."""
+    try:
+        from tui_gateway.git_probe import run_git
+
+        return run_git(root, *args) or ""
+    except Exception:  # pragma: no cover - probe is fail-open by contract
+        return ""
+
+
+def _is_git_revision(revision: Optional[str]) -> bool:
+    return bool(revision) and revision != WORKING_TREE_REVISION and not str(revision).startswith("sha256:")
+
+
+def _parse_commits(text: str) -> List[Dict[str, str]]:
+    commits: List[Dict[str, str]] = []
+    for line in (text or "").splitlines():
+        parts = line.split("\x1f")
+        if len(parts) != 4 or not parts[0].strip():
+            continue
+        commits.append({"sha": parts[0].strip(), "author": parts[1], "date": parts[2], "subject": parts[3]})
+    return commits
+
+
+def commit_info(root: Optional[str], revision: Optional[str], git: Optional[GitRunner] = None) -> Optional[Dict[str, str]]:
+    """``{sha, author, date, subject}`` for one revision of a local root, or None
+    when there is no root, the revision is not a git commit, or git fails."""
+    if not root or not _is_git_revision(revision):
+        return None
+    commits = _parse_commits((git or _run_git)(root, "log", "-1", f"--format={_GIT_LOG_FORMAT}", str(revision)))
+    return commits[0] if commits else None
+
+
+def commits_between(root: Optional[str], previous: Optional[str], revision: Optional[str],
+                    git: Optional[GitRunner] = None) -> Optional[List[Dict[str, str]]]:
+    """The commits ``previous..revision`` oldest first, bounded at
+    ``MAX_HISTORY_COMMITS``; None when either end is not a git commit."""
+    if not root or not _is_git_revision(previous) or not _is_git_revision(revision):
+        return None
+    text = (git or _run_git)(root, "log", "--reverse", f"--max-count={MAX_HISTORY_COMMITS}",
+                             f"--format={_GIT_LOG_FORMAT}", f"{previous}..{revision}")
+    return _parse_commits(text)
+
+
+def git_numstat(root: str, previous: str, revision: str, git: Optional[GitRunner] = None) -> Dict[str, Any]:
+    """``git diff --numstat previous..revision`` as ``{stat: [...], truncated}``;
+    binary files carry null counts."""
+    text = (git or _run_git)(root, "diff", "--numstat", f"{previous}..{revision}")
+    stat: List[Dict[str, Any]] = []
+    for line in (text or "").splitlines():
+        parts = line.split("\t")
+        if len(parts) != 3:
+            continue
+        additions = int(parts[0]) if parts[0].isdigit() else None
+        deletions = int(parts[1]) if parts[1].isdigit() else None
+        stat.append({"path": parts[2], "additions": additions, "deletions": deletions})
+    truncated = len(stat) > MAX_DIFF_STAT
+    return {"stat": stat[:MAX_DIFF_STAT], "truncated": truncated}
+
+
+def runtime_info(manifest: Dict[str, Any], runner: Optional[Callable[[List[str]], str]] = None) -> Optional[Dict[str, Any]]:
+    """What the runtime provider can say about the bound service: provider and
+    graph id always; for launchd the running pid when ``launchctl print`` reports
+    one (fail-open). No provider reports a start time, so ``started_at`` is
+    absent rather than guessed."""
+    binding = manifest.get("runtime")
+    if not isinstance(binding, dict):
+        return None
+    info: Dict[str, Any] = {"provider": binding.get("provider"), "graph_id": binding.get("graph_id")}
+    if binding.get("provider") == "launchd":
+        try:
+            from tools.launchd_services import _default_runner, _uid
+
+            out = (runner or _default_runner)(["launchctl", "print", f"gui/{_uid()}/{binding.get('id')}"])
+            for line in out.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("pid ="):
+                    value = stripped.split("=", 1)[1].strip()
+                    if value.isdigit():
+                        info["pid"] = int(value)
+                    break
+        except Exception:
+            pass
+    return info
+
+
+def history(manifest: Dict[str, Any], home: Optional[str] = None, git: Optional[GitRunner] = None,
+            runtime_runner: Optional[Callable[[List[str]], str]] = None) -> Dict[str, Any]:
+    """Stored revisions (genesis first, newest last) with the commit behind each,
+    the commits since the previous snapshot, and which one the checkout is at."""
+    service_id = manifest["id"]
+    root = manifest.get("root")
+    snapshots = list_snapshots(service_id, home)
+    revisions: List[Dict[str, Any]] = [dict(r) for r in snapshots.get("revisions") or []]
+    head = local_revision(manifest, (lambda r: (git or _run_git)(r, "rev-parse", "HEAD")) if root else None) if root else ""
+    deployed_index = None
+    for index, entry in enumerate(revisions):
+        if root and head and entry.get("revision") == head:
+            deployed_index = index  # the newest match wins
+    previous: Optional[str] = None
+    for index, entry in enumerate(revisions):
+        revision = str(entry.get("revision") or "")
+        if root:
+            commit = commit_info(root, revision, git)
+            if commit:
+                entry["commit"] = commit
+            since = commits_between(root, previous, revision, git)
+            if since is not None:
+                entry["commits_since_previous"] = since
+        entry["deployed"] = index == deployed_index
+        if entry["deployed"]:
+            entry["deployed_at"] = entry.get("stored_at")
+        previous = revision
+    result: Dict[str, Any] = {
+        "service": graph_id(manifest),
+        "source": source_of(manifest),
+        "latest": snapshots.get("latest"),
+        "head": head or None,
+        "revisions": revisions,
+        "checks": list_checks(service_id, home),
+    }
+    runtime = runtime_info(manifest, runtime_runner)
+    if runtime is not None:
+        result["runtime"] = runtime
+    return result
+
+
+def _node_key(node: Dict[str, Any]) -> str:
+    return str(node.get("history_key") or node.get("id") or "")
+
+
+def _index_nodes(model: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    interplay = model.get("interplay") if isinstance(model.get("interplay"), dict) else {}
+    return {_node_key(n): n for n in interplay.get("nodes") or [] if isinstance(n, dict) and _node_key(n)}
+
+
+def _edge_keys(model: Dict[str, Any]) -> Dict[tuple, Dict[str, Any]]:
+    interplay = model.get("interplay") if isinstance(model.get("interplay"), dict) else {}
+    by_id = {str(n.get("id")): _node_key(n) for n in interplay.get("nodes") or [] if isinstance(n, dict)}
+    edges: Dict[tuple, Dict[str, Any]] = {}
+    for edge in interplay.get("edges") or []:
+        if not isinstance(edge, dict):
+            continue
+        source = by_id.get(str(edge.get("source")), str(edge.get("source")))
+        target = by_id.get(str(edge.get("target")), str(edge.get("target")))
+        relation = str(edge.get("relation") or "")
+        edges[(source, target, relation)] = {"source": source, "target": target, "relation": relation, "class": edge.get("class")}
+    return edges
+
+
+def _node_record(key: str, node: Dict[str, Any]) -> Dict[str, Any]:
+    return {"id": node.get("id"), "history_key": key, "kind": node.get("kind"), "label": node.get("label"), "component": node.get("component")}
+
+
+def diff_models(before: Dict[str, Any], after: Dict[str, Any]) -> Dict[str, Any]:
+    """What changed between two documents, by stable identity: nodes by history
+    key (a rename is not churn), edges by (source key, target key, relation),
+    invariants by id, files by path, gate jobs and ratchets by id."""
+    nodes_before, nodes_after = _index_nodes(before), _index_nodes(after)
+    edges_before, edges_after = _edge_keys(before), _edge_keys(after)
+
+    def invariants(model: Dict[str, Any]) -> Dict[str, str]:
+        interplay = model.get("interplay") if isinstance(model.get("interplay"), dict) else {}
+        return {str(i.get("id")): str(i.get("status") or "") for i in interplay.get("invariants") or [] if isinstance(i, dict) and i.get("id")}
+
+    def files(model: Dict[str, Any]) -> Dict[str, int]:
+        extraction = model.get("extraction") if isinstance(model.get("extraction"), dict) else {}
+        return {str(f.get("path")): int(f.get("line_count") or 0) for f in extraction.get("files") or [] if isinstance(f, dict) and f.get("path")}
+
+    def ids(model: Dict[str, Any], key: str) -> set:
+        ci = model.get("ci") if isinstance(model.get("ci"), dict) else {}
+        return {str(item.get("id")) for item in ci.get(key) or [] if isinstance(item, dict) and item.get("id")}
+
+    inv_before, inv_after = invariants(before), invariants(after)
+    files_before, files_after = files(before), files(after)
+    return {
+        "nodes": {
+            "added": [_node_record(k, nodes_after[k]) for k in sorted(set(nodes_after) - set(nodes_before))],
+            "removed": [_node_record(k, nodes_before[k]) for k in sorted(set(nodes_before) - set(nodes_after))],
+        },
+        "edges": {
+            "added": [edges_after[k] for k in sorted(set(edges_after) - set(edges_before))],
+            "removed": [edges_before[k] for k in sorted(set(edges_before) - set(edges_after))],
+        },
+        "invariants": {
+            "added": sorted(set(inv_after) - set(inv_before)),
+            "removed": sorted(set(inv_before) - set(inv_after)),
+            "changed": [{"id": i, "from": inv_before[i], "to": inv_after[i]} for i in sorted(set(inv_before) & set(inv_after)) if inv_before[i] != inv_after[i]],
+        },
+        "files": {
+            "added": sorted(set(files_after) - set(files_before)),
+            "removed": sorted(set(files_before) - set(files_after)),
+            "changed": [{"path": p, "lines_from": files_before[p], "lines_to": files_after[p]}
+                        for p in sorted(set(files_before) & set(files_after)) if files_before[p] != files_after[p]],
+        },
+        "gates": {
+            "jobs_added": sorted(ids(after, "jobs") - ids(before, "jobs")),
+            "jobs_removed": sorted(ids(before, "jobs") - ids(after, "jobs")),
+            "ratchets_added": sorted(ids(after, "ratchets") - ids(before, "ratchets")),
+            "ratchets_removed": sorted(ids(before, "ratchets") - ids(after, "ratchets")),
+        },
+        "summary": {"from": summarize_model(before), "to": summarize_model(after)},
+    }
+
+
+def diff(manifest: Dict[str, Any], from_revision: Optional[str] = None, to_revision: Optional[str] = None,
+         home: Optional[str] = None, git: Optional[GitRunner] = None) -> Dict[str, Any]:
+    """The structural diff between two stored revisions; ``to`` defaults to the
+    latest snapshot and ``from`` to the one stored before it. 4404 when a
+    revision is not stored or there is nothing before ``to``. For a local root
+    the commits and ``git diff --numstat`` between the two are attached (fail-open)."""
+    service_id = manifest["id"]
+    snapshots = list_snapshots(service_id, home)
+    order = [str(r.get("revision")) for r in snapshots.get("revisions") or []]
+    to_rev = to_revision or snapshots.get("latest")
+    if not to_rev or to_rev not in order:
+        raise ArchitectureError(4404, f"no stored revision {to_rev or '(latest)'} for {service_id}")
+    if from_revision:
+        from_rev = from_revision
+    else:
+        position = order.index(to_rev)
+        if position == 0:
+            raise ArchitectureError(4404, f"no stored revision before {to_rev} for {service_id}")
+        from_rev = order[position - 1]
+    before = load_snapshot(service_id, from_rev, home)
+    after = load_snapshot(service_id, to_rev, home)
+    if before is None:
+        raise ArchitectureError(4404, f"no stored revision {from_rev} for {service_id}")
+    if after is None:
+        raise ArchitectureError(4404, f"no stored revision {to_rev} for {service_id}")
+    result: Dict[str, Any] = {"service": graph_id(manifest), "from": from_rev, "to": to_rev}
+    result.update(diff_models(before, after))
+    root = manifest.get("root")
+    if root and _is_git_revision(from_rev) and _is_git_revision(to_rev):
+        commits = commits_between(root, from_rev, to_rev, git) or []
+        numstat = git_numstat(root, from_rev, to_rev, git)
+        result["git"] = {"commits": commits, "stat": numstat["stat"],
+                         "truncated": numstat["truncated"] or len(commits) >= MAX_HISTORY_COMMITS}
+    return result

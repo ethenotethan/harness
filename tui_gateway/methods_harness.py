@@ -1110,7 +1110,7 @@ def _(rid, params: dict) -> dict:
     return _ok(rid, {
         "gateway_version": version,
         "architecture": {
-            "methods": ["architecture.list", "architecture.describe", "architecture.check", "architecture.history"],
+            "methods": ["architecture.list", "architecture.describe", "architecture.check", "architecture.history", "architecture.diff"],
             "contract": describe_contract(),
         },
         "capability_names": [
@@ -1146,6 +1146,7 @@ def _(rid, params: dict) -> dict:
             "architecture.describe",
             "architecture.check",
             "architecture.history",
+            "architecture.diff",
         ],
     })
 

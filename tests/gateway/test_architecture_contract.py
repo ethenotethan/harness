@@ -194,7 +194,7 @@ def test_handlers_carry_the_contract_and_surface_4033(home, tmp_path):
 def test_capabilities_advertise_the_contract():
     pending = _stub(mh)
     result = pending["gateway.capabilities"](1, {})["result"]
-    assert result["architecture"]["methods"] == ["architecture.list", "architecture.describe", "architecture.check", "architecture.history"]
+    assert result["architecture"]["methods"] == ["architecture.list", "architecture.describe", "architecture.check", "architecture.history", "architecture.diff"]
     assert result["architecture"]["contract"] == contract.describe_contract()
     for name in result["architecture"]["methods"]:
         assert name in result["capability_names"], "the flat list old clients read is unchanged"
