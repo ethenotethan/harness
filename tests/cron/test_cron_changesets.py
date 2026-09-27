@@ -344,7 +344,136 @@ class TestRecordingGate:
         # Trimming keeps the newest, and the oldest survivor's parent snapshot is
         # gone — which is exactly the case cron.changeset_diff must not paper
         # over (see TestReading.test_a_trimmed_parent_has_no_before).
-        assert rows[-1]["summary"].endswith("collect")
+        assert rows[-1]["summary"].startswith("updated collect")
+
+
+# =============================================================================
+# Definitions (what a job is, not only how it is wired)
+# =============================================================================
+
+
+class TestDefinitionHistory:
+    def test_a_prompt_edit_moves_no_graph_digest_but_records_a_row(self, cron_env):
+        from cron.jobs import create_job, update_job
+
+        job = create_job(prompt="collect", schedule="every 1h")
+        before = _rows()[-1]
+        update_job(job["id"], {"prompt": "collect, then summarise"})
+        rows = _rows()
+        assert len(rows) == 2
+        row = rows[-1]
+        # The wiring did not change; the definition did.
+        assert row["digest"] == before["digest"]
+        assert row["definition_digest"] != before["definition_digest"]
+        assert row["action"] == "update"
+        assert row["job"] == job["id"]
+        assert row["summary"] == "updated collect (prompt)"
+        assert row["changes"] == [
+            {"job": job["id"], "field": "prompt", "before": "collect", "after": "collect, then summarise"}
+        ]
+
+    def test_every_definition_field_is_tracked_and_runtime_is_not(self, cron_env):
+        from cron.changesets import DEFINITION_FIELDS, definition_form
+        from cron.jobs import create_job, update_job
+
+        job = create_job(prompt="collect", schedule="every 1h", model="gpt-x", skills=["notes"])
+        update_job(job["id"], {"model": "claude-y", "skills": ["notes", "search"], "workdir": None})
+        row = _rows()[-1]
+        assert sorted(change["field"] for change in row["changes"]) == ["model", "skills"]
+        for change in row["changes"]:
+            if change["field"] == "model":
+                assert (change["before"], change["after"]) == ("gpt-x", "claude-y")
+        form = definition_form({**job, "last_run_at": "2026-01-01T00:00:00", "next_run_at": "x", "last_status": "ok", "state": "scheduled"})
+        assert set(form) <= set(DEFINITION_FIELDS)
+        for runtime in ("last_run_at", "next_run_at", "last_status", "state", "created_at", "id"):
+            assert runtime not in form
+
+    def test_runtime_only_saves_still_record_nothing(self, cron_env):
+        from cron.jobs import _save_jobs_unlocked, create_job, load_jobs
+
+        create_job(prompt="collect", schedule="every 1h")
+        count = len(_rows())
+        jobs = load_jobs()
+        jobs[0]["last_run_at"] = "2026-06-01T00:00:00+00:00"
+        jobs[0]["last_status"] = "ok"
+        jobs[0]["next_run_at"] = "2026-06-01T01:00:00+00:00"
+        from cron.jobs import _jobs_lock
+        with _jobs_lock():
+            _save_jobs_unlocked(jobs)
+        assert len(_rows()) == count
+
+    def test_a_job_has_its_own_revision_history(self, cron_env):
+        from cron.changesets import read_job_revisions
+        from cron.jobs import create_job, remove_job, update_job
+
+        first = create_job(prompt="collect", schedule="every 1h")
+        job = create_job(prompt="report", schedule="every 6h")
+        update_job(job["id"], {"prompt": "report daily", "schedule": "every 24h"})
+        update_job(first["id"], {"schedule": "every 2h"})  # another job's edit is not in this history
+        update_job(job["id"], {"model": "claude-y"})
+        remove_job(job["id"])
+
+        page = read_job_revisions(job["id"])
+        assert page["job_id"] == job["id"]
+        assert page["total"] == 4
+        actions = [entry["action"] for entry in page["revisions"]]
+        assert actions == ["delete", "update", "update", "create"]
+        newest, model_edit, first_edit, created = page["revisions"]
+        assert created["definition"]["prompt"] == "report"
+        assert [c["field"] for c in created["changes"]] and all(c["before"] is None for c in created["changes"])
+        assert sorted(c["field"] for c in first_edit["changes"]) == ["prompt", "schedule"]
+        from cron.jobs import get_job as _get
+        assert isinstance(first_edit["definition"]["schedule"], str)
+        assert first_edit["definition"]["schedule"] == _rows()[2]["definitions"][job["id"]]["schedule"]
+        assert first_edit["definition"]["schedule"] != created["definition"]["schedule"]
+        assert model_edit["changes"] == [{"field": "model", "before": None, "after": "claude-y"}]
+        assert newest["definition"] is None
+        assert {c["field"] for c in newest["changes"]} >= {"prompt", "schedule"}
+        assert all(entry["definition_recorded"] for entry in page["revisions"])
+        # Paging counts the whole history, not the page.
+        short = read_job_revisions(job["id"], limit=2, offset=1)
+        assert short["total"] == 4 and [e["action"] for e in short["revisions"]] == ["update", "update"]
+        # The other job's history knows nothing of these edits.
+        other = read_job_revisions(first["id"])
+        assert [e["action"] for e in other["revisions"]] == ["update", "baseline"]
+
+    def test_the_page_names_changed_fields_per_job(self, cron_env):
+        from cron.changesets import read_changesets
+        from cron.jobs import create_job, update_job
+
+        job = create_job(prompt="collect", schedule="every 1h")
+        update_job(job["id"], {"prompt": "collect more", "deliver": "telegram"})
+        newest = read_changesets(limit=1)["changesets"][0]
+        assert newest["changed_fields"] == {job["id"]: ["deliver", "prompt"]}
+        assert "definitions" not in newest and "changes" not in newest
+
+    def test_a_log_written_before_definitions_upgrades_honestly(self, cron_env):
+        import cron.changesets as changesets_mod
+        from cron.changesets import _read_rows, _write_rows, read_job_revisions
+        from cron.jobs import create_job, update_job
+
+        job = create_job(prompt="collect", schedule="every 1h")
+        # Strip the definition fields the way an older harness would have written them.
+        rows = _read_rows()
+        for row in rows:
+            row.pop("definitions", None)
+            row.pop("definition_digest", None)
+            row.pop("changes", None)
+        _write_rows(rows)
+        changesets_mod.changeset_head_path().write_text(rows[-1]["digest"] + "\n", encoding="utf-8")
+        # A prompt edit does not move the graph digest: the first row after the
+        # upgrade says definitions began, rather than claiming a diff it cannot see.
+        update_job(job["id"], {"prompt": "collect more"})
+        newest = _read_rows()[-1]
+        assert newest["digest"] == rows[-1]["digest"]
+        assert newest["summary"].startswith("definitions recorded")
+        assert newest["changes"] == []
+        history = read_job_revisions(job["id"])
+        assert [e["definition_recorded"] for e in history["revisions"]] == [True, False]
+        # From here on the history is a normal one.
+        update_job(job["id"], {"prompt": "collect even more"})
+        newest = _read_rows()[-1]
+        assert newest["changes"][0]["field"] == "prompt"
 
 
 # =============================================================================
@@ -518,7 +647,9 @@ class TestReading:
         newest = read_changesets(limit=1)["changesets"][0]
         payload = read_changeset_diff(newest["id"])
 
-        assert set(payload) == {"before", "after"}
+        assert set(payload) == {"before", "after", "definitions_before", "definitions_after", "changes"}
+        assert payload["definitions_before"][job["id"]]["schedule"] != payload["definitions_after"][job["id"]]["schedule"]
+        assert [change["field"] for change in payload["changes"]] == ["schedule"]
 
         def _schedule(graph):
             return {
