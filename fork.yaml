@@ -204,6 +204,15 @@ def:
             - "tui_gateway/artifact_store.py"
             - "tools/artifact_tool.py"
             - "tests/gateway/test_artifact_store.py"
+        - title: "Cron-driven writes self-declare as maintainers"
+          description: |
+            `HERMES_CRON_JOB_ID` (a ContextVar set per job run in the scheduler, so parallel
+            jobs never clobber each other) lets a write stamp `updated_by: cron:<jobId>` and
+            merge itself into the artifact's top-level `maintainers` — the provenance the
+            runtime graph and `artifact.refresh` consume.
+          globs:
+            - "cron/scheduler.py"
+            - "gateway/session_context.py"
         - title: "Intents: action registry, plugin loader, invocation ledger"
           description: |
             An action registry with invoke/confirm RPCs advertised through `gateway.capabilities`,
