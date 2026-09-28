@@ -213,6 +213,7 @@ def:
           globs:
             - "cron/scheduler.py"
             - "gateway/session_context.py"
+            - "tools/environments/base.py"
         - title: "Intents: action registry, plugin loader, invocation ledger"
           description: |
             An action registry with invoke/confirm RPCs advertised through `gateway.capabilities`,
