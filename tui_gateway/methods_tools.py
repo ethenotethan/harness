@@ -1659,6 +1659,28 @@ def _(rid, params: dict) -> dict:
                 )
             if action in {"remove", "pause", "resume"}:
                 return _ok(rid, json.loads(cronjob(action=action, job_id=jid)))
+            if action == "revisions":
+                # One job's definition history: which revision created it, each
+                # field-level change since (prompt, model, schedule, …), who made
+                # it, and the definition as it stood. Read from the same
+                # changeset log as `cron.changesets`, so the two cannot disagree.
+                if not jid:
+                    return _err(rid, 4001, "name (job id) is required")
+                from cron.changesets import ensure_baseline, read_job_revisions
+                from cron.jobs import get_job, resolve_job_ref
+
+                job = get_job(jid) or resolve_job_ref(jid)
+                resolved = job["id"] if job else jid
+                ensure_baseline()
+                try:
+                    limit = max(1, min(int(params.get("limit") or 50), 200))
+                    offset = max(0, int(params.get("offset") or 0))
+                except (TypeError, ValueError):
+                    limit, offset = 50, 0
+                page = read_job_revisions(resolved, limit=limit, offset=offset)
+                if job is None and page["total"] == 0:
+                    return _err(rid, 4404, f"cron job '{jid}' not found")
+                return _ok(rid, {"success": True, "job_name": (job or {}).get("name"), **page})
             if action in {"describe", "history"}:
                 # Read paths. `list` caps `prompt_preview` at 100 chars for the
                 # model's benefit; a person expanding a job card needs the whole

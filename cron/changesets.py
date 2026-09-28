@@ -27,6 +27,20 @@ parity fixture in ``tests/cron/test_cron_changesets.py`` is asserted against the
 identical fixture and hex in Portal's ``CronGraphDigestTests`` — change the
 canonical form and both sides have to change together, or the test says so.
 
+**Definitions, not only wiring.** The graph form names a job and says when it
+runs and where it delivers; it says nothing about *what* the job is — its prompt,
+model, provider, skills, script, working directory, toolsets, context sources,
+inputs, outputs, side effects and source files. A prompt edit therefore moves no
+graph digest. So every row also carries the *definition form* of every job
+(:func:`definition_form`, the read-safe record minus runtime bookkeeping) under a
+second digest, and the gate records a row when either commitment moved. A row
+that changed one job lists the fields that changed with their before and after
+values, and :func:`read_job_revisions` reads one job's history out of the log:
+which revision created it, each field-level change since, who made it, and the
+definition as it stood at each point. The graph digest keeps its meaning and its
+Portal parity unchanged; the definition digest is a separate commitment that
+Portal does not compute.
+
 **One known asymmetry, on purpose.** ``cron.graph`` overlays live service nodes
 (dashboards, APIs, Docker deps) onto the graph it serves; the jobs store knows
 nothing about them and this log commits to the cron configuration alone. So a
@@ -228,9 +242,111 @@ def configuration_graph(jobs: Optional[List[Dict[str, Any]]] = None) -> Dict[str
 
 
 # =============================================================================
-# Who made the change (actor + provenance)
+# The definition form (what a job *is*, as distinct from how it is wired)
 # =============================================================================
 
+# Every field a person can set on a job, in the read-safe shape. Runtime
+# bookkeeping (``last_run_at``, ``next_run_at``, ``last_status``, ``state``,
+# ``paused_at``, preflight flags, ``created_at``) is deliberately absent: a change
+# to those is the scheduler working, not the job changing.
+DEFINITION_FIELDS: Tuple[str, ...] = (
+    "name",
+    "schedule",
+    "enabled",
+    "deliver",
+    "repeat",
+    "prompt",
+    "model",
+    "provider",
+    "base_url",
+    "skill",
+    "skills",
+    "script",
+    "context_from",
+    "enabled_toolsets",
+    "workdir",
+    "no_agent",
+    "attach_to_session",
+    "monitor_script",
+    "monitor_url",
+    "inputs",
+    "outputs",
+    "side_effects",
+    "source_files",
+)
+
+
+def _plain(value: Any) -> Any:
+    """A JSON-stable copy of a field value: lists of scalars kept as lists, dicts
+    kept, anything exotic rendered as text so two writers agree on the bytes."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_plain(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _plain(item) for key, item in sorted(value.items(), key=lambda kv: str(kv[0]))}
+    return str(value)
+
+
+def definition_form(job: Dict[str, Any]) -> Dict[str, Any]:
+    """One job's definition, as a person would read it back: only the fields in
+    :data:`DEFINITION_FIELDS` that are present, JSON-stable."""
+    form: Dict[str, Any] = {}
+    for field in DEFINITION_FIELDS:
+        if field not in job:
+            continue
+        if field == "schedule" and isinstance(job.get("schedule_display"), str) and job["schedule_display"]:
+            # The read-safe display form ("every 6h", a cron expression), the same
+            # string the graph carries, rather than the parsed storage dict.
+            form[field] = job["schedule_display"]
+            continue
+        form[field] = _plain(job.get(field))
+    return form
+
+
+def configuration_definitions(jobs: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Dict[str, Any]]:
+    """Every job's definition form by job id, from the normalized records."""
+    from cron.jobs import _normalize_job_record, load_jobs
+
+    if jobs is None:
+        jobs = load_jobs()
+    definitions: Dict[str, Dict[str, Any]] = {}
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        record = _normalize_job_record(job)
+        job_id = _text(record.get("id"))
+        if job_id:
+            definitions[job_id] = definition_form(record)
+    return definitions
+
+
+def definition_digest(definitions: Dict[str, Dict[str, Any]]) -> str:
+    """SHA-256 over the canonical JSON of every definition, keyed by job id."""
+    payload = json.dumps(definitions, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def definition_changes(
+    before: Optional[Dict[str, Any]],
+    after: Optional[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Field-level differences between two definition forms of one job, in field
+    order. A missing side (created or deleted job) diffs against an empty form."""
+    before = before or {}
+    after = after or {}
+    changes: List[Dict[str, Any]] = []
+    for field in DEFINITION_FIELDS:
+        if field not in before and field not in after:
+            continue
+        if before.get(field) != after.get(field):
+            changes.append({"field": field, "before": before.get(field), "after": after.get(field)})
+    return changes
+
+
+# =============================================================================
+# Who made the change (actor + provenance)
+# =============================================================================
 @dataclass(frozen=True)
 class ChangesetOrigin:
     """Attribution for whatever configuration change happens in this context.
@@ -379,10 +495,11 @@ def _write_rows(rows: List[Dict[str, Any]]) -> None:
         create_mode=0o600,
     )
     head = kept[-1].get("digest", "") if kept else ""
+    head_definitions = kept[-1].get("definition_digest", "") if kept else ""
     try:
         atomic_write_text(
             changeset_head_path(),
-            f"{head}\n",
+            f"{head}\n{head_definitions}\n",
             preserve_mode=True,
             create_mode=0o600,
         )
@@ -391,15 +508,23 @@ def _write_rows(rows: List[Dict[str, Any]]) -> None:
         logger.debug("cron changeset head not written", exc_info=True)
 
 
-def _head_digest() -> Optional[str]:
-    """The newest row's digest per the cache, or None when it can't be trusted."""
+def _head_digests() -> Tuple[Optional[str], Optional[str]]:
+    """The newest row's (graph digest, definition digest) per the cache. Either is
+    None when it can't be trusted; a cache written before definitions were
+    recorded has only the first line, so its definition digest is None and the
+    fast path does not fire until the log is read once."""
     try:
-        text = changeset_head_path().read_text(encoding="utf-8").strip()
+        lines = changeset_head_path().read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeDecodeError):
-        return None
-    return text or None
+        return None, None
+    graph = lines[0].strip() if lines else ""
+    definitions = lines[1].strip() if len(lines) > 1 else ""
+    return (graph or None), (definitions or None)
 
 
+def _head_digest() -> Optional[str]:
+    """The newest row's graph digest per the cache, or None when it can't be trusted."""
+    return _head_digests()[0]
 # =============================================================================
 # Recording
 # =============================================================================
@@ -435,9 +560,15 @@ def _edges_by_node(graph: Dict[str, Any]) -> Dict[str, set]:
 def _describe(
     before: Dict[str, Any],
     after: Dict[str, Any],
-) -> Tuple[str, str, str]:
-    """Infer ``(action, job, summary)`` from the two configurations.
+    before_definitions: Optional[Dict[str, Dict[str, Any]]] = None,
+    after_definitions: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Tuple[str, str, str, List[Dict[str, Any]]]:
+    """Infer ``(action, job, summary, changes)`` from the two configurations.
 
+    ``changes`` lists the field-level definition differences of the jobs that
+    changed (each entry carries its ``job``), so a row says *what* moved and not
+    only that something did. When the previous row predates definition
+    recording, ``before_definitions`` is None and no field diff is claimed.
     Inferred rather than passed down from the 17 mutation call sites, so the
     single hook covers every one of them — including the CLI and any future
     mutator — instead of covering the ones somebody remembered to annotate.
@@ -447,26 +578,45 @@ def _describe(
     """
     before_nodes, after_nodes = _cron_nodes(before), _cron_nodes(after)
     before_edges, after_edges = _edges_by_node(before), _edges_by_node(after)
+    defs_known = before_definitions is not None and after_definitions is not None
+    before_defs = before_definitions or {}
+    after_defs = after_definitions or {}
+    known_before = set(before_nodes) | (set(before_defs) if defs_known else set())
+    known_after = set(after_nodes) | (set(after_defs) if defs_known else set())
 
-    added = sorted(set(after_nodes) - set(before_nodes))
-    removed = sorted(set(before_nodes) - set(after_nodes))
+    added = sorted(known_after - known_before)
+    removed = sorted(known_before - known_after)
     changed = sorted(
         job_id
-        for job_id in set(before_nodes) & set(after_nodes)
-        if _node_row(before_nodes[job_id]) != _node_row(after_nodes[job_id])
-        or before_edges.get(job_id, set()) != after_edges.get(job_id, set())
+        for job_id in known_before & known_after
+        if (job_id in before_nodes and job_id in after_nodes
+            and (_node_row(before_nodes[job_id]) != _node_row(after_nodes[job_id])
+                 or before_edges.get(job_id, set()) != after_edges.get(job_id, set())))
+        or (defs_known and before_defs.get(job_id) != after_defs.get(job_id))
     )
+    changes: List[Dict[str, Any]] = []
+    if defs_known:
+        for job_id in changed + added + removed:
+            for change in definition_changes(before_defs.get(job_id), after_defs.get(job_id)):
+                changes.append({"job": job_id, **change})
 
     def label(job_id: str, nodes: Dict[str, Dict[str, Any]]) -> str:
-        return _text(nodes.get(job_id, {}).get("label"), job_id)
+        node_label = nodes.get(job_id, {}).get("label")
+        if node_label:
+            return _text(node_label)
+        for defs in (after_defs, before_defs):
+            if job_id in defs and defs[job_id].get("name"):
+                return _text(defs[job_id]["name"])
+        return job_id
 
     if len(added) == 1 and not removed and not changed:
-        return "create", added[0], f"created {label(added[0], after_nodes)}"
+        return "create", added[0], f"created {label(added[0], after_nodes)}", changes
     if len(removed) == 1 and not added and not changed:
-        return "delete", removed[0], f"deleted {label(removed[0], before_nodes)}"
+        return "delete", removed[0], f"deleted {label(removed[0], before_nodes)}", changes
     if len(changed) == 1 and not added and not removed:
-        return "update", changed[0], f"updated {label(changed[0], after_nodes)}"
-
+        fields = sorted({change["field"] for change in changes})
+        detail = f" ({', '.join(fields)})" if fields else ""
+        return "update", changed[0], f"updated {label(changed[0], after_nodes)}{detail}", changes
     counts = [
         f"{len(added)} added" if added else "",
         f"{len(removed)} removed" if removed else "",
@@ -477,10 +627,8 @@ def _describe(
         # The digest moved but no cron node did: a dataflow-only change on a
         # resource node, or a service the graph no longer carries. Say that
         # instead of naming a job.
-        return "update", "", "configuration changed"
-    return "update", "", f"configuration changed ({detail})"
-
-
+        return "update", "", "configuration changed", changes
+    return "update", "", f"configuration changed ({detail})", changes
 def _timestamp() -> str:
     """ISO 8601 with an offset and second precision.
 
@@ -536,7 +684,10 @@ def _new_row(
     summary: str,
     graph: Dict[str, Any],
     origin: ChangesetOrigin,
+    definitions: Optional[Dict[str, Dict[str, Any]]] = None,
+    changes: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
+    definitions = definitions if definitions is not None else {}
     return {
         "id": uuid.uuid4().hex,
         "timestamp": _timestamp(),
@@ -551,10 +702,17 @@ def _new_row(
         # The configuration at this revision, so a diff is a read of two rows
         # rather than a replay of the whole log.
         "graph": graph,
+        # Every job's definition at this revision, under its own commitment, and
+        # the field-level changes this row made against the previous one.
+        "definitions": definitions,
+        "definition_digest": definition_digest(definitions),
+        "changes": list(changes or []),
     }
-
-
-def _baseline_row(graph: Dict[str, Any], digest: str) -> Dict[str, Any]:
+def _baseline_row(
+    graph: Dict[str, Any],
+    digest: str,
+    definitions: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
     """The first row in a log that starts on a store which already has jobs.
 
     The configuration before recording began is genuinely unknown — nobody wrote
@@ -576,9 +734,8 @@ def _baseline_row(graph: Dict[str, Any], digest: str) -> Dict[str, Any]:
         summary="baseline — the configuration when recording began",
         graph=graph,
         origin=ChangesetOrigin(),
+        definitions=definitions if definitions is not None else configuration_definitions(),
     )
-
-
 def record_change(jobs: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict[str, Any]]:
     """Append a row iff the configuration digest moved. Returns it, or None.
 
@@ -587,23 +744,29 @@ def record_change(jobs: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict[
     """
     graph = configuration_graph(jobs)
     digest = configuration_digest(graph)
-
-    # Fast path: the cached head already says this configuration is the newest
-    # row, and no row will be written, so the log itself is never parsed.
-    if _head_digest() == digest:
+    definitions = configuration_definitions(jobs)
+    defs_digest = definition_digest(definitions)
+    # Fast path: the cached head already says both commitments are the newest
+    # row's, and no row will be written, so the log itself is never parsed.
+    if _head_digests() == (digest, defs_digest):
         return None
-
     rows = _read_rows()
-    if rows and rows[-1].get("digest") == digest:
+    if rows and rows[-1].get("digest") == digest and rows[-1].get("definition_digest") == defs_digest:
         # The head was stale or missing; the log is authoritative.
         return None
-
     if not rows:
-        row = _baseline_row(graph, digest)
+        row = _baseline_row(graph, digest, definitions)
     else:
         previous = rows[-1]
         before = previous.get("graph") or {"nodes": [], "edges": []}
-        action, job, summary = _describe(before, graph)
+        previous_definitions = previous.get("definitions")
+        if not isinstance(previous_definitions, dict):
+            # The previous row predates definition recording: the graph may not
+            # have moved at all, and no field diff can honestly be claimed.
+            previous_definitions = None
+        action, job, summary, changes = _describe(before, graph, previous_definitions, definitions)
+        if previous_definitions is None and previous.get("digest") == digest:
+            action, job, summary = "update", "", "definitions recorded — the history of job definitions begins here"
         origin = current_origin()
         if origin.note:
             summary = f"{summary} — {origin.note}" if summary else origin.note
@@ -615,8 +778,9 @@ def record_change(jobs: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict[
             summary=summary,
             graph=graph,
             origin=origin,
+            definitions=definitions,
+            changes=changes,
         )
-
     rows.append(row)
     _write_rows(rows)
     return row
@@ -640,7 +804,7 @@ def ensure_baseline() -> Optional[Dict[str, Any]]:
         if _read_rows():
             return None
         graph = configuration_graph()
-        row = _baseline_row(graph, configuration_digest(graph))
+        row = _baseline_row(graph, configuration_digest(graph), configuration_definitions())
         _write_rows([row])
         return row
 
@@ -660,19 +824,28 @@ _WIRE_KEYS = (
     "summary",
     "source_event_keys",
     "git_commit",
+    "definition_digest",
 )
-
-
 def _public(row: Dict[str, Any]) -> Dict[str, Any]:
     """A row as the client reads it — without the graph snapshot.
 
     The snapshots are what make a diff cheap, and they are also by far the
     largest part of a row; a page of 50 would be megabytes of graphs nobody
-    asked for. ``cron.changeset_diff`` serves them one pair at a time.
+    asked for. ``cron.changeset_diff`` serves them one pair at a time. The page
+    does carry which definition fields a row changed, per job, so a list can say
+    "prompt, model" without fetching the values.
     """
-    return {key: row.get(key) for key in _WIRE_KEYS if key in row}
-
-
+    public = {key: row.get(key) for key in _WIRE_KEYS if key in row}
+    changes = row.get("changes")
+    if isinstance(changes, list):
+        by_job: Dict[str, List[str]] = {}
+        for change in changes:
+            if isinstance(change, dict) and change.get("field"):
+                fields = by_job.setdefault(_text(change.get("job")), [])
+                if change["field"] not in fields:
+                    fields.append(change["field"])
+        public["changed_fields"] = by_job
+    return public
 def _instant(value: Any) -> Optional[datetime]:
     try:
         return datetime.fromisoformat(str(value))
@@ -763,9 +936,87 @@ def read_changeset_diff(changeset_id: str) -> Optional[Dict[str, Any]]:
         if row.get("id") != wanted:
             continue
         payload: Dict[str, Any] = {"after": row.get("graph") or {"nodes": [], "edges": []}}
+        if isinstance(row.get("definitions"), dict):
+            payload["definitions_after"] = row["definitions"]
+        if isinstance(row.get("changes"), list):
+            payload["changes"] = row["changes"]
         if index > 0:
             before = rows[index - 1].get("graph")
             if isinstance(before, dict):
                 payload["before"] = before
+            before_definitions = rows[index - 1].get("definitions")
+            if isinstance(before_definitions, dict):
+                payload["definitions_before"] = before_definitions
         return payload
     return None
+
+
+def read_job_revisions(job_id: str, *, limit: int = 50, offset: int = 0) -> Dict[str, Any]:
+    """One job's definition history, newest first: every recorded row at which the
+    job appeared, disappeared or changed a field, each with the definition as it
+    stood and the field-level changes against the revision before it.
+
+    Derived from the same rows as everything else here, so it cannot disagree
+    with the configuration history; a row that changed several jobs at once
+    appears in each of their histories with only its own fields. A row that
+    predates definition recording can only say the job was present.
+    """
+    wanted = (job_id or "").strip()
+    limit = max(1, int(limit))
+    offset = max(0, int(offset))
+    if not wanted:
+        return {"job_id": wanted, "revisions": [], "total": 0, "limit": limit, "offset": offset}
+    revisions: List[Dict[str, Any]] = []
+    previous_definition: Optional[Dict[str, Any]] = None
+    previous_known = False
+    for row in _read_rows():
+        definitions = row.get("definitions")
+        known = isinstance(definitions, dict)
+        if not known:
+            # Only the graph can say whether the job existed at this row.
+            if wanted in _cron_nodes(row.get("graph") or {}) and previous_definition is None and not previous_known:
+                revisions.append(_revision_entry(row, action=_text(row.get("action"), "update"), definition=None, changes=[], known=False))
+            previous_definition = None
+            previous_known = False
+            continue
+        definition = definitions.get(wanted)
+        present = definition is not None
+        was_present = previous_definition is not None
+        if present and not was_present:
+            action = "baseline" if row.get("action") == "baseline" or not previous_known else "create"
+            changes = definition_changes(None, definition) if previous_known else []
+            revisions.append(_revision_entry(row, action=action, definition=definition, changes=changes, known=True))
+        elif present and was_present and definition != previous_definition:
+            revisions.append(_revision_entry(row, action="update", definition=definition,
+                                             changes=definition_changes(previous_definition, definition), known=True))
+        elif was_present and not present:
+            revisions.append(_revision_entry(row, action="delete", definition=None,
+                                             changes=definition_changes(previous_definition, None), known=True))
+        previous_definition = definition
+        previous_known = True
+    revisions.reverse()
+    return {
+        "job_id": wanted,
+        "revisions": revisions[offset : offset + limit],
+        "total": len(revisions),
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+def _revision_entry(row: Dict[str, Any], *, action: str, definition: Optional[Dict[str, Any]],
+                    changes: List[Dict[str, Any]], known: bool) -> Dict[str, Any]:
+    return {
+        "id": row.get("id"),
+        "timestamp": row.get("timestamp"),
+        "action": action,
+        "actor": row.get("actor"),
+        "summary": row.get("summary"),
+        "source_event_keys": list(row.get("source_event_keys") or []),
+        "git_commit": row.get("git_commit"),
+        "digest": row.get("digest"),
+        "definition_digest": row.get("definition_digest"),
+        "definition": definition,
+        "changes": changes,
+        "definition_recorded": known,
+    }
