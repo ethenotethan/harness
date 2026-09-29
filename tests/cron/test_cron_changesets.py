@@ -389,17 +389,16 @@ class TestDefinitionHistory:
             assert runtime not in form
 
     def test_runtime_only_saves_still_record_nothing(self, cron_env):
-        from cron.jobs import _save_jobs_unlocked, create_job, load_jobs
+        from cron.jobs import create_job, get_job, mark_job_run
 
-        create_job(prompt="collect", schedule="every 1h")
+        job = create_job(prompt="collect", schedule="every 1h", repeat=3)
         count = len(_rows())
-        jobs = load_jobs()
-        jobs[0]["last_run_at"] = "2026-06-01T00:00:00+00:00"
-        jobs[0]["last_status"] = "ok"
-        jobs[0]["next_run_at"] = "2026-06-01T01:00:00+00:00"
-        from cron.jobs import _jobs_lock
-        with _jobs_lock():
-            _save_jobs_unlocked(jobs)
+
+        mark_job_run(job["id"], success=True)
+
+        updated = get_job(job["id"])
+        assert updated is not None
+        assert updated["repeat"]["completed"] == 1
         assert len(_rows()) == count
 
     def test_a_job_has_its_own_revision_history(self, cron_env):

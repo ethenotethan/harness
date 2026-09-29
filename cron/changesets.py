@@ -300,6 +300,13 @@ def definition_form(job: Dict[str, Any]) -> Dict[str, Any]:
             # string the graph carries, rather than the parsed storage dict.
             form[field] = job["schedule_display"]
             continue
+        if field == "repeat" and isinstance(job.get("repeat"), dict):
+            # ``times`` is the configured limit; ``completed`` is scheduler
+            # bookkeeping that advances after every run. Committing the whole
+            # storage dict turns every successful tick into a fake definition
+            # revision even though the user changed nothing.
+            form[field] = {"times": _plain(job["repeat"].get("times"))}
+            continue
         form[field] = _plain(job.get(field))
     return form
 
