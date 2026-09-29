@@ -389,18 +389,65 @@ class TestDefinitionHistory:
             assert runtime not in form
 
     def test_runtime_only_saves_still_record_nothing(self, cron_env):
-        from cron.jobs import _save_jobs_unlocked, create_job, load_jobs
+        from cron.jobs import create_job, get_job, mark_job_run
 
-        create_job(prompt="collect", schedule="every 1h")
+        job = create_job(prompt="collect", schedule="every 1h", repeat=3)
         count = len(_rows())
+
+        mark_job_run(job["id"], success=True)
+
+        updated = get_job(job["id"])
+        assert updated is not None
+        assert updated["repeat"]["completed"] == 1
+        assert len(_rows()) == count
+
+    def test_legacy_repeat_snapshot_does_not_create_an_upgrade_revision(self, cron_env):
+        from cron.changesets import (
+            _head_digests,
+            _write_rows,
+            configuration_definitions,
+            definition_digest,
+            read_job_revisions,
+        )
+        from cron.jobs import create_job, mark_job_run, update_job
+
+        job = create_job(prompt="collect", schedule="every 1h", repeat=3)
+        rows = _rows()
+        rows[-1]["definitions"][job["id"]]["repeat"] = {"times": 3, "completed": 0}
+        rows[-1]["definition_digest"] = definition_digest(rows[-1]["definitions"])
+        _write_rows(rows)
+        legacy_rows = _rows()
+
+        mark_job_run(job["id"], success=True)
+
+        assert _rows() == legacy_rows
+        assert _head_digests()[1] == definition_digest(configuration_definitions())
+
+        update_job(job["id"], {"prompt": "collect more"})
+
+        latest = read_job_revisions(job["id"])["revisions"][0]
+        assert latest["changes"] == [
+            {"field": "prompt", "before": "collect", "after": "collect more"}
+        ]
+
+    def test_configured_repeat_limit_is_still_revisioned(self, cron_env):
+        from cron.jobs import _jobs_lock, _save_jobs_unlocked, create_job, load_jobs
+
+        job = create_job(prompt="collect", schedule="every 1h", repeat=3)
         jobs = load_jobs()
-        jobs[0]["last_run_at"] = "2026-06-01T00:00:00+00:00"
-        jobs[0]["last_status"] = "ok"
-        jobs[0]["next_run_at"] = "2026-06-01T01:00:00+00:00"
-        from cron.jobs import _jobs_lock
+        jobs[0]["repeat"]["times"] = 5
         with _jobs_lock():
             _save_jobs_unlocked(jobs)
-        assert len(_rows()) == count
+
+        row = _rows()[-1]
+        assert row["changes"] == [
+            {
+                "job": job["id"],
+                "field": "repeat",
+                "before": {"times": 3},
+                "after": {"times": 5},
+            }
+        ]
 
     def test_a_job_has_its_own_revision_history(self, cron_env):
         from cron.changesets import read_job_revisions

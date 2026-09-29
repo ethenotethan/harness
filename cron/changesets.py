@@ -300,6 +300,13 @@ def definition_form(job: Dict[str, Any]) -> Dict[str, Any]:
             # string the graph carries, rather than the parsed storage dict.
             form[field] = job["schedule_display"]
             continue
+        if field == "repeat" and isinstance(job.get("repeat"), dict):
+            # ``times`` is the configured limit; ``completed`` is scheduler
+            # bookkeeping that advances after every run. Committing the whole
+            # storage dict turns every successful tick into a fake definition
+            # revision even though the user changed nothing.
+            form[field] = {"times": _plain(job["repeat"].get("times"))}
+            continue
         form[field] = _plain(job.get(field))
     return form
 
@@ -325,6 +332,26 @@ def definition_digest(definitions: Dict[str, Dict[str, Any]]) -> str:
     """SHA-256 over the canonical JSON of every definition, keyed by job id."""
     payload = json.dumps(definitions, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _canonical_recorded_definitions(definitions: Dict[str, Any]) -> Dict[str, Any]:
+    """Upgrade stored definition snapshots to the current canonical shape.
+
+    The first definition-history release stored ``repeat.completed`` alongside
+    the configured limit. Removing that scheduler-owned counter must not create
+    a synthetic revision when an existing log is opened by a newer runtime.
+    """
+    canonical: Dict[str, Any] = {}
+    for job_id, definition in definitions.items():
+        if not isinstance(definition, dict):
+            canonical[job_id] = definition
+            continue
+        normalized = dict(definition)
+        repeat = normalized.get("repeat")
+        if isinstance(repeat, dict):
+            normalized["repeat"] = {"times": _plain(repeat.get("times"))}
+        canonical[job_id] = normalized
+    return canonical
 
 
 def definition_changes(
@@ -478,6 +505,24 @@ def _read_rows() -> List[Dict[str, Any]]:
     return rows
 
 
+def _write_head_digests(graph_digest: str, definitions_digest: str) -> None:
+    """Refresh the disposable cache of the current canonical commitments."""
+    from cron.jobs import ensure_dirs
+    from utils import atomic_write_text
+
+    ensure_dirs()
+    try:
+        atomic_write_text(
+            changeset_head_path(),
+            f"{graph_digest}\n{definitions_digest}\n",
+            preserve_mode=True,
+            create_mode=0o600,
+        )
+    except OSError:
+        # The head is a cache; losing it costs a full read next time.
+        logger.debug("cron changeset head not written", exc_info=True)
+
+
 def _write_rows(rows: List[Dict[str, Any]]) -> None:
     """Rewrite the log atomically, keeping the newest ``MAX_CHANGESETS`` rows."""
     from cron.jobs import ensure_dirs
@@ -496,23 +541,18 @@ def _write_rows(rows: List[Dict[str, Any]]) -> None:
     )
     head = kept[-1].get("digest", "") if kept else ""
     head_definitions = kept[-1].get("definition_digest", "") if kept else ""
-    try:
-        atomic_write_text(
-            changeset_head_path(),
-            f"{head}\n{head_definitions}\n",
-            preserve_mode=True,
-            create_mode=0o600,
-        )
-    except OSError:
-        # The head is a cache; losing it costs a full read next time.
-        logger.debug("cron changeset head not written", exc_info=True)
+    _write_head_digests(head, head_definitions)
 
 
 def _head_digests() -> Tuple[Optional[str], Optional[str]]:
-    """The newest row's (graph digest, definition digest) per the cache. Either is
-    None when it can't be trusted; a cache written before definitions were
-    recorded has only the first line, so its definition digest is None and the
-    fast path does not fire until the log is read once."""
+    """The current canonical (graph digest, definition digest) per the cache.
+
+    Either is None when it can't be trusted. A cache written before definitions
+    were recorded has only the first line, so its definition digest is None and
+    the fast path does not fire until the log is read once. During a compatible
+    encoding migration, this cache may be newer than the last row's stored
+    representation; the append-only log remains untouched.
+    """
     try:
         lines = changeset_head_path().read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeDecodeError):
@@ -751,9 +791,26 @@ def record_change(jobs: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict[
     if _head_digests() == (digest, defs_digest):
         return None
     rows = _read_rows()
-    if rows and rows[-1].get("digest") == digest and rows[-1].get("definition_digest") == defs_digest:
-        # The head was stale or missing; the log is authoritative.
-        return None
+    if rows and rows[-1].get("digest") == digest:
+        recorded_definitions = rows[-1].get("definitions")
+        canonical_recorded = (
+            _canonical_recorded_definitions(recorded_definitions)
+            if isinstance(recorded_definitions, dict)
+            else None
+        )
+        if canonical_recorded is not None and definition_digest(canonical_recorded) == defs_digest:
+            # The head was stale or missing, or this is the one-time migration
+            # from the first definition encoding that included repeat.completed.
+            # Preserve the append-only row and refresh only the disposable head
+            # cache so later runtime saves stay on the fast path instead of
+            # reparsing the log forever.
+            if recorded_definitions != canonical_recorded:
+                _write_head_digests(digest, defs_digest)
+            return None
+        if rows[-1].get("definition_digest") == defs_digest:
+            # A definitions-free legacy row can still have a matching explicit
+            # commitment; retain the old stale-head behavior.
+            return None
     if not rows:
         row = _baseline_row(graph, digest, definitions)
     else:
@@ -764,6 +821,8 @@ def record_change(jobs: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict[
             # The previous row predates definition recording: the graph may not
             # have moved at all, and no field diff can honestly be claimed.
             previous_definitions = None
+        else:
+            previous_definitions = _canonical_recorded_definitions(previous_definitions)
         action, job, summary, changes = _describe(before, graph, previous_definitions, definitions)
         if previous_definitions is None and previous.get("digest") == digest:
             action, job, summary = "update", "", "definitions recorded — the history of job definitions begins here"
@@ -979,6 +1038,8 @@ def read_job_revisions(job_id: str, *, limit: int = 50, offset: int = 0) -> Dict
             previous_definition = None
             previous_known = False
             continue
+        assert isinstance(definitions, dict)
+        definitions = _canonical_recorded_definitions(definitions)
         definition = definitions.get(wanted)
         present = definition is not None
         was_present = previous_definition is not None
