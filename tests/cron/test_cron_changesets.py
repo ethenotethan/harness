@@ -401,6 +401,39 @@ class TestDefinitionHistory:
         assert updated["repeat"]["completed"] == 1
         assert len(_rows()) == count
 
+    def test_legacy_repeat_snapshot_does_not_create_an_upgrade_revision(self, cron_env):
+        from cron.changesets import _write_rows, definition_digest
+        from cron.jobs import create_job, mark_job_run
+
+        job = create_job(prompt="collect", schedule="every 1h", repeat=3)
+        rows = _rows()
+        rows[-1]["definitions"][job["id"]]["repeat"] = {"times": 3, "completed": 0}
+        rows[-1]["definition_digest"] = definition_digest(rows[-1]["definitions"])
+        _write_rows(rows)
+
+        mark_job_run(job["id"], success=True)
+
+        assert len(_rows()) == 1
+
+    def test_configured_repeat_limit_is_still_revisioned(self, cron_env):
+        from cron.jobs import _jobs_lock, _save_jobs_unlocked, create_job, load_jobs
+
+        job = create_job(prompt="collect", schedule="every 1h", repeat=3)
+        jobs = load_jobs()
+        jobs[0]["repeat"]["times"] = 5
+        with _jobs_lock():
+            _save_jobs_unlocked(jobs)
+
+        row = _rows()[-1]
+        assert row["changes"] == [
+            {
+                "job": job["id"],
+                "field": "repeat",
+                "before": {"times": 3},
+                "after": {"times": 5},
+            }
+        ]
+
     def test_a_job_has_its_own_revision_history(self, cron_env):
         from cron.changesets import read_job_revisions
         from cron.jobs import create_job, remove_job, update_job

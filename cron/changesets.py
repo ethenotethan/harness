@@ -334,6 +334,26 @@ def definition_digest(definitions: Dict[str, Dict[str, Any]]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _canonical_recorded_definitions(definitions: Dict[str, Any]) -> Dict[str, Any]:
+    """Upgrade stored definition snapshots to the current canonical shape.
+
+    The first definition-history release stored ``repeat.completed`` alongside
+    the configured limit. Removing that scheduler-owned counter must not create
+    a synthetic revision when an existing log is opened by a newer runtime.
+    """
+    canonical: Dict[str, Any] = {}
+    for job_id, definition in definitions.items():
+        if not isinstance(definition, dict):
+            canonical[job_id] = definition
+            continue
+        normalized = dict(definition)
+        repeat = normalized.get("repeat")
+        if isinstance(repeat, dict):
+            normalized["repeat"] = {"times": _plain(repeat.get("times"))}
+        canonical[job_id] = normalized
+    return canonical
+
+
 def definition_changes(
     before: Optional[Dict[str, Any]],
     after: Optional[Dict[str, Any]],
@@ -758,9 +778,28 @@ def record_change(jobs: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict[
     if _head_digests() == (digest, defs_digest):
         return None
     rows = _read_rows()
-    if rows and rows[-1].get("digest") == digest and rows[-1].get("definition_digest") == defs_digest:
-        # The head was stale or missing; the log is authoritative.
-        return None
+    if rows and rows[-1].get("digest") == digest:
+        recorded_definitions = rows[-1].get("definitions")
+        canonical_recorded = (
+            _canonical_recorded_definitions(recorded_definitions)
+            if isinstance(recorded_definitions, dict)
+            else None
+        )
+        if canonical_recorded is not None and definition_digest(canonical_recorded) == defs_digest:
+            # The head was stale or missing, or this is the one-time migration
+            # from the first definition encoding that included repeat.completed.
+            # Canonicalize the snapshot in place without inventing a revision,
+            # and refresh the head cache so later runtime saves stay on the fast
+            # path instead of reparsing the log forever.
+            if recorded_definitions != canonical_recorded:
+                rows[-1]["definitions"] = canonical_recorded
+                rows[-1]["definition_digest"] = defs_digest
+                _write_rows(rows)
+            return None
+        if rows[-1].get("definition_digest") == defs_digest:
+            # A definitions-free legacy row can still have a matching explicit
+            # commitment; retain the old stale-head behavior.
+            return None
     if not rows:
         row = _baseline_row(graph, digest, definitions)
     else:
@@ -771,6 +810,8 @@ def record_change(jobs: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict[
             # The previous row predates definition recording: the graph may not
             # have moved at all, and no field diff can honestly be claimed.
             previous_definitions = None
+        else:
+            previous_definitions = _canonical_recorded_definitions(previous_definitions)
         action, job, summary, changes = _describe(before, graph, previous_definitions, definitions)
         if previous_definitions is None and previous.get("digest") == digest:
             action, job, summary = "update", "", "definitions recorded — the history of job definitions begins here"
