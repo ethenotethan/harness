@@ -1,11 +1,15 @@
 """``service.*`` — what a running service exposes beyond its dataflow node.
 
-Today: its logs. ``service.logs`` tails or continues one of a service's log
-sinks and ``service.logs.follow`` streams appended lines as ``service.log``
-events. The ``service`` param is a graph service id (``arch:<id>``,
+Its logs: ``service.logs`` tails or continues one of a service's log sinks and
+``service.logs.follow`` streams appended lines as ``service.log`` events. The
+``service`` param is a graph service id (``arch:<id>``, ``deploy:<id>/<env>``,
 ``launchd:<label>``, ``docker:<12>``, ``nomad:<job>``, ``proc_<id>``); sinks
 resolve per provider in ``tui_gateway/service_logs.py``, and only those paths
-are ever read. Docs: docs/api/service-logs.md.
+and declared commands are ever read or run. Docs: docs/api/service-logs.md.
+
+Its deployments: ``service.deployments`` lists a manifest's declared deployments
+with their last known health and revision; ``service.deployments.probe`` runs
+the declared probes now. Docs: docs/api/architecture.md (Deployments).
 """
 from __future__ import annotations
 
@@ -85,3 +89,62 @@ def _(rid, params: dict) -> dict:
 
 def register(server) -> None:
     _registry.install(server)
+
+
+@method("service.deployments")
+def _(rid, params: dict) -> dict:
+    """A manifest's deployments (``service`` is ``arch:<id>`` or the bare id) with
+    their declared probes, log sinks and the last known health and revision —
+    what is known now, without probing. **4030** unknown service, **4001** bad params."""
+    try:
+        from tui_gateway import architecture_store as store
+        from tui_gateway import deployments
+        service_id = store.service_param(params)
+        if service_id is None:
+            return _err(rid, 4029, "service.deployments needs a 'service' id")
+        manifest = store.load_manifest(service_id)
+        if manifest is None:
+            return _err(rid, 4030, f"unknown service: {service_id}")
+        return _ok(rid, {
+            "service": store.graph_id(manifest),
+            "deployments": [
+                deployments.describe_deployment(manifest, d, deployments.last_probe(d["graph_id"]))
+                for d in manifest.get("deployments") or []
+            ],
+        })
+    except Exception as e:
+        logger.exception("service.deployments failed")
+        return _err(rid, 5045, str(e))
+
+
+@method("service.deployments.probe")
+def _(rid, params: dict) -> dict:
+    """Run the declared health and revision probes now for every deployment of a
+    manifest, or for one (``deployment``), and return the results. Probes are the
+    manifest's own declarations (an HTTPS GET or a shell-less command), bounded by
+    their ``timeout_s``. **4030** unknown service, **4050** unknown deployment."""
+    try:
+        from tui_gateway import architecture_store as store
+        from tui_gateway import deployments
+        service_id = store.service_param(params)
+        if service_id is None:
+            return _err(rid, 4029, "service.deployments.probe needs a 'service' id")
+        manifest = store.load_manifest(service_id)
+        if manifest is None:
+            return _err(rid, 4030, f"unknown service: {service_id}")
+        wanted = (params or {}).get("deployment")
+        wanted = wanted.strip() if isinstance(wanted, str) and wanted.strip() else None
+        try:
+            results = deployments.probe_manifest(manifest, deployment_id=wanted, force=True)
+        except deployments.DeploymentError as exc:
+            return _err(rid, exc.code, exc.message)
+        return _ok(rid, {
+            "service": store.graph_id(manifest),
+            "deployments": [
+                deployments.describe_deployment(manifest, d, next((r for r in results if r["deployment"] == d["id"]), None))
+                for d in manifest.get("deployments") or [] if wanted is None or d["id"] == wanted
+            ],
+        })
+    except Exception as e:
+        logger.exception("service.deployments.probe failed")
+        return _err(rid, 5045, str(e))

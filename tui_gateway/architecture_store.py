@@ -30,9 +30,9 @@ required; the rest optional)::
       "model": "architecture/model/model.json",        # path inside root/repo
       "check": ["python3", "scripts/build_architecture.py", "--check"],
       "source_files": ["scripts/build_architecture.py"],
-      "inputs": [], "outputs": [], "side_effects": [], "relationships": []
+      "inputs": [], "outputs": [], "side_effects": [], "relationships": [],
+      "deployments": [ … ]                             # where the code runs off this machine; see tui_gateway/deployments.py
     }
-
 Every model read is validated against the ``hermes.architecture`` contract
 (``architecture_contract.py``, vendored byte-for-byte into every consumer): a
 document that does not conform is refused with error 4033 and never
@@ -253,6 +253,10 @@ def normalize_manifest(doc: Any, stem: str, launchd_dirs: Optional[List[str]] = 
         manifest["relationships"] = doc["relationships"]
     if doc.get("runtime") is not None:
         manifest["runtime"] = normalize_runtime_binding(doc["runtime"])
+    # Deployments: environments the codebase runs in that no local provider can
+    # see, each with its own health probe, revision probe and command log sinks.
+    from tui_gateway import deployments as _deployments
+    manifest["deployments"] = _deployments.normalize_deployments(doc.get("deployments"), service_id)
     # Log capture: declared sinks (validated here; enforced for local services
     # in conformance_for). A GitHub-only service has no runtime here, so its
     # sinks are dropped with a warning rather than pretending to be readable.
@@ -577,6 +581,16 @@ def run_check(manifest: Dict[str, Any], runner: Optional[Callable[..., Any]] = N
 # ── Composite reads ──────────────────────────────────────────────────────────
 
 
+def described_deployments(manifest: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The manifest's deployments with their last known probe (never probing here)."""
+    from tui_gateway import deployments
+
+    return [
+        deployments.describe_deployment(manifest, deployment, deployments.last_probe(deployment["graph_id"]))
+        for deployment in manifest.get("deployments") or []
+    ]
+
+
 def resolved_logs(manifest: Dict[str, Any]) -> List[Dict[str, Any]]:
     """The manifest's log sinks as clients see them: existence, size, mtime."""
     from tui_gateway import service_logs
@@ -667,6 +681,7 @@ def describe(manifest: Dict[str, Any], revision: Optional[str] = None, home: Opt
             "check_configured": bool(manifest.get("check")),
             "runtime": manifest.get("runtime"),
             "logs": resolved_logs(manifest),
+            "deployments": described_deployments(manifest),
         },
         "revision": entry["revision"],
         "source": entry.get("source", source_of(manifest)),
@@ -783,6 +798,17 @@ def runtime_info(manifest: Dict[str, Any], runner: Optional[Callable[[List[str]]
     return info
 
 
+def _last_deployment_probes(manifest: Dict[str, Any]) -> List[Dict[str, Any]]:
+    from tui_gateway import deployments
+
+    probes = []
+    for deployment in manifest.get("deployments") or []:
+        probe = deployments.last_probe(deployment["graph_id"])
+        if probe:
+            probes.append(probe)
+    return probes
+
+
 def history(manifest: Dict[str, Any], home: Optional[str] = None, git: Optional[GitRunner] = None,
             runtime_runner: Optional[Callable[[List[str]], str]] = None) -> Dict[str, Any]:
     """Stored revisions (genesis first, newest last) with the commit behind each,
@@ -809,6 +835,13 @@ def history(manifest: Dict[str, Any], home: Optional[str] = None, git: Optional[
         entry["deployed"] = index == deployed_index
         if entry["deployed"]:
             entry["deployed_at"] = entry.get("stored_at")
+        # Environments whose last revision probe answered with this revision.
+        live_in = [
+            probe["deployment"] for probe in _last_deployment_probes(manifest)
+            if revision and str(((probe.get("revision") or {}).get("revision")) or "").startswith(revision[:7])
+        ]
+        if live_in:
+            entry["live_in"] = sorted(live_in)
         previous = revision
     result: Dict[str, Any] = {
         "service": graph_id(manifest),

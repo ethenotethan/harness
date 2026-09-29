@@ -1117,7 +1117,7 @@ def _(rid, params: dict) -> dict:
         # Logs are a property of the running service (any graph service id), not of
         # its architecture: their own namespace. See docs/api/service-logs.md.
         "service": {
-            "methods": ["service.logs", "service.logs.follow"],
+            "methods": ["service.logs", "service.logs.follow", "service.deployments", "service.deployments.probe"],
             "events": ["service.log"],
         },
         "capability_names": [
@@ -1155,6 +1155,8 @@ def _(rid, params: dict) -> dict:
             "architecture.history",
             "service.logs",
             "service.logs.follow",
+            "service.deployments",
+            "service.deployments.probe",
             "architecture.diff",
         ],
     })

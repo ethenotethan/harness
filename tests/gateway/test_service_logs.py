@@ -475,7 +475,7 @@ def test_installed_handlers_resolve_every_name_at_runtime(home, tmp_path):
     fake._profile_scoped = lambda fn: fn
     fake.logger = logging.getLogger("fake")
     ms.register(fake)
-    assert set(fake._methods) == {"service.logs", "service.logs.follow"}
+    assert set(fake._methods) == {"service.logs", "service.logs.follow", "service.deployments", "service.deployments.probe"}
     assert fake._methods["service.logs"](1, {"service": "arch:demo"})["result"]["lines"] == ["started"]
     assert fake._methods["service.logs.follow"](2, {"service": "arch:demo"})["result"]["following"] is True
     assert fake._methods["service.logs.follow"](3, {"service": "arch:demo", "enabled": False})["result"]["stopped"] is True
@@ -492,7 +492,8 @@ def test_capabilities_advertise_service_logs():
     fn.__globals__["_ok"] = lambda rid, result: {"result": result}
     fn.__globals__.setdefault("logger", logging.getLogger("test"))
     result = fn(1, {})["result"]
-    assert result["service"] == {"methods": ["service.logs", "service.logs.follow"], "events": ["service.log"]}
+    assert result["service"] == {"methods": ["service.logs", "service.logs.follow", "service.deployments", "service.deployments.probe"], "events": ["service.log"]}
+    assert "service.deployments.probe" in result["capability_names"]
     assert "service.logs" in result["capability_names"] and "service.logs.follow" in result["capability_names"]
     assert result["architecture"]["methods"] == [
         "architecture.list", "architecture.describe", "architecture.check", "architecture.history", "architecture.diff",

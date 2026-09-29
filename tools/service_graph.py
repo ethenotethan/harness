@@ -11,8 +11,10 @@ check, a history. The two meet here, after every collector has run and before
   provider's liveness and topology and the manifest's ``architecture`` and
   source files — and adds no node of its own;
 * a manifest with no binding is a **standalone** codebase and keeps its own
-  ``arch:<id>`` node, as before.
-
+  ``arch:<id>`` node, as before;
+* a manifest's **deployments** (``tui_gateway/deployments.py``) are one node each
+  (``deploy:<id>/<env>``) with the health their declared probe reports, related
+  to the codebase node by ``deploys``.
 Composition is exact (canonical graph ids, never display names), deterministic,
 and fail-open: a binding whose runtime is absent, or two manifests binding one
 runtime, is logged and skipped rather than fabricating or overwriting a node.
@@ -151,4 +153,12 @@ def collect_graph_services() -> List[Dict[str, Any]]:
     except Exception:
         logger.exception("service overlay unavailable: architecture")
         definitions = []
-    return attach_architecture(runtime, definitions)
+    services = attach_architecture(runtime, definitions)
+    # Deployments: one node per declared environment off this machine, with the
+    # health its own probe reports. They are never bound to a local runtime.
+    try:
+        from tui_gateway.deployments import collect_deployment_services
+        services.extend(collect_deployment_services())
+    except Exception:
+        logger.exception("service overlay unavailable: deployments")
+    return services
