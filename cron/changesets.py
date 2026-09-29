@@ -1038,6 +1038,8 @@ def read_job_revisions(job_id: str, *, limit: int = 50, offset: int = 0) -> Dict
             previous_definition = None
             previous_known = False
             continue
+        assert isinstance(definitions, dict)
+        definitions = _canonical_recorded_definitions(definitions)
         definition = definitions.get(wanted)
         present = definition is not None
         was_present = previous_definition is not None

@@ -407,8 +407,9 @@ class TestDefinitionHistory:
             _write_rows,
             configuration_definitions,
             definition_digest,
+            read_job_revisions,
         )
-        from cron.jobs import create_job, mark_job_run
+        from cron.jobs import create_job, mark_job_run, update_job
 
         job = create_job(prompt="collect", schedule="every 1h", repeat=3)
         rows = _rows()
@@ -421,6 +422,13 @@ class TestDefinitionHistory:
 
         assert _rows() == legacy_rows
         assert _head_digests()[1] == definition_digest(configuration_definitions())
+
+        update_job(job["id"], {"prompt": "collect more"})
+
+        latest = read_job_revisions(job["id"])["revisions"][0]
+        assert latest["changes"] == [
+            {"field": "prompt", "before": "collect", "after": "collect more"}
+        ]
 
     def test_configured_repeat_limit_is_still_revisioned(self, cron_env):
         from cron.jobs import _jobs_lock, _save_jobs_unlocked, create_job, load_jobs
