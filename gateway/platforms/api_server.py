@@ -132,6 +132,20 @@ except ImportError:  # pragma: no cover - tui_gateway may not be available in al
 
 logger = logging.getLogger(__name__)
 
+# Upper bound on JSON-RPC requests one /v1/ws connection runs at the same time.
+# Read per connection so a live gateway can be tuned without a restart.
+_WS_MAX_INFLIGHT_ENV = "HERMES_WS_MAX_INFLIGHT"
+_WS_MAX_INFLIGHT_DEFAULT = 8
+
+
+def _ws_max_inflight() -> int:
+    raw = os.environ.get(_WS_MAX_INFLIGHT_ENV, "")
+    try:
+        value = int(raw) if raw.strip() else _WS_MAX_INFLIGHT_DEFAULT
+    except ValueError:
+        value = _WS_MAX_INFLIGHT_DEFAULT
+    return max(1, value)
+
 
 def _hermes_version() -> str:
     """Return the canonical Hermes Agent version string.
@@ -7114,12 +7128,23 @@ class APIServerAdapter(BasePlatformAdapter):
         _loop = asyncio.get_running_loop()
 
         class _AiohttpWSTransport:
-            __slots__ = ("_ws", "_loop", "_closed")
+            """The one writer for this socket.
+
+            Every outbound frame — events a handler writes from a worker
+            thread, RPC responses from the dispatch tasks below, parse errors
+            from the read loop — goes through :meth:`_safe_send`, which holds
+            ``_send_lock`` around ``ws.send_str``.  Requests on one connection
+            are dispatched concurrently, so several tasks can be ready to write
+            in the same tick; aiohttp's writer must not be entered twice.
+            """
+
+            __slots__ = ("_ws", "_loop", "_closed", "_send_lock")
 
             def __init__(self, ws_: "WebSocketResponse", loop_: asyncio.AbstractEventLoop) -> None:
                 self._ws = ws_
                 self._loop = loop_
                 self._closed = False
+                self._send_lock = asyncio.Lock()
 
             def write(self, obj: dict) -> bool:
                 if self._closed:
@@ -7138,6 +7163,9 @@ class APIServerAdapter(BasePlatformAdapter):
                     if fut is None:
                         self._closed = True
                         return False
+                    # Block the worker until the frame is on the wire: a
+                    # handler's events therefore always precede its response,
+                    # which the dispatch task sends only after dispatch returns.
                     fut.result(timeout=10.0)
                     return not self._closed
                 except Exception:
@@ -7151,8 +7179,13 @@ class APIServerAdapter(BasePlatformAdapter):
                 return not self._closed
 
             async def _safe_send(self, line: str) -> None:
+                if self._closed:
+                    return
                 try:
-                    await self._ws.send_str(line)
+                    async with self._send_lock:
+                        if self._closed:
+                            return
+                        await self._ws.send_str(line)
                 except Exception:
                     self._closed = True
 
@@ -7182,6 +7215,42 @@ class APIServerAdapter(BasePlatformAdapter):
             logger.debug("[api_server] ws closed before gateway.ready")
             return ws
 
+        # Concurrent per-connection dispatch.  Native clients (Portal) run
+        # everything over ONE socket, and dispatching inline in the read loop
+        # made every request wait for the one before it — and stopped reading
+        # frames (pings included) while a handler ran: cron.graph p50 12 s,
+        # session.list p50 25 s, artifact.query.invoke p50 20 s, 25 reconnect
+        # storms a day.  Now each request runs in its own task, bounded per
+        # connection by a semaphore, while the loop keeps reading.  Responses
+        # go through the transport's single writer above.
+        inflight_sem = asyncio.Semaphore(_ws_max_inflight())
+        inflight: set = set()
+
+        async def _send_json(obj: dict) -> None:
+            await transport._safe_send(json.dumps(obj, ensure_ascii=False))
+
+        async def _dispatch_one(req: Any) -> None:
+            async with inflight_sem:
+                try:
+                    resp = await asyncio.to_thread(_tui_server.dispatch, req, transport)
+                except Exception as exc:
+                    # One bad handler must not take the whole connection down.
+                    logger.warning("[api_server] ws dispatch raised: %s", exc)
+                    resp = {
+                        "jsonrpc": "2.0",
+                        "error": {"code": -32603, "message": f"internal error: {exc}"},
+                        "id": req.get("id") if isinstance(req, dict) else None,
+                    }
+            # None: a _LONG_HANDLERS method that writes its own response
+            # through the bound transport when its pool worker finishes.
+            if resp is not None:
+                await _send_json(resp)
+
+        def _spawn(req: Any) -> None:
+            task = _loop.create_task(_dispatch_one(req))
+            inflight.add(task)
+            task.add_done_callback(inflight.discard)
+
         try:
             async for msg in ws:
                 if msg.type == WSMsgType.TEXT:
@@ -7191,39 +7260,31 @@ class APIServerAdapter(BasePlatformAdapter):
                     try:
                         req = json.loads(line)
                     except json.JSONDecodeError:
-                        try:
-                            await ws.send_str(
-                                json.dumps(
-                                    {
-                                        "jsonrpc": "2.0",
-                                        "error": {"code": -32700, "message": "parse error"},
-                                        "id": None,
-                                    },
-                                    ensure_ascii=False,
-                                )
-                            )
-                        except Exception:
+                        await _send_json(
+                            {
+                                "jsonrpc": "2.0",
+                                "error": {"code": -32700, "message": "parse error"},
+                                "id": None,
+                            }
+                        )
+                        if transport._closed:
                             break
                         continue
 
                     if _tui_server is not None:
-                        resp = await asyncio.to_thread(
-                            _tui_server.dispatch, req, transport
-                        )
+                        _spawn(req)
                     else:
-                        resp = {
-                            "jsonrpc": "2.0",
-                            "error": {
-                                "code": -32603,
-                                "message": "tui gateway unavailable",
-                            },
-                            "id": req.get("id"),
-                        }
-
-                    if resp is not None:
-                        try:
-                            await ws.send_str(json.dumps(resp, ensure_ascii=False))
-                        except Exception:
+                        await _send_json(
+                            {
+                                "jsonrpc": "2.0",
+                                "error": {
+                                    "code": -32603,
+                                    "message": "tui gateway unavailable",
+                                },
+                                "id": req.get("id") if isinstance(req, dict) else None,
+                            }
+                        )
+                        if transport._closed:
                             break
                 elif msg.type == WSMsgType.ERROR:
                     logger.debug("[api_server] ws error: %s", ws.exception())
@@ -7231,19 +7292,28 @@ class APIServerAdapter(BasePlatformAdapter):
                 elif msg.type == WSMsgType.CLOSE:
                     break
         finally:
-            if _tui_server is not None:
-                _tui_server.unregister_live_transport(transport)
-            transport.close()
-            # Detach transport from sessions so later events don't crash into
-            # a closed socket.
-            if _tui_server is not None:
-                for _, sess in list(_tui_server._sessions.items()):
-                    if sess.get("transport") is transport:
-                        sess["transport"] = _tui_server._stdio_transport
+            # Stop waiting on in-flight dispatches.  The thread work itself
+            # cannot be interrupted — it runs to completion, and its response
+            # is dropped harmlessly because the transport is closed below.
+            for task in list(inflight):
+                task.cancel()
             try:
-                await ws.close()
-            except Exception:
-                pass
+                if inflight:
+                    await asyncio.gather(*inflight, return_exceptions=True)
+            finally:
+                if _tui_server is not None:
+                    _tui_server.unregister_live_transport(transport)
+                transport.close()
+                # Detach transport from sessions so later events don't crash into
+                # a closed socket.
+                if _tui_server is not None:
+                    for _, sess in list(_tui_server._sessions.items()):
+                        if sess.get("transport") is transport:
+                            sess["transport"] = _tui_server._stdio_transport
+                try:
+                    await ws.close()
+                except Exception:
+                    pass
 
         return ws
 

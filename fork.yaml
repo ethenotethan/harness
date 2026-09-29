@@ -341,9 +341,13 @@ def:
     - title: "HTTP API server: media and WebSocket routes"
       description: |
         `/v1/upload`, `/v1/files` and the `/v1/ws` WebSocket endpoint the native media pipeline
-        uses.
+        uses. `/v1/ws` dispatches JSON-RPC requests concurrently per connection (bounded by
+        `HERMES_WS_MAX_INFLIGHT`) through a single writer, so one slow handler no longer
+        holds every other request on the socket.
       globs:
         - "gateway/platforms/api_server.py"
+        - "tests/gateway/test_api_server_ws_concurrency.py"
+        - "docs/api/websocket.md"
     - title: "Agent guidance and prompt assembly"
       description: |
         Native-primitive guidance (prefer the gateway's own artifacts / wiki / cron over ad-hoc

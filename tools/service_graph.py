@@ -19,11 +19,45 @@ runtime, is logged and skipped rather than fabricating or overwriting a node.
 """
 from __future__ import annotations
 
+import copy
 import logging
+import os
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
 logger = logging.getLogger(__name__)
+
+# ``cron.graph`` is polled — Portal asks every 60 s from every open surface, and
+# the Desktop / TUI clients do the same — and every call used to re-run the
+# four runtime probes (``docker ps``, ``nomad job status``, ``launchctl list``,
+# the process registry), each a shell-out that takes seconds on a loaded host.
+# The probes are cached for a short TTL so overlapping polls share one round.
+# The TTL is read per call so a running gateway can be tuned without a restart;
+# 0 (or a non-number) disables the cache and restores the old always-probe path.
+_RUNTIME_CACHE_TTL_ENV = "HERMES_SERVICE_GRAPH_TTL"
+_RUNTIME_CACHE_TTL_DEFAULT = 10.0
+_runtime_cache_lock = threading.Lock()
+_runtime_cache: Dict[str, Any] = {"at": None, "services": None}
+
+
+def runtime_cache_ttl() -> float:
+    """Seconds a runtime-probe result is reused; ``0`` disables the cache."""
+    raw = os.environ.get(_RUNTIME_CACHE_TTL_ENV)
+    if raw is None or not raw.strip():
+        return _RUNTIME_CACHE_TTL_DEFAULT
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return 0.0
+
+
+def reset_runtime_cache() -> None:
+    """Forget the cached probe result (tests, and callers that just changed a service)."""
+    with _runtime_cache_lock:
+        _runtime_cache["at"] = None
+        _runtime_cache["services"] = None
 
 
 def _runtime_collectors() -> Dict[str, Callable[[], List[Dict[str, Any]]]]:
@@ -141,11 +175,39 @@ def attach_architecture(
     return ordered
 
 
+def _cached_runtime_services() -> List[Dict[str, Any]]:
+    """``collect_runtime_services`` behind the TTL cache.
+
+    The lock is held across the probe on purpose: concurrent ``cron.graph``
+    calls (several surfaces polling at once, now dispatched concurrently by the
+    WebSocket server) wait for the one in-flight round instead of each starting
+    their own. Callers get a deep copy so ``attach_architecture`` /
+    ``build_cron_graph`` can decorate the dicts without leaking into the cache.
+    """
+    ttl = runtime_cache_ttl()
+    if ttl <= 0:
+        return collect_runtime_services()
+    with _runtime_cache_lock:
+        now = time.monotonic()
+        at = _runtime_cache["at"]
+        if at is not None and now - at < ttl and _runtime_cache["services"] is not None:
+            return copy.deepcopy(_runtime_cache["services"])
+        services = collect_runtime_services()
+        _runtime_cache["at"] = time.monotonic()
+        _runtime_cache["services"] = copy.deepcopy(services)
+        return services
+
+
 def collect_graph_services() -> List[Dict[str, Any]]:
     """What ``cron.graph`` / ``code.graph`` overlay on the dataflow graph."""
     from tools.architecture_services import collect_architecture_definitions
 
-    runtime = collect_runtime_services()
+    # Only the runtime probes are cached. Architecture attachment reads a
+    # handful of small JSON manifests from disk (architecture_store.list_manifests
+    # + status_for) — milliseconds, no subprocess or network — and leaving it
+    # uncached means a manifest written or checked a moment ago shows up on the
+    # very next graph poll rather than after the TTL.
+    runtime = _cached_runtime_services()
     try:
         definitions = collect_architecture_definitions()
     except Exception:
