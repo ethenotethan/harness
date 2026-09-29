@@ -402,7 +402,12 @@ class TestDefinitionHistory:
         assert len(_rows()) == count
 
     def test_legacy_repeat_snapshot_does_not_create_an_upgrade_revision(self, cron_env):
-        from cron.changesets import _write_rows, definition_digest
+        from cron.changesets import (
+            _head_digests,
+            _write_rows,
+            configuration_definitions,
+            definition_digest,
+        )
         from cron.jobs import create_job, mark_job_run
 
         job = create_job(prompt="collect", schedule="every 1h", repeat=3)
@@ -410,10 +415,12 @@ class TestDefinitionHistory:
         rows[-1]["definitions"][job["id"]]["repeat"] = {"times": 3, "completed": 0}
         rows[-1]["definition_digest"] = definition_digest(rows[-1]["definitions"])
         _write_rows(rows)
+        legacy_rows = _rows()
 
         mark_job_run(job["id"], success=True)
 
-        assert len(_rows()) == 1
+        assert _rows() == legacy_rows
+        assert _head_digests()[1] == definition_digest(configuration_definitions())
 
     def test_configured_repeat_limit_is_still_revisioned(self, cron_env):
         from cron.jobs import _jobs_lock, _save_jobs_unlocked, create_job, load_jobs

@@ -505,6 +505,24 @@ def _read_rows() -> List[Dict[str, Any]]:
     return rows
 
 
+def _write_head_digests(graph_digest: str, definitions_digest: str) -> None:
+    """Refresh the disposable cache of the current canonical commitments."""
+    from cron.jobs import ensure_dirs
+    from utils import atomic_write_text
+
+    ensure_dirs()
+    try:
+        atomic_write_text(
+            changeset_head_path(),
+            f"{graph_digest}\n{definitions_digest}\n",
+            preserve_mode=True,
+            create_mode=0o600,
+        )
+    except OSError:
+        # The head is a cache; losing it costs a full read next time.
+        logger.debug("cron changeset head not written", exc_info=True)
+
+
 def _write_rows(rows: List[Dict[str, Any]]) -> None:
     """Rewrite the log atomically, keeping the newest ``MAX_CHANGESETS`` rows."""
     from cron.jobs import ensure_dirs
@@ -523,23 +541,18 @@ def _write_rows(rows: List[Dict[str, Any]]) -> None:
     )
     head = kept[-1].get("digest", "") if kept else ""
     head_definitions = kept[-1].get("definition_digest", "") if kept else ""
-    try:
-        atomic_write_text(
-            changeset_head_path(),
-            f"{head}\n{head_definitions}\n",
-            preserve_mode=True,
-            create_mode=0o600,
-        )
-    except OSError:
-        # The head is a cache; losing it costs a full read next time.
-        logger.debug("cron changeset head not written", exc_info=True)
+    _write_head_digests(head, head_definitions)
 
 
 def _head_digests() -> Tuple[Optional[str], Optional[str]]:
-    """The newest row's (graph digest, definition digest) per the cache. Either is
-    None when it can't be trusted; a cache written before definitions were
-    recorded has only the first line, so its definition digest is None and the
-    fast path does not fire until the log is read once."""
+    """The current canonical (graph digest, definition digest) per the cache.
+
+    Either is None when it can't be trusted. A cache written before definitions
+    were recorded has only the first line, so its definition digest is None and
+    the fast path does not fire until the log is read once. During a compatible
+    encoding migration, this cache may be newer than the last row's stored
+    representation; the append-only log remains untouched.
+    """
     try:
         lines = changeset_head_path().read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeDecodeError):
@@ -788,13 +801,11 @@ def record_change(jobs: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict[
         if canonical_recorded is not None and definition_digest(canonical_recorded) == defs_digest:
             # The head was stale or missing, or this is the one-time migration
             # from the first definition encoding that included repeat.completed.
-            # Canonicalize the snapshot in place without inventing a revision,
-            # and refresh the head cache so later runtime saves stay on the fast
-            # path instead of reparsing the log forever.
+            # Preserve the append-only row and refresh only the disposable head
+            # cache so later runtime saves stay on the fast path instead of
+            # reparsing the log forever.
             if recorded_definitions != canonical_recorded:
-                rows[-1]["definitions"] = canonical_recorded
-                rows[-1]["definition_digest"] = defs_digest
-                _write_rows(rows)
+                _write_head_digests(digest, defs_digest)
             return None
         if rows[-1].get("definition_digest") == defs_digest:
             # A definitions-free legacy row can still have a matching explicit
