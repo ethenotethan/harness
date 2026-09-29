@@ -86,6 +86,56 @@ The **RPC identity and the graph identity differ** for a bound manifest: `archit
 methods take `arch:<manifest-id>` (or the bare id), while the node on `cron.graph` is the
 runtime's id and carries `architecture.ref` pointing back at the manifest.
 
+### Deployments: where the code runs off this machine
+
+The four runtime providers see services on the gateway host. A Lambda, a Cloud Run
+revision, an ECS service or a Fly app has no process, port or container here, so a
+manifest may declare **deployments**: one per environment, each with the provider's own
+identity, an explicit health probe, an optional revision probe and its own log sinks.
+Probes are the deployment's declaration of how to ask — an HTTPS GET with an expected
+status, or a bounded shell-less command whose exit code answers — never a provider SDK
+the gateway has to carry. Only declared URLs and argv are ever contacted or run.
+
+```jsonc
+"deployments": [
+  {
+    "id": "prod", "environment": "production", "provider": "aws-lambda",
+    "target": "arn:aws:lambda:us-east-1:123456789012:function:demo",
+    "url": "https://demo.example.com",                                   // optional; drawn as an output
+    "health":   {"kind": "https", "url": "https://demo.example.com/healthz", "expect": [200, 204], "timeout_s": 5},
+    "revision": {"kind": "command", "argv": ["aws", "lambda", "get-function-configuration", "--function-name", "demo", "--query", "Version", "--output", "text"]},
+    "logs":     [{"id": "cloudwatch", "kind": "command", "argv": ["aws", "logs", "tail", "/aws/lambda/demo", "--since", "15m", "--format", "short"]}]
+  },
+  {
+    "id": "staging", "provider": "cloud-run", "target": "projects/p/locations/us/services/demo",
+    "health":   {"kind": "command", "argv": ["gcloud", "run", "services", "describe", "demo", "--region", "us", "--format", "value(status.conditions[0].status)"]},
+    "revision": {"kind": "https", "url": "https://staging.demo.example.com/version", "json_path": "build.sha"}
+  }
+]
+```
+
+| Field | Meaning |
+|---|---|
+| `id` | unique per manifest, `^[a-z0-9][a-z0-9._-]{0,63}$`; the node is `deploy:<manifest-id>/<id>` |
+| `environment` | display label; defaults to `id` |
+| `provider` | a lowercase token (`aws-lambda`, `ecs`, `cloud-run`, `fly`, `vercel`, `kubernetes`, …); informational |
+| `target` | the provider's own identity for the deployment |
+| `health` | required. `https`: GET `url`, live when the status is in `expect` (default `200`). `command`: run `argv` without a shell, live on exit 0. `timeout_s` defaults to 5, max 60 |
+| `revision` | optional. `command`: the first non-empty stdout line. `https`: the body, or `json_path` (dotted) into a JSON body |
+| `logs` | sinks of kind `command` only (see *Log capture*); read once per `service.logs` call, never followed |
+
+Each deployment is a **service node of its own** on the dataflow graph (`deploy:<id>/<env>`),
+labelled `<Name> · <environment>`, with `health` in the same shape the Docker provider
+reports (`status` live / down / unknown, `probe`, `target`, `checked_at`, `latency_ms`,
+`message`), a `deploys` relationship to the codebase node `arch:<id>`, and the manifest's
+`architecture` annotation plus `deployment`. Staging and production are two nodes with two
+healths. Probe results are cached in memory for 30 seconds; the graph and
+`architecture.describe` read the last known result (probing once when nothing is known),
+and `service.deployments.probe` runs the probes now. A probe that cannot run is `unknown`
+with the reason; a probe that times out or refuses is `down`. When a deployment's revision
+probe answers with a stored revision, `architecture.history` marks that revision `live_in`
+that environment.
+
 ## On the dataflow graph
 
 `cron.graph` and `code.graph` compose the four runtime providers with the manifests
@@ -256,7 +306,9 @@ Swift compiler until the Swift pack plus a project rule table reproduces its map
 | `architecture.list` | — | `{services: [{id, label, description, source, root, repository, ref, model, check_configured, runtime, status}], contract: {name, version}}` — `status` is the node annotation above (with `contract` and `conforming`); `runtime` is the binding (`{provider, id, graph_id}`) or null |
 | `architecture.describe` | `service` (graph id or bare id), `revision?` | `{service: {…}, revision, source, stored_at, summary, check, contract, model}` — without `revision` the current model is read now, validated against the contract and snapshotted; with it a stored snapshot is returned. **4032** model missing/invalid/unfetchable, **4033** does not conform to the contract (message names the problems), **4404** no such stored revision |
 | `architecture.check` | `service` | `{service, check: {status: passed\|failed\|unavailable, exit_code?, output?, reason?, revision, checked_at, duration_s, command}}` — runs the manifest's `check` in `root`, bounded at 300 s. A GitHub service or a manifest without `check` is `unavailable` with a `reason` |
-| `architecture.history` | `service` | `{service, source, latest, head, revisions: [{revision, source, stored_at, summary, contract, commit?, commits_since_previous?, deployed, deployed_at?}], runtime?, checks: [runs, newest first]}` — see *Revision history* |
+| `architecture.history` | `service` | `{service, source, latest, head, revisions: [{revision, source, stored_at, summary, contract, commit?, commits_since_previous?, deployed, deployed_at?, live_in?}], runtime?, checks: [runs, newest first]}` — see *Revision history*; `live_in` lists the deployments whose last revision probe answered with that revision |
+| `service.deployments` | `service` | `{service, deployments: [{id, graph_id, environment, provider, target, url, health_probe, revision_probe, logs, health?, revision?, probed_at?}]}` — the declarations with the last known probe, without probing |
+| `service.deployments.probe` | `service`, `deployment?` | the same shape, after running the declared health and revision probes now (**4050** unknown deployment) |
 | `architecture.diff` | `service`, `from?`, `to?` | `{service, from, to, nodes: {added, removed}, edges: {added, removed}, invariants: {added, removed, changed}, files: {added, removed, changed}, gates: {jobs_added, jobs_removed, ratchets_added, ratchets_removed}, summary: {from, to}, git?}` — `to` defaults to the latest snapshot, `from` to the one before it. **4404** a revision is not stored (or nothing precedes `to`), **4001** a malformed revision |
 
 Common errors: **4029** missing `service`, **4030** unknown service; **5040–5044**
@@ -330,7 +382,9 @@ runtime property and the runtime is not here; a `logs` block on one is ignored w
 ]
 ```
 
-Kinds: `file`, `directory` (the newest regular file by mtime is the active file),
+Kinds: `file`, `directory` (the newest regular file by mtime is the active file), `command`
+(a deployment's bounded, shell-less command whose stdout is the tail — valid only under a
+deployment's `logs`, read once per request, never followed),
 `launchd_stdout` / `launchd_stderr` (path derived from the bound launchd job's
 `StandardOutPath` / `StandardErrorPath` — `~/Library/LaunchAgents`, then
 `/Library/LaunchAgents`, `/Library/LaunchDaemons` — when `path` is omitted; these kinds need a

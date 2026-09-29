@@ -261,6 +261,9 @@ _LONG_HANDLERS = frozenset(
         # Log reads seek and scan up to 4 MiB of a sink; keep them off the reader thread.
         "service.logs",
         "service.logs.follow",
+        # Deployment probes are HTTPS GETs and bounded commands.
+        "service.deployments",
+        "service.deployments.probe",
         "architecture.diff",
         "projects.discover_repos",
         "projects.record_repos",

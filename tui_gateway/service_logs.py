@@ -23,7 +23,13 @@ Sinks (``logs: [{id, kind, path?, label?}]`` in the manifest):
   directory       a folder of log files; the newest by mtime is the active file
   launchd_stdout  the bound launchd job's ``StandardOutPath`` (path may be omitted)
   launchd_stderr  the bound launchd job's ``StandardErrorPath`` (path may be omitted)
+  command         a bounded, shell-less command whose stdout *is* the log tail
+                  (``aws logs tail``, ``gcloud logging read``, ``flyctl logs``);
+                  declared only on a deployment (``tui_gateway/deployments.py``),
+                  read once per request, never followed (4042)
 
+A deployment's graph id (``deploy:<manifest>/<id>``) resolves to that
+deployment's declared sinks.
 Reads are bounded: a tail scans at most ``TAIL_SCAN_BYTES`` from the end and
 returns at most ``MAX_LINES`` lines; a cursor read returns only complete lines
 appended since a byte offset. Following polls a sink from a daemon thread and
@@ -44,7 +50,10 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-SINK_KINDS = ("file", "directory", "launchd_stdout", "launchd_stderr")
+SINK_KINDS = ("file", "directory", "launchd_stdout", "launchd_stderr", "command")
+COMMAND_TIMEOUT_S = 30.0
+COMMAND_MAX_BYTES = 4 * 1024 * 1024
+UNSUPPORTED_FOLLOW_PROBLEM = "a command sink is read once per request; following it is not supported"
 LAUNCHD_KINDS = {"launchd_stdout": "StandardOutPath", "launchd_stderr": "StandardErrorPath"}
 DEFAULT_LINES = 200
 MAX_LINES = 2000
@@ -98,7 +107,7 @@ def launchd_log_path(label: str, key: str, search_dirs: Optional[List[str]] = No
 
 
 def normalize_log_sinks(value: Any, runtime: Optional[Dict[str, Any]],
-                        launchd_dirs: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+                        launchd_dirs: Optional[List[str]] = None, allow_command: bool = False) -> List[Dict[str, Any]]:
     """Validate ``logs`` from a manifest. Raises ValueError for a malformed
     declaration (unknown kind, empty/duplicate id, relative path, launchd kind
     without a launchd binding). A launchd sink whose plist cannot be read keeps
@@ -126,6 +135,17 @@ def normalize_log_sinks(value: Any, runtime: Optional[Dict[str, Any]],
         label = raw.get("label")
         if label is not None and not isinstance(label, str):
             raise ValueError(f"logs[{sink_id}].label must be a string")
+        if kind == "command":
+            if not allow_command:
+                raise ValueError(f"logs[{sink_id}]: kind command is only valid on a deployment's logs")
+            argv = raw.get("argv")
+            if isinstance(argv, str):
+                import shlex
+                argv = shlex.split(argv)
+            if not isinstance(argv, list) or not argv or not all(isinstance(part, str) and part.strip() for part in argv):
+                raise ValueError(f"logs[{sink_id}].argv must be a non-empty list of strings")
+            sinks.append({"id": sink_id, "kind": kind, "label": (label or sink_id).strip(), "path": None, "argv": [part.strip() for part in argv]})
+            continue
         path = raw.get("path")
         problem: Optional[str] = None
         if path is not None:
@@ -157,7 +177,7 @@ def capture_problem(manifest: Dict[str, Any]) -> Optional[str]:
     sinks = manifest.get("logs") or []
     if not sinks:
         return NO_CAPTURE_PROBLEM
-    if not any(sink.get("path") for sink in sinks):
+    if not any(sink.get("path") or sink.get("argv") for sink in sinks):
         problems = "; ".join(str(sink.get("problem") or f"{sink['id']}: no path") for sink in sinks)
         return f"no log sink resolves: {problems}"
     return None
@@ -196,6 +216,14 @@ def resolve_sink(sink: Dict[str, Any]) -> Dict[str, Any]:
                 "path": sink.get("path"), "exists": False, "size_bytes": 0, "modified_at": None}
     if sink.get("problem"):
         resolved["problem"] = sink["problem"]
+    if sink.get("kind") == "command":
+        import shutil
+        argv = list(sink.get("argv") or [])
+        resolved["argv"] = argv
+        resolved["exists"] = bool(argv) and shutil.which(argv[0]) is not None
+        if argv and not resolved["exists"]:
+            resolved["problem"] = f"command not found: {argv[0]}"
+        return resolved
     try:
         target = active_file(sink)
         if target is not None and target.is_file():
@@ -259,7 +287,17 @@ def service_sinks(graph_id: str, home: Optional[str] = None, launchd_dirs: Optio
     LogError 4030 for an unknown ``arch:`` service, 4042 for a provider without
     log capture, 4001 for an id that is not a graph service id."""
     from tui_gateway import architecture_store as store
-
+    from tui_gateway import deployments
+    parsed = deployments.parse_graph_id(graph_id)
+    if parsed is not None:
+        manifest_id, dep_id = parsed
+        manifest = store.load_manifest(manifest_id, home)
+        if manifest is None:
+            raise LogError(4030, f"unknown service: {store.ID_PREFIX}{manifest_id}")
+        deployment = deployments.find_deployment(manifest, dep_id)
+        if deployment is None:
+            raise LogError(4050, f"{manifest_id} has no deployment {dep_id!r}")
+        return list(deployment.get("logs") or [])
     if graph_id.startswith(store.ID_PREFIX):
         manifest = store.load_manifest(graph_id, home)
         if manifest is None:
@@ -281,9 +319,7 @@ def service_sinks(graph_id: str, home: Optional[str] = None, launchd_dirs: Optio
         return sinks
     if graph_id.startswith(("docker:", "nomad:", "proc_")):
         raise LogError(4042, f"{graph_id}: {UNSUPPORTED_PROVIDER_PROBLEM}")
-    raise LogError(4001, f"{graph_id!r} is not a graph service id (arch:, launchd:, docker:, nomad:, proc_)")
-
-
+    raise LogError(4001, f"{graph_id!r} is not a graph service id (arch:, deploy:, launchd:, docker:, nomad:, proc_)")
 # ── Bounded reads ────────────────────────────────────────────────────────────
 
 
@@ -375,6 +411,10 @@ def read_logs(sinks: List[Dict[str, Any]], service: str, sink_id: Optional[str],
     """``service.logs``: a bounded tail or the lines since a cursor, from one of
     the service's sinks only. LogError 4040 unknown sink, 4041 sink not present."""
     sink = select_sink(sinks, sink_id, service)
+    if sink.get("kind") == "command":
+        result = read_command(sink, lines)
+        result.update({"service": service, "sink": resolve_sink(sink), "sinks": [resolve_sink(s) for s in sinks], "encoding": "utf-8-replace"})
+        return result
     target = active_file(sink)
     if target is None or not target.is_file():
         raise LogError(4041, f"log sink {sink['id']!r} has no file yet" + (f" ({sink['problem']})" if sink.get("problem") else ""))
@@ -389,9 +429,40 @@ def read_logs(sinks: List[Dict[str, Any]], service: str, sink_id: Optional[str],
     return result
 
 
+def read_command(sink: Dict[str, Any], lines: int,
+                 runner: Optional[Callable[[List[str], float], Any]] = None) -> Dict[str, Any]:
+    """Run a command sink once, bounded in time and bytes, and return the last
+    ``lines`` lines of its stdout. There is no cursor: the command is the tail.
+    LogError 4041 when the executable is missing, times out or fails."""
+    import shutil
+    import subprocess
+    argv = list(sink.get("argv") or [])
+    if not argv:
+        raise LogError(4041, f"log sink {sink['id']!r} declares no command")
+    if shutil.which(argv[0]) is None:
+        raise LogError(4041, f"log sink {sink['id']!r}: command not found: {argv[0]}")
+    try:
+        if runner is not None:
+            completed = runner(argv, COMMAND_TIMEOUT_S)
+        else:
+            completed = subprocess.run(argv, capture_output=True, timeout=COMMAND_TIMEOUT_S, check=False)  # noqa: S603 - declared argv only
+    except subprocess.TimeoutExpired as exc:
+        raise LogError(4041, f"log sink {sink['id']!r}: command timed out after {COMMAND_TIMEOUT_S:g}s") from exc
+    except OSError as exc:
+        raise LogError(4041, f"log sink {sink['id']!r}: {exc}") from exc
+    stdout = completed.stdout if isinstance(completed.stdout, (bytes, bytearray)) else str(completed.stdout or "").encode("utf-8")
+    stderr = completed.stderr if isinstance(completed.stderr, (bytes, bytearray)) else str(completed.stderr or "").encode("utf-8")
+    if completed.returncode != 0 and not stdout.strip():
+        detail = _decode(bytes(stderr)[-2000:]).strip().splitlines()
+        raise LogError(4041, f"log sink {sink['id']!r}: command exited {completed.returncode}" + (f": {detail[-1][:200]}" if detail else ""))
+    data = bytes(stdout)[-COMMAND_MAX_BYTES:]
+    all_lines = [line for line in _split_lines(data) if line != ""]
+    tail = all_lines[-lines:] if lines > 0 else []
+    return {"lines": tail, "cursor": None, "truncated": len(all_lines) > len(tail) or len(stdout) > COMMAND_MAX_BYTES,
+            "exit_code": int(completed.returncode)}
+
+
 # ── Follow ───────────────────────────────────────────────────────────────────
-
-
 class Follower:
     """One followed sink: polls for appended lines and broadcasts them."""
 
@@ -476,6 +547,8 @@ def start_follow(sinks: List[Dict[str, Any]], service: str, sink_id: Optional[st
     returns the existing follower. ``spawn=False`` creates without a thread
     (tests drive ``poll_once`` themselves)."""
     sink = select_sink(sinks, sink_id, service)
+    if sink.get("kind") == "command":
+        raise LogError(4042, f"log sink {sink['id']!r}: {UNSUPPORTED_FOLLOW_PROBLEM}")
     target = active_file(sink)
     if target is None or not target.is_file():
         raise LogError(4041, f"log sink {sink['id']!r} has no file yet; nothing to follow")

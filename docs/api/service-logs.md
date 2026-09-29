@@ -72,3 +72,15 @@ events: ["service.log"]}` and lists both methods in `capability_names`.
 - The cron graph node annotation does not yet carry sink ids for launchd nodes; a client
   resolves them by calling `service.logs` (the `sinks` array) for the node's id.
 - A launchd plist that names no `StandardOutPath`/`StandardErrorPath` yields no derived sinks.
+
+## Deployments and command sinks
+
+A deployment declared on a manifest (see [architecture.md](architecture.md), *Deployments*)
+has the graph id `deploy:<manifest-id>/<deployment-id>` and resolves to that deployment's own
+sinks. Those are of kind `command`: a bounded, shell-less command whose stdout *is* the log
+tail (`aws logs tail`, `gcloud logging read`, `flyctl logs`). `service.logs` runs it once
+(30 s, 4 MiB cap) and returns the last `lines` lines; the result has `cursor: null`,
+`exit_code` and `truncated`. A missing executable, a timeout or a failing command with no
+output is **4041** with the reason. `service.logs.follow` on a command sink is **4042**:
+there is nothing to append to, so poll `service.logs`. An unknown deployment is **4050**.
+
