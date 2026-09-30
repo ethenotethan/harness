@@ -214,3 +214,50 @@ def test_rpc_identity_stays_the_manifest_id_for_bound_models(home, tmp_path):
     assert described["service"]["id"] == "arch:demo" and described["service"]["runtime"]["graph_id"] == "launchd:demo"
     assert pending["architecture.history"](3, {"service": "demo"})["result"]["latest"] == described["revision"]
     assert pending["architecture.describe"](4, {"service": "launchd:demo"})["error"]["code"] == 4030, "the graph id is not the RPC id"
+
+
+@pytest.fixture(autouse=True)
+def _fresh_runtime_cache():
+    service_graph.reset_runtime_cache()
+    yield
+    service_graph.reset_runtime_cache()
+
+
+def _counting_collectors(calls):
+    def launchd():
+        calls.append(1)
+        return [_runtime("launchd:demo")]
+    return lambda: {"launchd": launchd}
+
+
+def test_collect_graph_services_reuses_runtime_probes_within_ttl(home, monkeypatch):
+    calls = []
+    monkeypatch.setattr(service_graph, "_runtime_collectors", _counting_collectors(calls))
+    monkeypatch.setenv("HERMES_SERVICE_GRAPH_TTL", "10")
+    now = [1000.0]
+    monkeypatch.setattr(service_graph.time, "monotonic", lambda: now[0])
+
+    first = service_graph.collect_graph_services()
+    second = service_graph.collect_graph_services()
+    assert len(calls) == 1, "second call inside the TTL must not re-run the probes"
+    assert first == second and first is not second
+    first[0]["health"] = "mutated-by-caller"
+    assert service_graph.collect_graph_services()[0].get("health") != "mutated-by-caller", "cache hands out copies"
+
+    now[0] += 10.5
+    service_graph.collect_graph_services()
+    assert len(calls) == 2, "probes run again once the TTL has elapsed"
+
+
+def test_collect_graph_services_ttl_zero_disables_cache(home, monkeypatch):
+    calls = []
+    monkeypatch.setattr(service_graph, "_runtime_collectors", _counting_collectors(calls))
+    monkeypatch.setenv("HERMES_SERVICE_GRAPH_TTL", "0")
+    service_graph.collect_graph_services()
+    service_graph.collect_graph_services()
+    assert len(calls) == 2
+
+    monkeypatch.setenv("HERMES_SERVICE_GRAPH_TTL", "garbage")
+    assert service_graph.runtime_cache_ttl() == 0.0
+    monkeypatch.delenv("HERMES_SERVICE_GRAPH_TTL")
+    assert service_graph.runtime_cache_ttl() == 10.0

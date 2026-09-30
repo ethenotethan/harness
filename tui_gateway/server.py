@@ -265,6 +265,14 @@ _LONG_HANDLERS = frozenset(
         "service.deployments",
         "service.deployments.probe",
         "architecture.diff",
+        # Artifact reads Portal polls on every page: artifact.list is a
+        # lock-guarded index read; artifact.query.invoke runs a plugin handler
+        # (SQL / HTTP, seconds) and touches only lock-guarded rate windows plus
+        # the read-only handler registry — the subscription poller thread
+        # already calls the same invoke() concurrently with RPCs. Both are safe
+        # off the reader thread; measured p50 20 s inline behind other RPCs.
+        "artifact.list",
+        "artifact.query.invoke",
         "projects.discover_repos",
         "projects.record_repos",
         "projects.for_cwd",
