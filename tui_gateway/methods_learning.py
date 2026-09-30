@@ -6,6 +6,8 @@ Handler bodies are unchanged from the original commit; they are rebound onto
 server.py's globals at install time — see method_ctx.py.
 """
 
+import types
+
 from .method_ctx import HandlerRegistry
 
 _registry = HandlerRegistry()
@@ -23,6 +25,12 @@ method = _registry.method
 # Error family: 5230-5249.
 
 
+# Called from handler bodies, which run rebound onto server.py's globals (see
+# method_ctx.py) — so this name must exist THERE, not just here, or every
+# learning.* mutation dies with ``NameError: name '_learning_changed' is not
+# defined`` on its first call. register() publishes it onto the server
+# namespace, rebound the same way, so its own ``_emit`` call resolves to
+# server.py's ``_emit`` as well.
 def _learning_changed(entity: str, payload: dict) -> None:
     event = {"entity": entity}
     for key in ("id", "rev", "updated_at", "updated_by", "deleted"):
@@ -390,4 +398,19 @@ def _(rid, params: dict) -> dict:
 
 def register(server) -> None:
     """Bind this module's handlers onto ``server``'s globals and registry."""
+    existing = vars(server).get(_learning_changed.__name__)
+    if existing is not None and getattr(existing, "__code__", None) is not _learning_changed.__code__:
+        raise RuntimeError(
+            f"{server.__name__} already defines {_learning_changed.__name__}; "
+            "refusing to shadow it"
+        )
+    rebound = types.FunctionType(
+        _learning_changed.__code__,
+        vars(server),
+        _learning_changed.__name__,
+        _learning_changed.__defaults__,
+        _learning_changed.__closure__,
+    )
+    rebound.__doc__ = _learning_changed.__doc__
+    setattr(server, _learning_changed.__name__, rebound)
     _registry.install(server)

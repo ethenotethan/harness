@@ -10,25 +10,19 @@ from hermes_constants import get_hermes_home
 
 from .method_ctx import HandlerRegistry
 
-# The wiki handlers below were carried into this module during the upstream
-# rebase's handler split WITHOUT their imports — every wiki RPC (wiki.scan,
-# wiki.page, wiki.list, wiki.taxonomy, wiki.expand_links, wiki.changesets)
-# died with `NameError: name 'resolve_wiki' is not defined`, which the
-# desktop rendered as "Failed to load page" on every wiki page. NameError,
-# not ImportError, because Python resolves function-body names at CALL time —
-# so the module imported cleanly and the break was invisible until the first
-# wiki call. tests/gateway/test_methods_harness_imports.py now pins every
-# name these handlers reference to an actual import.
-from tui_gateway.wiki_api import (
-    resolve_wiki,
-    wiki_changesets,
-    wiki_expand_links,
-    wiki_flatten_taxonomy,
-    wiki_list,
-    wiki_page,
-    wiki_scan,
-    wiki_taxonomy,
-)
+# Handler bodies in this module are NOT executed with this module's globals.
+# server.py's register() rebinds every @method function onto server.py's own
+# namespace with ``types.FunctionType(fn.__code__, vars(server), ...)`` (see
+# method_ctx.py), so a name a handler needs must be one of: a server.py
+# global, a builtin, or something the handler imports INSIDE its own body.
+# A module-level import here is invisible at call time and only fails with
+# ``NameError`` on the first RPC (Python resolves function-body names at CALL
+# time, so the module imports cleanly). That is how ``wiki.list`` shipped as
+# ``RPC error [5052]: name 'wiki_list' is not defined`` while a test that pinned
+# names against module-level imports stayed green. Every wiki/skills handler
+# below therefore imports what it needs in its body;
+# tests/gateway/test_methods_harness_imports.py rebinds each handler exactly
+# the way the server does and asserts every global it loads resolves there.
 
 _registry = HandlerRegistry()
 method = _registry.method
@@ -38,7 +32,9 @@ _profile_scoped = _registry.profile_scoped
 # Skills helpers recovered from the pre-rebase server.py (60b71f5a6) — the
 # handler split carried their callers here but dropped the definitions, so
 # the skills.* handlers NameError'd on first call, same class as the wiki
-# import loss above.
+# import loss above. They run with THIS module's globals (Path, get_hermes_home,
+# yaml), so the skills.* handlers import them by name inside their bodies —
+# the rebound handler namespace (server.py's) does not contain them.
 def _find_local_skill_md(skill_name: str) -> Optional[Path]:
     """Find a locally installed skill's SKILL.md file by name.
 
@@ -280,6 +276,12 @@ def _(rid, params: dict) -> dict:
 @method("skills.get")
 def _(rid, params: dict) -> dict:
     """Read a locally installed skill's SKILL.md content."""
+    from tui_gateway.methods_harness import (
+        _find_local_skill_md,
+        _parse_skill_frontmatter,
+        _skill_info_from_path,
+    )
+
     skill_name = params.get("skill_id", "")
     file_path = params.get("file_path")  # optional: relative path within skill dir
 
@@ -329,6 +331,12 @@ def _(rid, params: dict) -> dict:
 @method("skills.update")
 def _(rid, params: dict) -> dict:
     """Update a locally installed skill's SKILL.md content."""
+    from tui_gateway.methods_harness import (
+        _find_local_skill_md,
+        _parse_skill_frontmatter,
+        _skill_info_from_path,
+    )
+
     skill_name = params.get("skill_id", "")
     new_content = params.get("content", "")
 
@@ -461,6 +469,8 @@ def _(rid, params: dict) -> dict:
 @method("wiki.list")
 def _(rid, params: dict) -> dict:
     try:
+        from tui_gateway.wiki_api import wiki_list
+
         result = wiki_list()
         return _ok(rid, result)
     except Exception as e:

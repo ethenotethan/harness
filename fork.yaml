@@ -55,6 +55,7 @@ def:
             - "tui_gateway/server.py"
             - "tui_gateway/entry.py"
             - "tests/gateway/test_methods_harness_imports.py"
+            - "tests/gateway/test_methods_harness_dispatch.py"
             - "tests/test_tui_gateway_server.py"
         - title: "Tool-adjacent RPCs (`cron.*`, skills, learning frames)"
           description: |
