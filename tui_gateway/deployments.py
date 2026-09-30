@@ -243,7 +243,7 @@ def run_argv(argv: List[str], timeout: float) -> subprocess.CompletedProcess:
     on PATH or be an absolute path; otherwise the caller reports it as unknown."""
     if not shutil.which(argv[0]):
         raise FileNotFoundError(argv[0])
-    return subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False)  # noqa: S603 - declared argv only
+    return subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False, stdin=subprocess.DEVNULL)  # noqa: S603 - declared argv only
 
 
 def probe_health(probe: Dict[str, Any], runner: Callable[[List[str], float], subprocess.CompletedProcess] = run_argv,
