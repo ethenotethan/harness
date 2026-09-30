@@ -1764,7 +1764,23 @@ def _(rid, params: dict) -> dict:
         # node when nothing runs it. See tools/service_graph.py.
         from tools.service_graph import collect_graph_services
 
-        return _ok(rid, build_cron_graph(services=collect_graph_services()))
+        # Living artifacts (tui_gateway/artifact_store.py) join as ``artifact``
+        # nodes with ``maintains`` edges from the crons their content names —
+        # the "artifact dependencies aren't shown" gap. The collector fails open
+        # on its own; the guard here keeps an unexpected error in the overlay
+        # from taking the whole graph down with it.
+        from tools.artifact_graph import collect_graph_artifacts
+
+        try:
+            artifacts = collect_graph_artifacts()
+        except Exception:
+            logger.exception("cron.graph: artifact overlay unavailable")
+            artifacts = []
+
+        return _ok(
+            rid,
+            build_cron_graph(services=collect_graph_services(), artifacts=artifacts),
+        )
     except Exception as e:
         logger.exception("cron.graph failed")
         return _err(rid, 5024, str(e))

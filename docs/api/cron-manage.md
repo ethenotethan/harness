@@ -90,3 +90,47 @@ this.
 Builder: `cron.jobs.job_source_files(job)`; roots from
 `tui_gateway.files_browse.file_roots()` with a data-home fallback when that
 module isn't importable.
+
+## Artifacts on the graph
+
+A living artifact (`artifact.set` / `artifact.get`, see `tui_gateway/artifact_store.py`)
+is declared the other way round from a job's dataflow: its JSON content may name
+the crons that tend it in a top-level `maintainers` array, and every record is
+stamped with who last wrote it (`updated_by`). `cron.graph` overlays both, so a
+cron that tends a map has an edge to the map without the job having to declare
+it — and a job that does declare `artifact:<id>` in `inputs` / `outputs` (an
+accepted scheme) meets the artifact's own record on the same node.
+
+One `artifact` node per living artifact, id `artifact:<artifact_id>`:
+
+```jsonc
+{
+  "id": "artifact:ops-map", "kind": "artifact", "type": "artifact", "label": "Ops map",
+  "artifact_id": "ops-map", "artifact_kind": "map",
+  "rev": 12, "updated_at": "2026-09-28T09:00:00+00:00", "updated_by": "cron:3f9a…",
+  "maintainers": ["cron:3f9a…", "cron:gone"],
+  "queries": ["orders.open"]            // only when the record declares queries
+}
+```
+
+Edges:
+
+- `maintains` — cron → artifact, one per `maintainers` entry `cron:<jobId>` whose
+  job exists. An entry naming a job that does not exist stays on the node's
+  `maintainers` list (the client can show it as dangling) but draws nothing.
+- `writes` — cron → artifact when `updated_by` is `cron:<jobId>` for an existing
+  job and no `writes` / `maintains` edge already links the two (an *observed*
+  write, as opposed to a declared one). `session:<id>` and `agent` writers draw
+  nothing.
+
+Commitment: `maintainers` are configuration — they change the declared
+topology — and enter the digest through the `maintains` edges they produce
+(`cron/changesets.py` hashes every edge). `rev`, `updated_at`, `updated_by` and
+`artifact_kind` are runtime observations and, like `source_files` above, stay
+out of the node row so a cron writing its artifact moves no revision. The
+changeset log itself still commits to the jobs' dataflow alone
+(`configuration_graph`), as it does for services.
+
+Collector: `tools.artifact_graph.collect_graph_artifacts()` — one index read,
+content parsed once per artifact, revisions never loaded; a store that cannot
+be read yields no artifact nodes rather than no graph.

@@ -193,6 +193,20 @@ def:
             - "tests/cron/test_code_graph.py"
             - "pyproject.toml"
             - "uv.lock"
+        - title: "Artifacts on the runtime graph"
+          description: |
+            Living artifacts join `cron.graph` as `artifact` nodes carrying their record
+            (`artifact_id`, `artifact_kind`, `rev`, `updated_at`, `updated_by`) and the
+            `maintainers` their JSON content declares; a `maintains` edge links each
+            maintaining cron to the artifact and an observed `cron:<jobId>` writer draws
+            `writes` when nothing else links the two. `artifact:<id>` is an accepted
+            input/output scheme, so a job's declaration and the artifact's own record meet
+            on one node. The collector reads the store once and fails open; `rev` /
+            `updated_at` / `updated_by` stay out of the configuration digest, `maintains`
+            edges are in it.
+          globs:
+            - "tools/artifact_graph.py"
+            - "tests/tools/test_artifact_graph.py"
     - title: "Living artifacts"
       description: |
         Revisioned models that any writer maintains and clients render live: dataset, model,

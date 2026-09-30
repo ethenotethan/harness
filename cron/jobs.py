@@ -1609,10 +1609,13 @@ def _normalized_inference_axes(job: Dict[str, Any]) -> Tuple[Optional[str], Opti
 #   side_effects — terminal actions (telegram/pr/…). Sink leaves, never edges.
 # The output-vs-side-effect split keeps the graph readable: outputs make edges,
 # side effects make sinks.
+# ``artifact:<id>`` names a living artifact (tui_gateway/artifact_store.py): a
+# job may declare it as something it reads or writes, and the graph merges that
+# declaration with the artifact's own record (its maintainers, its last writer).
 _INPUT_SCHEMES = frozenset(
-    {"url", "http", "https", "file", "wiki", "postgres", "cron-output"}
+    {"url", "http", "https", "file", "wiki", "postgres", "artifact", "cron-output"}
 )
-_OUTPUT_SCHEMES = frozenset({"wiki", "file", "postgres"})
+_OUTPUT_SCHEMES = frozenset({"wiki", "file", "postgres", "artifact"})
 _SIDE_EFFECT_SCHEMES = frozenset(
     {"telegram", "slack", "email", "notify", "pr", "github", "webhook"}
 )
@@ -2214,6 +2217,7 @@ def normalize_service_declaration(
 def build_cron_graph(
     jobs: Optional[List[Dict[str, Any]]] = None,
     services: Optional[List[Dict[str, Any]]] = None,
+    artifacts: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
     """Assemble the cron interflow dataflow graph as ``{nodes, edges}``.
 
@@ -2231,6 +2235,16 @@ def build_cron_graph(
     lists. They are rendered as ``service`` nodes; liveness is the caller's
     concern (only currently-running services should be passed in).
 
+    ``artifacts`` are the *living artifacts* in ``tui_gateway/artifact_store.py``
+    (see ``tools/artifact_graph.py`` for the collector): revisioned documents a
+    cron tends. Each declaration carries ``id`` (``artifact:<artifact_id>``),
+    ``label``, ``artifact_id``, ``artifact_kind`` (map/html/table/markdown/…),
+    ``rev``, ``updated_at``, ``updated_by`` (``cron:<jobId>`` / ``session:<id>``
+    / ``agent``) and ``maintainers`` (``["cron:<jobId>", …]``, the convention
+    the artifact's JSON content declares). A living artifact whose ref a job
+    already lists in ``inputs``/``outputs`` is the SAME node — the living fields
+    enrich it rather than duplicating it.
+
     Node kinds:
       - ``cron``     one per job (node id = job id).
       - ``service``  one per live long-running process that declared dataflow.
@@ -2238,13 +2252,26 @@ def build_cron_graph(
                      external/upstream input (url/http/https/file/wiki/postgres).
       - ``artifact`` a resource WRITTEN by ≥1 cron/service (consumable output).
                      When another cron reads the same ref, that shared node IS
-                     the cron→cron link (outputs make edges).
+                     the cron→cron link (outputs make edges). A *living*
+                     artifact (``artifact:<id>``) additionally carries
+                     ``artifact_id``, ``artifact_kind``, ``rev``, ``updated_at``,
+                     ``updated_by`` and ``maintainers`` — the first four are
+                     runtime observations and stay out of the configuration
+                     digest; ``maintainers`` enters it through the
+                     ``maintains`` edges it produces.
       - ``sink``     a side_effect target — a terminal action (side effects make
                      sinks, never edges onward).
 
     Edge types:
       - ``reads``     source/artifact → cron
-      - ``writes``    cron → artifact
+      - ``writes``    cron → artifact. Also drawn for a living artifact whose
+                      ``updated_by`` is ``cron:<jobId>`` (an observed write)
+                      when nothing else already links the two.
+      - ``maintains`` cron → living artifact — the artifact's content names
+                      the job in its ``maintainers`` list. A maintainer naming
+                      a job that does not exist stays on the node's list but
+                      draws nothing; ``session:``/``agent`` writers draw
+                      nothing.
       - ``feeds``     cron → cron — a ``cron-output:<id>`` input; the explicit
                       dependency backbone (mirrors ``context_from``).
       - ``<scheme>``  cron → sink — the delivered action kind (telegram/pr/…).
@@ -2256,6 +2283,7 @@ def build_cron_graph(
     if jobs is None:
         jobs = [_normalize_job_record(job) for job in load_jobs()]
     services = services or []
+    artifacts = artifacts or []
 
     job_ids = {job.get("id") for job in jobs if job.get("id")}
 
@@ -2429,7 +2457,97 @@ def build_cron_graph(
             "label": value or ref,
         })
 
+    _overlay_living_artifacts(nodes, edges, artifacts, job_ids)
+
     return {"nodes": nodes, "edges": edges}
+
+
+def _overlay_living_artifacts(
+    nodes: List[Dict[str, Any]],
+    edges: List[Dict[str, Any]],
+    artifacts: List[Dict[str, Any]],
+    job_ids: Set[str],
+) -> None:
+    """Put living artifacts on the graph, merged onto any declared ``artifact:``
+    resource node, with ``maintains`` / observed ``writes`` edges from crons.
+
+    Sorted by id so two builds over the same store are byte-identical
+    regardless of the order the store returned them in.
+    """
+    by_id: Dict[str, Dict[str, Any]] = {
+        node["id"]: node for node in nodes if isinstance(node.get("id"), str)
+    }
+    # Pairs already joined by a write-ish edge — a declared ``writes`` or a
+    # ``maintains`` — so an observed write never doubles an existing link.
+    linked: Set[Tuple[str, str]] = {
+        (edge["source"], edge["target"])
+        for edge in edges
+        if edge.get("type") in ("writes", "maintains")
+    }
+    maintained: Set[Tuple[str, str]] = {
+        (edge["source"], edge["target"])
+        for edge in edges
+        if edge.get("type") == "maintains"
+    }
+
+    for artifact in sorted(artifacts, key=lambda a: str(a.get("id") or "")):
+        aid = artifact.get("id")
+        if not isinstance(aid, str) or not aid.startswith("artifact:"):
+            continue
+        artifact_id = artifact.get("artifact_id") or aid.split(":", 1)[1]
+        maintainers: List[str] = []
+        for maintainer in artifact.get("maintainers") or []:
+            if isinstance(maintainer, str) and maintainer and maintainer not in maintainers:
+                maintainers.append(maintainer)
+
+        fields: Dict[str, Any] = {
+            "kind": "artifact",
+            "type": "artifact",
+            "label": artifact.get("label") or artifact_id,
+            "artifact_id": artifact_id,
+            "artifact_kind": artifact.get("artifact_kind") or "",
+            "rev": artifact.get("rev"),
+            "updated_at": artifact.get("updated_at"),
+            "updated_by": artifact.get("updated_by") or "",
+            "maintainers": maintainers,
+        }
+        if artifact.get("queries"):
+            fields["queries"] = list(artifact["queries"])
+
+        node = by_id.get(aid)
+        if node is None:
+            node = {"id": aid, **fields}
+            nodes.append(node)
+            by_id[aid] = node
+        else:
+            # A job declared this ref in inputs/outputs: one node, enriched. The
+            # living record outranks the bare ref (a read-only ``source`` becomes
+            # an ``artifact`` — something does write it, we just met the writer).
+            node.update(fields)
+
+        for maintainer in maintainers:
+            scheme, _, jid = maintainer.partition(":")
+            if scheme != "cron":
+                continue
+            jid = jid.strip()
+            if jid not in job_ids:
+                logger.debug(
+                    "artifact %s names maintainer %s but no such job exists",
+                    aid, maintainer,
+                )
+                continue
+            if (jid, aid) in maintained:
+                continue
+            edges.append({"source": jid, "target": aid, "type": "maintains"})
+            maintained.add((jid, aid))
+            linked.add((jid, aid))
+
+        updated_by = artifact.get("updated_by")
+        if isinstance(updated_by, str) and updated_by.startswith("cron:"):
+            writer = updated_by.split(":", 1)[1].strip()
+            if writer in job_ids and (writer, aid) not in linked:
+                edges.append({"source": writer, "target": aid, "type": "writes"})
+                linked.add((writer, aid))
 
 
 def _validate_job_mode_invariants(

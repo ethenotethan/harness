@@ -338,14 +338,19 @@ def get_artifact(artifact_id: str) -> Optional[dict]:
         return _read_json(_index_file(), {}).get((artifact_id or "").strip())
 
 
-def list_artifacts() -> list[dict]:
-    """All artifacts WITHOUT content (list views), newest first."""
+def list_artifacts(include_content: bool = False) -> list[dict]:
+    """All artifacts, newest first. Content is stripped (list views) unless
+    ``include_content`` — one index read for callers that must parse every
+    document once, such as the dataflow-graph overlay reading ``maintainers``."""
     with _lock:
         index = _read_json(_index_file(), {})
-    summaries = [
-        {key: value for key, value in artifact.items() if key != "content"}
-        for artifact in index.values()
-    ]
+    if include_content:
+        summaries = [dict(artifact) for artifact in index.values()]
+    else:
+        summaries = [
+            {key: value for key, value in artifact.items() if key != "content"}
+            for artifact in index.values()
+        ]
     summaries.sort(key=lambda a: a.get("updated_at", ""), reverse=True)
     return summaries
 
