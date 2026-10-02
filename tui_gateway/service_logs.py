@@ -445,7 +445,7 @@ def read_command(sink: Dict[str, Any], lines: int,
         if runner is not None:
             completed = runner(argv, COMMAND_TIMEOUT_S)
         else:
-            completed = subprocess.run(argv, capture_output=True, timeout=COMMAND_TIMEOUT_S, check=False)  # noqa: S603 - declared argv only
+            completed = subprocess.run(argv, capture_output=True, timeout=COMMAND_TIMEOUT_S, check=False, stdin=subprocess.DEVNULL)  # noqa: S603 - declared argv only
     except subprocess.TimeoutExpired as exc:
         raise LogError(4041, f"log sink {sink['id']!r}: command timed out after {COMMAND_TIMEOUT_S:g}s") from exc
     except OSError as exc:
