@@ -486,3 +486,129 @@ def test_project_rule_normalises_ids_and_rejects_bad_edges():
         project_rule({"id": "x", "description": "d", "family": "store", "language": "go", "regex": "x", "produces": {"kind": "store", "edge_class": "magic"}})
     with pytest.raises(CompileError, match="regex"):
         project_rule({"id": "x", "description": "d", "family": "store", "language": "go"})
+
+
+# ── Completeness: what the map is short is on the map ────────────────────────
+
+PY_STORE = '''import json
+
+class SessionStore:
+    def __init__(self, path):
+        self.path = path
+    def save(self, sessions):
+        with open(self.path, "w") as handle:
+            json.dump(sessions, handle)
+    def load(self):
+        return {}
+'''
+PY_API = '''import requests
+from flask import Flask
+from app.store import SessionStore
+from app import store as storemod
+
+app = Flask(__name__)
+PREFIX = "/api"
+_store = SessionStore("x.json")
+
+@app.get("/api/sessions")
+def list_sessions():
+    return _store.load()
+
+@app.post(PREFIX + "/sessions")
+def save_sessions():
+    _store.save({})
+    _store.frobnicate()
+    storemod.nothing()
+    return "ok"
+
+class Client:
+    def __init__(self, store: SessionStore):
+        self.store = store
+    def ping(self):
+        self.store.load()
+        self.store.missing()
+        requests.get("http://localhost:8000/api/sessions")
+        requests.get("http://localhost:8000/api/ghost")
+        requests.get("https://api.telegram.org/bot")
+'''
+
+
+def invariants_of(model):
+    return {i["id"]: i for i in model["interplay"]["invariants"]}
+
+
+def unparsed_sites(model, invariant_id, key):
+    return [(u["path"], u["line"], u[key]) for u in invariants_of(model)[invariant_id]["unparsed"]]
+
+
+def test_completeness_invariants_name_every_unparsed_site(tmp_path):
+    root = tmp_path / "complete"
+    config(root, external_systems=[{"id": "telegram", "label": "Telegram", "category": "messaging", "description": "Bot API.",
+                                     "signatures": [{"pattern": r"api\.telegram\.org", "scope": "strings"}]}])
+    write(root, "app/store.py", PY_STORE)
+    write(root, "app/api.py", PY_API)
+    model = compile_service(root)
+    assert validate_document(model) == []
+    found = invariants_of(model)
+    # A route whose path is computed is counted, not silently dropped.
+    assert found["routes-declared-literally"]["status"] == "violated" and found["routes-declared-literally"]["checked"] == 2
+    assert unparsed_sites(model, "routes-declared-literally", "rule") == [("app/api.py", 14, "python.route")]
+    # Calls on a store-typed receiver — a module binding, a constructor-injected field, a module alias — resolve to members the store declares, or are listed.
+    assert found["store-calls-resolve"]["checked"] == 6
+    assert unparsed_sites(model, "store-calls-resolve", "method") == [("app/api.py", 17, "frobnicate"), ("app/api.py", 18, "nothing"), ("app/api.py", 26, "missing")]
+    # A client path under the service's own route prefix must match a route; Telegram's URL is not under it and is not judged.
+    assert found["client-paths-resolve"]["checked"] == 2
+    assert unparsed_sites(model, "client-paths-resolve", "client_path") == [("app/api.py", 28, "/api/ghost")]
+    # Packages no declared system claims are listed with the import that pulls them in.
+    assert unparsed_sites(model, "vendors-declared", "package") == [("app/api.py", 1, "requests"), ("app/api.py", 2, "flask")]
+    assert model["extraction"]["summary"]["completeness"]["store-calls-resolve"] == {"seen": 6, "parsed": 3, "unparsed": 3}
+    # Declaring the packages as systems makes the invariant hold without touching the code.
+    cfg = json.loads((root / "architecture/config.json").read_text())
+    cfg["external_systems"] += [{"id": "http", "label": "requests", "category": "http", "description": "d", "signatures": [r"\brequests\b"]},
+                                {"id": "flask", "label": "Flask", "category": "web", "description": "d", "signatures": [r"\bflask\b"]}]
+    write(root, "architecture/config.json", json.dumps(cfg))
+    assert invariants_of(compile_service(root))["vendors-declared"]["status"] == "holds"
+
+
+TS_TAB_STORE = '''import { writeFileSync } from "fs";
+export class ItemStore {
+\tsave(items: string[]): void {
+\t\twriteFileSync("items.json", JSON.stringify(items));
+\t}
+\tload(): string[] { return []; }
+}
+'''
+TS_TAB_SERVER = '''import express from "express";
+import { ItemStore } from "./store";
+const app = express();
+const store = new ItemStore();
+const ROUTE = "/items";
+app.get("/items", (req, res) => res.json(store.load()));
+app.post(ROUTE, (req, res) => { store.save([]); store.purge(); res.send("ok"); });
+app.listen(3000);
+'''
+
+
+def test_tab_indented_members_resolve_like_two_space_ones(tmp_path):
+    root = tmp_path / "tabs"
+    config(root)
+    write(root, "src/store.ts", TS_TAB_STORE)
+    write(root, "src/server.ts", TS_TAB_SERVER)
+    model = compile_service(root)
+    assert validate_document(model) == []
+    assert unparsed_sites(model, "routes-declared-literally", "rule") == [("src/server.ts", 7, "typescript.route")]
+    assert invariants_of(model)["store-calls-resolve"]["checked"] == 3
+    assert unparsed_sites(model, "store-calls-resolve", "method") == [("src/server.ts", 7, "purge")]
+    assert invariants_of(model)["client-paths-resolve"] == {"id": "client-paths-resolve", "kind": "client_paths_resolve", "status": "holds", "checked": 0,
+                                                            "why": invariants_of(model)["client-paths-resolve"]["why"], "unparsed": []}
+
+
+def test_a_probe_is_a_regex_in_the_rules_own_scope():
+    assert Rule("go.x", "d", "trigger", "raw", r"a\(\"b\"", probe=r"a\(").probe == r"a\("
+    with pytest.raises(ValueError, match="probe"):
+        Rule("go.x", "d", "trigger", "query", "(call_expression) @site", probe=r"a\(")
+    for pack in PACKS.values():
+        for rule in pack.rules:
+            if rule.probe:
+                re.compile(rule.probe)
+                assert rule.produces == "endpoint", f"{rule.id}: probes count the registrations the map may be short of"

@@ -38,6 +38,8 @@ from tools.architecture_compile_python import (  # noqa: E402  (reused, never ed
     build_ci,
     load_config,
 )
+from tools.architecture_compiler import completeness  # noqa: E402
+from tools.architecture_compiler.calls import CallIndex  # noqa: E402
 from tools.architecture_compiler.packs import PACKS, pack_for_path  # noqa: E402
 from tools.architecture_compiler.packs.base import (  # noqa: E402
     Citation,
@@ -46,6 +48,7 @@ from tools.architecture_compiler.packs.base import (  # noqa: E402
     Rule,
     enclosing_type,
     mask,
+    probe_lines,
     query_citations,
     regex_citations,
 )
@@ -178,6 +181,8 @@ class FileExtraction:
         source = self.text.encode("utf-8")
         tree = parser.parse(source)
         root = tree.root_node
+        self.source = source
+        self.tree_root = root
         self.code, self.raw, self.strings = mask(self.text, root, self.pack.comment_types, self.pack.string_types)
         self.declarations: List[Declaration] = sorted(self.pack.census(root, source), key=lambda d: (d.line, -d.end_line, d.kind, d.name))
         self.imports = self.pack.imports(root, source)
@@ -196,6 +201,11 @@ class FileExtraction:
             if rule.id.endswith(".import_external"):
                 self.citations.extend(Citation(rule.id, line, root_name) for root_name, line in self.external_roots)
         self.citations.sort(key=lambda c: (c.line, c.rule, c.label))
+        # The wider shape each probing rule reads a subset of: every line it fires on, cited or not.
+        self.probes: Dict[str, List[int]] = {
+            rule.id: lines for rule in list(self.pack.rules) + list(project_rules)
+            if rule.probe for lines in [probe_lines(rule, self.code, self.raw, self.strings)] if lines
+        }
 
     def enclosing(self, line: int) -> Optional[Declaration]:
         return enclosing_type(self.declarations, line)
@@ -260,7 +270,7 @@ def build_model(root: Path, config: Dict[str, Any], files: List[Dict[str, Any]],
             rules_by_id[rule.id] = rule
 
     nodes: Dict[str, Dict[str, Any]] = {}
-    edges: Set[Tuple[str, str, str, str]] = set()
+    edges: Dict[Tuple[str, str, str, str], Dict[str, Any]] = {}
     origins: Dict[str, List[Tuple[str, int, str]]] = {}
     types_by_name: Dict[str, List[Tuple[str, str, str]]] = {}  # name → [(component, language, node id)]
     enums_by_name: Dict[str, List[Tuple[str, str, str]]] = {}
@@ -283,11 +293,14 @@ def build_model(root: Path, config: Dict[str, Any], files: List[Dict[str, Any]],
     def add_origin(node_id: str, path: str, line: int, rule: str) -> None:
         origins.setdefault(node_id, []).append((path, line, rule))
 
-    def add_edge(source: str, target: str, relation: str, edge_class: str) -> None:
+    def add_edge(source: str, target: str, relation: str, edge_class: str, **attrs: Any) -> None:
+        """An edge, deduplicated by its four-tuple; attributes (``via``, ``hops``,
+        ``columns`` …) describe how the edge was found and are kept from the
+        first sighting."""
         if edge_class not in EDGE_CLASSES:
             raise CompileError(f"edge class {edge_class!r} is not one of {EDGE_CLASSES}")
         if source != target:
-            edges.add((source, target, relation, edge_class))
+            edges.setdefault((source, target, relation, edge_class), {k: v for k, v in attrs.items() if v not in (None, [], "")})
 
     # Modules, types, entrypoints.
     for ex in extractions:
@@ -472,8 +485,15 @@ def build_model(root: Path, config: Dict[str, Any], files: List[Dict[str, Any]],
                 raise CompileError(f"declared edge {item['source']} -{item['relation']}-> {item['target']}: {end} {item[end]!r} is not on the map")
         add_edge(item["source"], item["target"], item["relation"], "usage")
 
+    # The call index: members and functions by id, calls between them resolved by name through
+    # typed receivers and local imports. Completeness is proved on it, and the usage rules walk it.
+    store_rules = frozenset(rule.id for rule in rules_by_id.values() if rule.family == "store")
+    store_type_ids = frozenset(nid for nid, node in nodes.items() if node["kind"] == "store" and nid.startswith("type:"))
+    index = CallIndex(extractions, lambda name, ex: resolve(types_by_name, name, ex), store_rules, store_type_ids)
+    route_labels = sorted({node["label"] for node in nodes.values() if node["kind"] == "endpoint" and node.get("sub_kind") == "route"})
+
     node_list = [nodes[k] for k in sorted(nodes)]
-    edge_list = [{"source": s, "target": t, "relation": r, "class": c} for s, t, r, c in sorted(edges)]
+    edge_list = [{"source": s, "target": t, "relation": r, "class": c, **edges[(s, t, r, c)]} for s, t, r, c in sorted(edges)]
     edge_keys = {(e["source"], e["target"], e["relation"]) for e in edge_list}
 
     flows: List[Dict[str, Any]] = []
@@ -523,6 +543,10 @@ def build_model(root: Path, config: Dict[str, Any], files: List[Dict[str, Any]],
          "why": "Every construction on the map was extracted from a cited file and line, or declared by a person citing one."},
         {"id": "externals-declared-and-observed", "kind": "externals_declared_and_observed", "status": "holds", "checked": len(systems),
          "why": "Every declared external system was observed through at least one of its signatures; a silent declaration fails the build."},
+        completeness.routes_declared_literally(extractions, rules_by_id),
+        completeness.store_calls_resolve(index),
+        completeness.client_paths_resolve(extractions, rules_by_id, route_labels),
+        completeness.vendors_declared(extractions, absorbing),
     ]
     for item in declared.get("invariants") or []:
         for key in ("id", "kind", "why"):
@@ -550,6 +574,7 @@ def build_model(root: Path, config: Dict[str, Any], files: List[Dict[str, Any]],
         descriptions[f"{pack_name}.type"] = (f"A {PACKS[pack_name].label} type declaration (class, struct, enum, protocol, interface, trait, actor, extension)", "wiring")
         descriptions[f"{pack_name}.entrypoint"] = (f"Where a {PACKS[pack_name].label} program starts", "trigger")
     extraction = build_extraction(extractions, node_list, origins, semantic_by_file, descriptions)
+    extraction["summary"]["completeness"] = completeness.summary(invariants)
 
     components = []
     for configured in config["components"]:

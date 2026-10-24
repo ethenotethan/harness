@@ -12,7 +12,7 @@ import re
 import sys
 from typing import Any, Dict, List, Sequence, Tuple
 
-from .base import Declaration, ImportRecord, LanguagePack, Rule, child_of_type, node_end_line, node_line, node_text, walk
+from .base import Declaration, ImportRecord, LanguagePack, LocalImport, Rule, child_of_type, node_end_line, node_line, node_text, walk
 
 PY_STDLIB = frozenset(getattr(sys, "stdlib_module_names", ())) | {"__future__"}
 ENUM_BASE_RE = re.compile(r"\b(?:enum\.)?(?:Enum|IntEnum|StrEnum|Flag|IntFlag)\b")
@@ -54,6 +54,73 @@ def imports(root: Any, source: bytes) -> List[ImportRecord]:
     return records
 
 
+def _module_candidates(dotted: str, rel: str, dots: int) -> List[str]:
+    """The analysed files a (possibly relative) dotted module name may be."""
+    if dots:
+        base_parts = rel.split("/")[:-1]
+        base_parts = base_parts[:len(base_parts) - (dots - 1)] if dots > 1 else base_parts
+        base = "/".join(base_parts)
+    else:
+        base = ""
+    path = "/".join(part for part in dotted.split(".") if part)
+    joined = f"{base}/{path}" if base and path else (base or path)
+    return [f"{joined}.py", f"{joined}/__init__.py"] if joined else [f"{base}/__init__.py"]
+
+
+def local_imports(root: Any, source: bytes, rel: str, all_rels: "frozenset[str]") -> List[LocalImport]:
+    """What a file binds from other files of the service, by import statement:
+    ``import a.b as m`` and ``from . import m`` bind a module; ``from a.b import
+    f`` binds ``f`` from ``a/b.py`` unless ``a/b/f.py`` is itself a file."""
+    records: List[LocalImport] = []
+
+    def existing(candidates: List[str]) -> str:
+        return next((c for c in candidates if c in all_rels), "")
+
+    for node in walk(root):
+        if node.type == "import_statement":
+            for child in node.children:
+                if child.type in ("dotted_name", "aliased_import"):
+                    dotted = child if child.type == "dotted_name" else child_of_type(child, "dotted_name")
+                    alias = child_of_type(child, "identifier") if child.type == "aliased_import" else None
+                    if dotted is None:
+                        continue
+                    name = node_text(dotted, source)
+                    module = existing(_module_candidates(name, rel, 0))
+                    if module:
+                        records.append(LocalImport(node_text(alias, source) if alias is not None else name, module, "", node_line(node)))
+        elif node.type == "import_from_statement":
+            relative = child_of_type(node, "relative_import")
+            dots = 0
+            dotted_text = ""
+            if relative is not None:
+                prefix = child_of_type(relative, "import_prefix")
+                dots = len(node_text(prefix, source)) if prefix is not None else 0
+                inner = child_of_type(relative, "dotted_name")
+                dotted_text = node_text(inner, source) if inner is not None else ""
+            else:
+                dotted = child_of_type(node, "dotted_name")
+                if dotted is None:
+                    continue
+                dotted_text = node_text(dotted, source)
+            package = existing(_module_candidates(dotted_text, rel, dots))
+            names = [c for c in node.children if c.type in ("dotted_name", "aliased_import")]
+            if relative is None:
+                names = names[1:]  # the first dotted_name is the module
+            for child in names:
+                imported = child if child.type == "dotted_name" else child_of_type(child, "dotted_name")
+                alias = child_of_type(child, "identifier") if child.type == "aliased_import" else None
+                if imported is None:
+                    continue
+                symbol = node_text(imported, source)
+                local = node_text(alias, source) if alias is not None else symbol
+                submodule = existing(_module_candidates(f"{dotted_text}.{symbol}" if dotted_text else symbol, rel, dots))
+                if submodule:
+                    records.append(LocalImport(local, submodule, "", node_line(node)))
+                elif package:
+                    records.append(LocalImport(local, package, symbol, node_line(node)))
+    return records
+
+
 def entrypoints(root: Any, text: str, rel: str) -> List[Tuple[int, str]]:
     match = re.search(r"^if\s+__name__\s*==\s*[\"']__main__[\"']", text, re.MULTILINE)
     if match:
@@ -72,8 +139,9 @@ def local_roots(rels: Sequence[str], config: Dict[str, Any]) -> frozenset:
 
 RULES: Tuple[Rule, ...] = (
     Rule("python.import_external", "A module-level import of a package outside the standard library and outside this service", "boundary", "code", r"(?!x)x"),
-    Rule("python.route", "A route decorator (Flask/FastAPI/aiohttp style: route, get, post, put, delete, patch, websocket, api_route)", "trigger", "raw",
-         r"@\w+(?:\.\w+)*\.(?:route|get|post|put|delete|patch|websocket|api_route)\(\s*[\"']([^\"']+)", produces="endpoint", sub_kind="route", label_group=1),
+    Rule("python.route", "A route decorator (Flask/FastAPI/aiohttp style: route, get, post, put, delete, patch, websocket, api_route) with a literal path", "trigger", "raw",
+         r"@\w+(?:\.\w+)*\.(?:route|get|post|put|delete|patch|websocket|api_route)\(\s*[\"']([^\"']+)", produces="endpoint", sub_kind="route", label_group=1,
+         probe=r"@\w+(?:\.\w+)*\.(?:route|get|post|put|delete|patch|websocket|api_route)\("),
     Rule("python.http_client", "An HTTP client call: requests, httpx, urllib.request, aiohttp.ClientSession, http.client", "boundary", "code",
          r"\b(?:requests|httpx)\.\w+\(|\burllib\.request\.|\baiohttp\.ClientSession\b|\bhttp\.client\.", produces="resource", sub_kind="http_client"),
     Rule("python.socket_or_server", "A socket or server: socket.*, websockets.*, asyncio.start_server/open_connection", "boundary", "code",
@@ -105,7 +173,11 @@ PACK = LanguagePack(
     local_roots=local_roots,
     enum_separator=".",
     typed_property_pattern=r"\b(\w+)\s*:\s*(\w+)\s*=",
+    self_name="self",
+    local_imports=local_imports,
+    construct_pattern=r"(?<![\w.])([A-Z][A-Za-z0-9_]*)\s*\(",
     limitations=(
         "Python: decorators assembled at runtime, getattr-based wiring and plugin registries are invisible to the passes.",
+        "Python: a route decorator whose path is not a literal is counted as unparsed, not registered as an endpoint.",
     ),
 )

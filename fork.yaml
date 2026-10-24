@@ -334,11 +334,17 @@ def:
         boundary groups, gates, contract validation, `--check`, byte determinism) and one tree-sitter
         language pack each for Swift, TypeScript/JavaScript, Go, Rust and Python (declaration census,
         imports, entrypoints, a rule table of passes with file:line citations). Project rule tables in
-        `architecture/config.json` add passes on top of a pack's baseline.
+        `architecture/config.json` add passes on top of a pack's baseline. A rule may carry a *probe*,
+        the wider shape it reads a subset of; the remainder is counted per site and proved as
+        completeness invariants (`routes-declared-literally`, `store-calls-resolve`,
+        `client-paths-resolve`, `vendors-declared`) over a language-independent call index
+        (members by `path#Type.member`, receivers typed through fields, bindings and local imports).
       globs:
         - "tools/architecture_compiler/__init__.py"
         - "tools/architecture_compiler/__main__.py"
         - "tools/architecture_compiler/core.py"
+        - "tools/architecture_compiler/calls.py"
+        - "tools/architecture_compiler/completeness.py"
         - "tools/architecture_compiler/requirements.txt"
         - "tools/architecture_compiler/packs/__init__.py"
         - "tools/architecture_compiler/packs/base.py"

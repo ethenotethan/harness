@@ -69,7 +69,8 @@ def local_roots(rels: Sequence[str], config: Dict[str, Any]) -> frozenset:
 RULES: Tuple[Rule, ...] = (
     Rule("rust.import_external", "A `use` of a crate outside std/core/alloc and outside this crate (crate::/self::/super:: paths are local)", "boundary", "code", r"(?!x)x"),
     Rule("rust.route", "A route: #[get|post|put|delete|patch|route(\"/path\")] or .route(\"/path\")", "trigger", "raw",
-         r"(?:#\[(?:get|post|put|delete|patch|route)|\.route)\(\s*\"([^\"]+)\"", produces="endpoint", sub_kind="route", label_group=1),
+         r"(?:#\[(?:get|post|put|delete|patch|route)|\.route)\(\s*\"([^\"]+)\"", produces="endpoint", sub_kind="route", label_group=1,
+         probe=r"(?:#\[(?:get|post|put|delete|patch|route)|\.route)\("),
     Rule("rust.http_client", "An HTTP client call: reqwest::*(…), Client::new(), hyper::Client::*, ureq::*(…)", "boundary", "code",
          r"\breqwest::\w+(?:::\w+)*\s*\(|\bClient::(?:new|builder)\s*\(|\bhyper::Client::|\bureq::\w+\s*\(", produces="resource", sub_kind="http_client"),
     Rule("rust.socket_or_server", "A listener or connection: TcpListener::bind, TcpStream::connect, UdpSocket::bind, tokio::net, axum/actix servers", "boundary", "code",

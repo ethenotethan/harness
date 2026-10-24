@@ -21,7 +21,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tupl
 
 FAMILIES = ("store", "behaviour", "boundary", "wiring", "trigger")
 TYPE_KINDS = ("class", "struct", "enum", "protocol", "interface", "trait", "actor", "extension", "impl", "type", "module")
-NODE_KINDS = ("external", "store", "resource", "endpoint")
+NODE_KINDS = ("external", "store", "resource", "endpoint", "tick", "state", "table")
 SCOPES = ("code", "raw", "strings", "query")
 
 # The relation and edge class a produced construction is wired to its owner by.
@@ -30,6 +30,9 @@ EDGE_FOR_KIND = {
     "store": ("persists-to", "lifecycle"),
     "resource": ("holds", "lifecycle"),
     "endpoint": ("exposes", "structure"),
+    "tick": ("runs", "interplay"),
+    "state": ("keeps", "usage"),
+    "table": ("declares", "structure"),
 }
 
 
@@ -44,6 +47,13 @@ class Rule:
     capture is the citation and optional ``@label`` capture the label).
     ``produces`` names the construction the rule puts on the map, or nothing
     when the rule only cites (a citation still maps the enclosing declaration).
+
+    ``probe`` is the wider shape ``pattern`` reads a subset of: every route
+    registration call, of which only those with a literal path become
+    endpoints. A probe hit on a line the rule did not cite is an *unparsed*
+    site — the compiler counts those and proves (or fails) a completeness
+    invariant over them, so what the map is short is on the map too. Probes
+    are regexes over the rule's own scope (never ``query``).
     """
 
     id: str
@@ -57,6 +67,7 @@ class Rule:
     relation: Optional[str] = None
     edge_class: Optional[str] = None
     label_prefix: str = ""
+    probe: str = ""
 
     def __post_init__(self) -> None:
         if self.family not in FAMILIES:
@@ -67,6 +78,10 @@ class Rule:
             raise ValueError(f"rule {self.id}: produces {self.produces!r} is not one of {NODE_KINDS}")
         if self.scope != "query":
             re.compile(self.pattern)
+        if self.probe:
+            if self.scope == "query":
+                raise ValueError(f"rule {self.id}: a probe is a regex; query rules cannot carry one")
+            re.compile(self.probe)
 
     @property
     def wiring(self) -> Tuple[str, str]:
@@ -100,6 +115,19 @@ class ImportRecord:
     alias: str = ""
 
 
+@dataclass(frozen=True)
+class LocalImport:
+    """A name a file binds to another file of the same service: ``local`` is the
+    name as used in this file, ``module`` the analysed file it comes from, and
+    ``member`` the symbol imported from it — empty when the module itself is
+    bound (``import x as m``, ``import * as m``, ``from . import m``)."""
+
+    local: str
+    module: str
+    member: str = ""
+    line: int = 0
+
+
 @dataclass
 class LanguagePack:
     """A language's front end. Behaviour that differs per language is a
@@ -123,6 +151,28 @@ class LanguagePack:
     extra_edges: Optional[Callable[..., List[Tuple[str, str, str, str, int, str]]]] = None
     limitations: Tuple[str, ...] = ()
     grammar_by_extension: Dict[str, str] = field(default_factory=dict)  # an extension that parses with a sibling grammar (.tsx → tsx)
+    # The call index (core/calls.py) needs three things a language decides: how a
+    # method refers to its own object, how a file names another file of the
+    # service, and what constructing a type looks like (group 1 is the type).
+    self_name: str = ""
+    local_imports: Optional[Callable[[Any, bytes, str, "frozenset[str]"], List[LocalImport]]] = None
+    construct_pattern: str = ""
+    # A member whose body spells a path as a literal prefix and one of its own
+    # parameters is a path wrapper (calls.py: usage.client_wrapper): the callable
+    # returns that prefix or None. ``literal_calls`` finds sibling calls that pass
+    # a literal to a named member: (literal, line offset within the body).
+    wrapper_prefix: Optional[Callable[[str, "set[str]"], Optional[str]]] = None
+    literal_calls: Optional[Callable[[str, str, str], List[Tuple[str, int]]]] = None
+    # The handler a route registration names (core/calls.py): the line the
+    # decorated or registered function starts at, or None when the route's
+    # handler is the registration's own argument span.
+    handler_line: Optional[Callable[[Any, bytes, int], Optional[int]]] = None
+    # Process shape (core/process.py, H4): loops, thread targets, resident
+    # collections and schema declarations; a pack without them has none.
+    loops: Optional[Callable[[Any, bytes, str], List[Dict[str, Any]]]] = None
+    thread_targets: Optional[Callable[[Any, bytes], List[Dict[str, Any]]]] = None
+    resident_state: Optional[Callable[[Any, bytes, str], List[Dict[str, Any]]]] = None
+    schema: Optional[Callable[[Any, bytes, str, List[Tuple[int, str]]], List[Dict[str, Any]]]] = None
 
     def __post_init__(self) -> None:
         ids = [rule.id for rule in self.rules]
@@ -243,6 +293,17 @@ def regex_citations(rule: Rule, code: str, raw: str, strings: List[Tuple[int, st
         label = match.group(rule.label_group) if rule.label_group else match.group(0)
         found.append(Citation(rule.id, line_of_offset(text, match.start()), (rule.label_prefix + (label or "")).strip()))
     return found
+
+
+def probe_lines(rule: Rule, code: str, raw: str, strings: List[Tuple[int, str]]) -> List[int]:
+    """Every line the rule's probe fires on: the wider shape, read or not."""
+    if not rule.probe:
+        return []
+    pattern = re.compile(rule.probe, re.MULTILINE)
+    if rule.scope == "strings":
+        return sorted({line for line, contents in strings if pattern.search(contents)})
+    text = code if rule.scope == "code" else raw
+    return sorted({line_of_offset(text, match.start()) for match in pattern.finditer(text)})
 
 
 def query_citations(rule: Rule, language: Any, root: Any, source: bytes) -> List[Citation]:
