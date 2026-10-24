@@ -354,6 +354,21 @@ def:
         - "tools/architecture_compiler/packs/rust.py"
         - "tools/architecture_compiler/packs/python.py"
         - "tests/tools/test_architecture_compiler.py"
+    - title: "Architecture ratchet"
+      description: |
+        `tools/architecture_ratchet.py` compiles a service as it is on the base branch (a
+        temporary worktree) and as it is in the working tree, with the same compiler, and refuses
+        anything looser: a proven or declared invariant removed or re-kinded, a proven invariant
+        that held and is violated now, a completeness invariant whose unparsed sites grew (named),
+        a component, external system, group, gate command, project rule or declared construction
+        removed, `exclude` grown, `languages` narrowed, and — when a model carries a semantic
+        layer — a record or flow that went stale. A `constraints-loosened` label turns into
+        `--allow-loosening`: the loosening is reported and passes, on record. The `Architecture`
+        workflow (`.github/workflows/architecture-check.yml`) runs the compiler tests and the
+        ratchet on every pull request.
+      globs:
+        - "tools/architecture_ratchet.py"
+        - "tests/tools/test_architecture_ratchet.py"
     - title: "Push notifications (APNs)"
       description: Device registration and APNs delivery for HermesNative clients.
       globs:

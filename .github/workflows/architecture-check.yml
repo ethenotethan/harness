@@ -1,0 +1,49 @@
+name: Architecture
+
+# The architecture compiler's own tests, and the ratchet: a service's declared
+# constraints (invariants the compiler proves, components, external systems,
+# gates, declared constructions) may only tighten against the base branch.
+# A deliberate loosening carries the `constraints-loosened` label on the pull
+# request, which the step turns into `--allow-loosening` so the loosening is
+# reported and on record rather than silent in a diff.
+#
+# Harness itself carries no architecture/config.json yet, so the ratchet step
+# reports "nothing to ratchet" here; it is the step a service that adopts the
+# compiler copies, and the tests prove the guard on scratch repositories.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  architecture:
+    name: Compiler tests and constraint ratchet
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0 # the ratchet checks the base branch out into a worktree
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Install the compiler's runtime
+        run: python3 -m pip install --quiet -r tools/architecture_compiler/requirements.txt pytest pyyaml
+
+      - name: Test the compiler and the ratchet
+        run: python3 -m pytest tests/tools/test_architecture_compiler.py tests/tools/test_architecture_ratchet.py -q -p no:cacheprovider
+
+      - name: Check that constraints only tighten
+        env:
+          LOOSENED: ${{ contains(github.event.pull_request.labels.*.name, 'constraints-loosened') && '--allow-loosening' || '' }}
+        run: |
+          BASE_BRANCH="${{ github.event.pull_request.base.ref || github.ref_name }}"
+          git fetch -q origin "$BASE_BRANCH"
+          python3 -m tools.architecture_ratchet --root . "origin/$BASE_BRANCH" $LOOSENED
