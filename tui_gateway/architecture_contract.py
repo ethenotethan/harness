@@ -43,6 +43,19 @@ CONTRACT_VERSION = f"{CONTRACT_MAJOR}.{CONTRACT_MINOR}"
 REQUIRED_SECTIONS: Tuple[str, ...] = ("components", "interplay", "extraction", "ci", "inventory", "evidence_metadata")
 OPTIONAL_SECTIONS: Tuple[str, ...] = ("stores", "externals", "layers", "edges", "behavior")
 
+# The vocabulary the compilers emit and the renderers know how to draw. Node
+# ``kind`` and edge ``relation`` are free strings in the schema (a 1.x minor may
+# add to them without a digest change); these are the values in use, so a
+# renderer branching on them has one list to read. ``tick`` is a periodic task a
+# process runs (a paced loop or a started worker), ``state`` a collection a
+# process keeps in memory, ``table`` a declared table; ``runs`` joins an
+# entrypoint to its ticks, ``keeps`` a process, module, type or tick to the
+# state it holds or writes, ``references`` a table to the one its foreign key
+# names, ``touches`` an endpoint to a system reached through its handler's calls.
+KNOWN_NODE_KINDS: Tuple[str, ...] = ("module", "type", "store", "entrypoint", "endpoint", "resource", "external", "tick", "state", "table")
+KNOWN_RELATIONS: Tuple[str, ...] = ("declares", "constructs", "exposes", "invokes", "drives", "transitions", "uses", "touches", "persists-to", "holds",
+                                    "runs", "keeps", "references")
+
 SEMVER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 IDENTIFIER_RE = r"^\S.*$"
 

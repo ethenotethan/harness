@@ -289,6 +289,40 @@ Every pack provides the same baseline passes where the concept exists — `<lang
 extrinsic is expressed exactly as Portal expresses it: edge `class` (`structure`/`lifecycle`/`interplay`
 inside, `boundary` across) plus the boundary hulls.
 
+**What the map is short is on the map.** A rule may carry a *probe*, the wider shape it reads a subset of
+(every route registration, of which only literal-path ones become endpoints); the sites the probe hit and
+the rule did not are counted per file and line. Four invariants are proved on every compile and carry
+their `unparsed` sites — `routes-declared-literally`, `store-calls-resolve` (a call on a receiver typed as a
+store lands on a member the store declares), `client-paths-resolve` (a path a client spells under one of the
+service's own route prefixes matches a route) and `vendors-declared` (every imported package is claimed by a
+declared external system) — with `status` `holds` or `violated`; the build is not failed, the ratchet below
+refuses growth. `extraction.summary.completeness` has the seen/parsed/unparsed counts.
+
+**The call index and what it follows.** The core indexes members by `path#Type.member` and resolves calls
+by name through typed receivers (fields constructed or annotated in the type body, constructor-injected
+parameters, local and module-level bindings, local imports), to the class a chain ends on and nowhere else.
+Two usage rules walk it: `usage.injected_method` follows a route's handler up to four calls through the
+objects and modules handed to it to the store sites and external systems it reaches (the endpoint gets a
+`uses` / `touches` edge with the chain of members in `via`); `usage.client_wrapper` composes the paths a
+client spells through a member whose body is a literal prefix plus one of its own parameters and matches
+them against the routes (`invokes`). The Python pack adds the process shape: `python.launch.loop` (a paced
+loop the entry point runs — a `tick` node with the interval and the body's calls in source order, the
+only order the compiler claims), `python.launch.starter` (a loop-holding function handed to a thread, timer
+or task in a module the entry loads), `python.state.resident` (a written module-level or instance
+collection in a loaded module — a `state` node the entrypoint `keeps`, and every tick whose calls write it
+`keeps` with the chain) and `python.schema.table` / `python.schema.references` (`CREATE TABLE` text and
+SQLAlchemy models as `table` nodes, foreign keys as `references` edges with columns and delete rule). The
+vocabulary in use is listed in the contract module (`KNOWN_NODE_KINDS`, `KNOWN_RELATIONS`); the schema
+leaves `kind` and `relation` free, so the digest is unchanged.
+
+**Constraints only tighten.** `python3 -m tools.architecture_ratchet --root <service> origin/main` compiles
+the base branch and the working tree with the same compiler and refuses a removed or re-kinded invariant,
+a proven invariant that held and is violated now, grown unparsed sites, a removed component, external
+system, group, gate command, project rule or declared construction, a grown `exclude`, a narrowed
+`languages`, and — for a model carrying a `semantic` section — a record or flow that went stale. The
+`constraints-loosened` label on the pull request becomes `--allow-loosening`: the loosening is printed and
+passes, on record. The `Architecture` workflow runs it on every pull request of this repository.
+
 Adding a pack means one module under `tools/architecture_compiler/packs/`: the grammar name, the comment and
 string node types (so signatures can be scoped), a declaration census, an import reader, an entrypoint
 finder and the rule table; register it in `packs/__init__.py`. The compiler validates its output against

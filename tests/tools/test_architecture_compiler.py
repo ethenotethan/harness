@@ -486,3 +486,470 @@ def test_project_rule_normalises_ids_and_rejects_bad_edges():
         project_rule({"id": "x", "description": "d", "family": "store", "language": "go", "regex": "x", "produces": {"kind": "store", "edge_class": "magic"}})
     with pytest.raises(CompileError, match="regex"):
         project_rule({"id": "x", "description": "d", "family": "store", "language": "go"})
+
+
+# ── Completeness: what the map is short is on the map ────────────────────────
+
+PY_STORE = '''import json
+
+class SessionStore:
+    def __init__(self, path):
+        self.path = path
+    def save(self, sessions):
+        with open(self.path, "w") as handle:
+            json.dump(sessions, handle)
+    def load(self):
+        return {}
+'''
+PY_API = '''import requests
+from flask import Flask
+from app.store import SessionStore
+from app import store as storemod
+
+app = Flask(__name__)
+PREFIX = "/api"
+_store = SessionStore("x.json")
+
+@app.get("/api/sessions")
+def list_sessions():
+    return _store.load()
+
+@app.post(PREFIX + "/sessions")
+def save_sessions():
+    _store.save({})
+    _store.frobnicate()
+    storemod.nothing()
+    return "ok"
+
+class Client:
+    def __init__(self, store: SessionStore):
+        self.store = store
+    def ping(self):
+        self.store.load()
+        self.store.missing()
+        requests.get("http://localhost:8000/api/sessions")
+        requests.get("http://localhost:8000/api/ghost")
+        requests.get("https://api.telegram.org/bot")
+'''
+
+
+def invariants_of(model):
+    return {i["id"]: i for i in model["interplay"]["invariants"]}
+
+
+def unparsed_sites(model, invariant_id, key):
+    return [(u["path"], u["line"], u[key]) for u in invariants_of(model)[invariant_id]["unparsed"]]
+
+
+def test_completeness_invariants_name_every_unparsed_site(tmp_path):
+    root = tmp_path / "complete"
+    config(root, external_systems=[{"id": "telegram", "label": "Telegram", "category": "messaging", "description": "Bot API.",
+                                     "signatures": [{"pattern": r"api\.telegram\.org", "scope": "strings"}]}])
+    write(root, "app/store.py", PY_STORE)
+    write(root, "app/api.py", PY_API)
+    model = compile_service(root)
+    assert validate_document(model) == []
+    found = invariants_of(model)
+    # A route whose path is computed is counted, not silently dropped.
+    assert found["routes-declared-literally"]["status"] == "violated" and found["routes-declared-literally"]["checked"] == 2
+    assert unparsed_sites(model, "routes-declared-literally", "rule") == [("app/api.py", 14, "python.route")]
+    # Calls on a store-typed receiver — a module binding, a constructor-injected field, a module alias — resolve to members the store declares, or are listed.
+    assert found["store-calls-resolve"]["checked"] == 6
+    assert unparsed_sites(model, "store-calls-resolve", "method") == [("app/api.py", 17, "frobnicate"), ("app/api.py", 18, "nothing"), ("app/api.py", 26, "missing")]
+    # A client path under the service's own route prefix must match a route; Telegram's URL is not under it and is not judged.
+    assert found["client-paths-resolve"]["checked"] == 2
+    assert unparsed_sites(model, "client-paths-resolve", "client_path") == [("app/api.py", 28, "/api/ghost")]
+    # Packages no declared system claims are listed with the import that pulls them in.
+    assert unparsed_sites(model, "vendors-declared", "package") == [("app/api.py", 1, "requests"), ("app/api.py", 2, "flask")]
+    assert model["extraction"]["summary"]["completeness"]["store-calls-resolve"] == {"seen": 6, "parsed": 3, "unparsed": 3}
+    # Declaring the packages as systems makes the invariant hold without touching the code.
+    cfg = json.loads((root / "architecture/config.json").read_text())
+    cfg["external_systems"] += [{"id": "http", "label": "requests", "category": "http", "description": "d", "signatures": [r"\brequests\b"]},
+                                {"id": "flask", "label": "Flask", "category": "web", "description": "d", "signatures": [r"\bflask\b"]}]
+    write(root, "architecture/config.json", json.dumps(cfg))
+    assert invariants_of(compile_service(root))["vendors-declared"]["status"] == "holds"
+
+
+TS_TAB_STORE = '''import { writeFileSync } from "fs";
+export class ItemStore {
+\tsave(items: string[]): void {
+\t\twriteFileSync("items.json", JSON.stringify(items));
+\t}
+\tload(): string[] { return []; }
+}
+'''
+TS_TAB_SERVER = '''import express from "express";
+import { ItemStore } from "./store";
+const app = express();
+const store = new ItemStore();
+const ROUTE = "/items";
+app.get("/items", (req, res) => res.json(store.load()));
+app.post(ROUTE, (req, res) => { store.save([]); store.purge(); res.send("ok"); });
+app.listen(3000);
+'''
+
+
+def test_tab_indented_members_resolve_like_two_space_ones(tmp_path):
+    root = tmp_path / "tabs"
+    config(root)
+    write(root, "src/store.ts", TS_TAB_STORE)
+    write(root, "src/server.ts", TS_TAB_SERVER)
+    model = compile_service(root)
+    assert validate_document(model) == []
+    assert unparsed_sites(model, "routes-declared-literally", "rule") == [("src/server.ts", 7, "typescript.route")]
+    assert invariants_of(model)["store-calls-resolve"]["checked"] == 3
+    assert unparsed_sites(model, "store-calls-resolve", "method") == [("src/server.ts", 7, "purge")]
+    assert invariants_of(model)["client-paths-resolve"] == {"id": "client-paths-resolve", "kind": "client_paths_resolve", "status": "holds", "checked": 0,
+                                                            "why": invariants_of(model)["client-paths-resolve"]["why"], "unparsed": []}
+
+
+def test_a_probe_is_a_regex_in_the_rules_own_scope():
+    assert Rule("go.x", "d", "trigger", "raw", r"a\(\"b\"", probe=r"a\(").probe == r"a\("
+    with pytest.raises(ValueError, match="probe"):
+        Rule("go.x", "d", "trigger", "query", "(call_expression) @site", probe=r"a\(")
+    for pack in PACKS.values():
+        for rule in pack.rules:
+            if rule.probe:
+                re.compile(rule.probe)
+                assert rule.produces == "endpoint", f"{rule.id}: probes count the registrations the map may be short of"
+
+
+# ── Usage rules on the call index ────────────────────────────────────────────
+
+PY_REACH_STORE = '''import json
+
+class SessionStore:
+    def save(self, sessions):
+        with open("sessions.json", "w") as handle:
+            json.dump(sessions, handle)
+    def load(self):
+        return {}
+
+def write_index(payload):
+    with open("index.json", "w") as handle:
+        json.dump(payload, handle)
+
+def record(payload):
+    write_index(payload)
+'''
+PY_REACH_API = '''import requests
+from flask import Flask
+from app.store import SessionStore
+from app import store as storemod
+
+app = Flask(__name__)
+_store = SessionStore()
+
+class Notifier:
+    def __init__(self, store: SessionStore):
+        self.store = store
+    def notify(self, text):
+        self.store.save({"text": text})
+        requests.post("https://api.telegram.org/bot/send", json={"text": text})
+
+_notifier = Notifier(_store)
+
+@app.post("/api/sessions")
+def save_sessions():
+    _notifier.notify("saved")
+    storemod.record({})
+    return "ok"
+
+@app.get("/api/sessions/<int:session_id>")
+def one_session(session_id):
+    return _store.load()
+
+class ApiClient:
+    def __init__(self, base):
+        self.base = base
+    def call(self, path, method="GET"):
+        return requests.request(method, self.base + "/api" + path)
+    def sessions(self):
+        return self.call("/sessions")
+    def ghosts(self):
+        return self.call("/ghosts")
+'''
+
+
+def usage_edges(model, rule):
+    return sorted(((e["source"], e["target"], e["relation"], e["class"], tuple(e.get("via") or []), e.get("hops"), e.get("composed"))
+                   for e in model["interplay"]["edges"] if e.get("rule") == rule))
+
+
+def test_injected_method_follows_a_handler_to_the_stores_and_systems_it_reaches(tmp_path):
+    root = tmp_path / "reach"
+    config(root, external_systems=[{"id": "telegram", "label": "Telegram", "category": "messaging", "description": "Bot API.",
+                                     "signatures": [{"pattern": r"api\.telegram\.org", "scope": "strings"}]}])
+    write(root, "app/store.py", PY_REACH_STORE)
+    write(root, "app/api.py", PY_REACH_API)
+    model = compile_service(root)
+    assert validate_document(model) == []
+    endpoint = "endpoint:core:route:/api/sessions"
+    # Through a module-level object whose class took the store in its constructor (two hops, chain on the edge) …
+    assert (endpoint, "store:core:app/store.py:5", "uses", "usage", ("Notifier.notify", "SessionStore.save"), 2, None) in usage_edges(model, "usage.injected_method")
+    # … through a module imported under a name, to a function it calls in turn …
+    assert (endpoint, "store:core:app/store.py:11", "uses", "usage", ("record", "write_index"), 2, None) in usage_edges(model, "usage.injected_method")
+    # … and to the external system the first hop's body names.
+    assert (endpoint, "external:telegram", "touches", "boundary", ("Notifier.notify",), 1, None) in usage_edges(model, "usage.injected_method")
+    # A handler that reaches no mechanism adds nothing; the direct citations stay with their owners.
+    assert not any(s == "endpoint:core:route:/api/sessions/-int-session_id" for s, *_ in usage_edges(model, "usage.injected_method"))
+    assert ("type:core:SessionStore", "store:core:app/store.py:5", "persists-to", "lifecycle") in edges(model)
+    fired = passes(model)
+    assert fired["usage.injected_method"]["class"] == "mechanical" and fired["usage.injected_method"]["citations"] == 2, "one citation per first-hop call line in the handler"
+    assert {("app/api.py", 20, "usage.injected_method", "wiring"), ("app/api.py", 21, "usage.injected_method", "wiring")} <= origins_of(model, endpoint)
+    # A client wrapper: the member spelling "/api" + path lends the prefix; the sibling that passes "/sessions" invokes the route.
+    assert usage_edges(model, "usage.client_wrapper") == [("type:core:ApiClient", endpoint, "invokes", "interplay", ("ApiClient.call",), None, "/api/sessions")]
+    assert unparsed_sites(model, "client-paths-resolve", "client_path") == [("app/api.py", 36, "/api/ghosts")]
+    assert invariants_of(model)["client-paths-resolve"]["checked"] == 2, "the wrapper's own prefix literal is not a client path"
+    assert invariants_of(model)["store-calls-resolve"]["status"] == "holds"
+
+
+TS_REACH_STORE = '''import { writeFileSync } from "fs";
+export class ItemStore {
+  save(items: string[]): void {
+    writeFileSync("items.json", JSON.stringify(items));
+  }
+}
+export class ItemService {
+  constructor(private readonly store: ItemStore) {}
+  add(item: string): void {
+    this.store.save([item]);
+  }
+}
+'''
+TS_REACH_SERVER = '''import express from "express";
+import { ItemStore, ItemService } from "./store";
+const app = express();
+const service = new ItemService(new ItemStore());
+app.post("/api/items", (req, res) => { service.add(req.body); res.send("ok"); });
+app.get("/api/spaces/:id/threads", (req, res) => res.json([]));
+app.listen(3000);
+'''
+TS_REACH_CLIENT = '''const space = (id: string) => `/spaces/${id}`;
+export class Client {
+  constructor(private base: string) {}
+  request(path: string, init?: RequestInit) {
+    return fetch(this.base + `/api${path}`, init);
+  }
+  threads(id: string) {
+    return this.request(`${space(id)}/threads`);
+  }
+  missing() {
+    return this.request("/nowhere");
+  }
+}
+'''
+
+
+def test_typescript_inline_handlers_constructor_properties_and_template_helpers(tmp_path):
+    root = tmp_path / "ts-reach"
+    config(root)
+    write(root, "src/store.ts", TS_REACH_STORE)
+    write(root, "src/server.ts", TS_REACH_SERVER)
+    write(root, "src/client.ts", TS_REACH_CLIENT)
+    model = compile_service(root)
+    assert validate_document(model) == []
+    # The inline arrow handler's span is the start; `service` is a module binding; `store` is a constructor parameter property.
+    assert usage_edges(model, "usage.injected_method") == [
+        ("endpoint:core:route:/api/items", "store:core:src/store.ts:4", "uses", "usage", ("ItemService.add", "ItemStore.save"), 2, None)]
+    # `${space(id)}/threads` through the wrapper `/api${path}` with the module's template helper inlined is /api/spaces/${id}/threads.
+    assert usage_edges(model, "usage.client_wrapper") == [
+        ("type:core:Client", "endpoint:core:route:/api/spaces/-id/threads", "invokes", "interplay", ("Client.request",), None, "/api/spaces/${id}/threads")]
+    assert unparsed_sites(model, "client-paths-resolve", "client_path") == [("src/client.ts", 11, "/api/nowhere")]
+
+
+def test_the_harness_gateway_handlers_reach_their_stores_through_module_imports(tmp_path):
+    """The proof on harness itself: an RPC handler that imports a store module inside its body
+    reaches the module's JSON write through two further calls, chain recorded."""
+    import shutil
+
+    root = tmp_path / "gw"
+    shutil.copytree(REPO / "tui_gateway", root / "tui_gateway", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    config(root, components=[{"id": "gateway", "label": "Gateway", "description": "The JSON-RPC gateway.", "patterns": ["tui_gateway/**"]}],
+           languages=["python"],
+           rules=[{"id": "rpc_method", "description": "A JSON-RPC method registration: @method(\"namespace.name\")", "family": "trigger", "language": "python",
+                   "scope": "raw", "regex": r"@(?:\w+\.)?method\(\s*\"([^\"]+)\"", "produces": {"kind": "endpoint", "sub_kind": "rpc", "label_group": 1}}])
+    model = compile_service(root)
+    assert validate_document(model) == []
+    reached = {(s, t): via for s, t, _, _, via, _, _ in usage_edges(model, "usage.injected_method")}
+    describe = [(t, via) for (s, t), via in reached.items() if s == "endpoint:gateway:rpc:architecture.describe"]
+    assert describe, "architecture.describe reaches a store site"
+    target, via = describe[0]
+    assert target.startswith("store:gateway:tui_gateway/architecture_store.py:") and via[0] == "describe" and via[-1] == "_write_json"
+    assert len(reached) >= 40, f"many handlers reach a mechanism through the modules they import: {len(reached)}"
+    found = invariants_of(model)
+    assert found["store-calls-resolve"]["status"] == "holds", found["store-calls-resolve"]["unparsed"]
+    assert found["routes-declared-literally"]["status"] == "holds"
+
+
+# ── What a process does for its life: ticks, state, tables ───────────────────
+
+PY_PROC_MAIN = '''import sys
+from svc import jobs
+from svc.store import Registry
+
+_registry = Registry()
+
+def main():
+    jobs.start_reaper()
+    while True:
+        raw = sys.stdin.readline()
+        if not raw:
+            break
+        _registry.put(raw)
+        jobs.schedule(raw)
+
+if __name__ == "__main__":
+    main()
+'''
+PY_PROC_JOBS = '''import threading
+import time
+
+_QUEUE: list = []
+_SEEN = {}
+
+def schedule(item):
+    _QUEUE.append(item)
+
+def _reap():
+    while True:
+        time.sleep(5)
+        drain()
+
+def drain():
+    while _QUEUE:
+        _QUEUE.pop()
+
+def start_reaper():
+    threading.Thread(target=_reap, daemon=True).start()
+
+def retry(fn):
+    def attempt():
+        while True:
+            time.sleep(1)
+            fn()
+    return attempt
+
+def wait_for(ready):
+    attempts = 0
+    while attempts < 3:
+        time.sleep(1)
+        attempts += 1
+'''
+PY_PROC_STORE = '''class Registry:
+    def __init__(self):
+        self.items = {}
+    def put(self, key):
+        self.items[key] = 1
+
+class Unused:
+    def __init__(self):
+        self.cache = {}
+    def add(self, key):
+        self.cache[key] = 1
+'''
+PY_PROC_SCHEMA = '''SCHEMA = """
+CREATE TABLE sessions (id TEXT PRIMARY KEY);
+CREATE TABLE session_model_usage (
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    model TEXT NOT NULL
+);
+CREATE TABLE tags (
+    session_id TEXT,
+    name TEXT,
+    FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
+"""
+'''
+
+
+def relation_edges(model, relation):
+    return sorted((e["source"], e["target"], tuple(e.get("via") or []), {k: v for k, v in e.items() if k in ("interval", "column", "target_column", "on_delete")})
+                  for e in model["interplay"]["edges"] if e["relation"] == relation)
+
+
+def test_python_process_ticks_state_and_foreign_keys(tmp_path):
+    from tui_gateway.architecture_contract import KNOWN_NODE_KINDS, KNOWN_RELATIONS
+
+    root = tmp_path / "proc"
+    config(root)
+    write(root, "svc/main.py", PY_PROC_MAIN)
+    write(root, "svc/jobs.py", PY_PROC_JOBS)
+    write(root, "svc/store.py", PY_PROC_STORE)
+    write(root, "svc/schema.py", PY_PROC_SCHEMA)
+    model = compile_service(root)
+    assert validate_document(model) == []
+    nodes = {n["id"]: n for n in model["interplay"]["nodes"]}
+    entry = "entrypoint:core:svc/main.py"
+    # Ticks: the entry's own read-paced loop, and the timer loop handed to a thread one import away. Not the
+    # unpaced drain loop, not the closure handed out by retry, not the bounded wait_for retry.
+    assert nodes_by_kind(model, "tick") == ["tick:core:svc/jobs.py:11", "tick:core:svc/main.py:9"]
+    main_loop, reaper = nodes["tick:core:svc/main.py:9"], nodes["tick:core:svc/jobs.py:11"]
+    assert main_loop["sub_kind"] == "loop" and main_loop["pacing"] == "read" and main_loop["label"] == "main loop"
+    assert [s["call"] for s in main_loop["steps"]] == ["sys.stdin.readline", "_registry.put", "jobs.schedule"], "the body's calls in source order — the only order the compiler claims"
+    assert reaper["sub_kind"] == "starter" and reaper["interval"] == "5" and reaper["holder"] == "_reap"
+    assert relation_edges(model, "runs") == [(entry, "tick:core:svc/jobs.py:11", ("svc/jobs.py",), {"interval": "5"}), (entry, "tick:core:svc/main.py:9", (), {})]
+    # State: the written module list and the field of the class main.py constructs; not the never-written _SEEN, not the unconstructed Unused.cache.
+    assert nodes_by_kind(model, "state") == ["state:core:svc/jobs.py:4", "state:core:svc/store.py:3"]
+    assert nodes["state:core:svc/store.py:3"]["label"] == "Registry.items" and nodes["state:core:svc/jobs.py:4"]["sub_kind"] == "list"
+    keeps = relation_edges(model, "keeps")
+    assert (entry, "state:core:svc/jobs.py:4", ("svc/jobs.py",), {}) in keeps and (entry, "state:core:svc/store.py:3", ("svc/store.py",), {}) in keeps
+    # Which loop writes which state, through what: the chain on the edge.
+    assert ("tick:core:svc/main.py:9", "state:core:svc/store.py:3", ("main", "Registry.put"), {}) in keeps
+    assert ("tick:core:svc/main.py:9", "state:core:svc/jobs.py:4", ("main", "schedule"), {}) in keeps
+    assert ("tick:core:svc/jobs.py:11", "state:core:svc/jobs.py:4", ("_reap", "drain"), {}) in keeps
+    # Tables and foreign keys, column-level and table-level, with the delete rule.
+    assert nodes_by_kind(model, "table") == ["table:core:session_model_usage", "table:core:sessions", "table:core:tags"]
+    assert nodes["table:core:session_model_usage"]["columns"] == ["session_id", "model"]
+    assert relation_edges(model, "references") == [
+        ("table:core:session_model_usage", "table:core:sessions", (), {"column": "session_id", "target_column": "id", "on_delete": "CASCADE"}),
+        ("table:core:tags", "table:core:sessions", (), {"column": "session_id", "target_column": "id"}),
+    ]
+    fired = passes(model)
+    for rule in ("python.launch.loop", "python.launch.starter", "python.state.resident", "python.schema.table", "python.schema.references"):
+        assert rule in fired and fired[rule]["class"] == "mechanical", rule
+    assert ("svc/jobs.py", 11, "python.launch.starter", "behaviour") in origins_of(model, "tick:core:svc/jobs.py:11")
+    # The vocabulary stays the contract's.
+    assert {n["kind"] for n in model["interplay"]["nodes"]} <= set(KNOWN_NODE_KINDS)
+    assert {e["relation"] for e in model["interplay"]["edges"]} <= set(KNOWN_RELATIONS)
+
+
+def test_the_harness_gateway_runs_its_loops_and_keeps_its_registries(tmp_path):
+    """The proof on harness: the gateway's stdin loop and its background workers appear as ticks with
+    their intervals, and the subscription registry is state the query poller writes."""
+    import shutil
+
+    root = tmp_path / "gw"
+    shutil.copytree(REPO / "tui_gateway", root / "tui_gateway", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    config(root, components=[{"id": "gateway", "label": "Gateway", "description": "The JSON-RPC gateway.", "patterns": ["tui_gateway/**"]}], languages=["python"])
+    model = compile_service(root)
+    nodes = {n["id"]: n for n in model["interplay"]["nodes"]}
+    ticks = {n["label"]: n for n in nodes.values() if n["kind"] == "tick" and n["path"] != "tui_gateway/slash_worker.py"}  # the slash worker is a process of its own
+    assert ticks["main loop"]["path"] == "tui_gateway/entry.py" and ticks["main loop"]["sub_kind"] == "loop" and ticks["main loop"]["pacing"] == "read"
+    assert ticks["_start_idle_reaper._loop loop"]["interval"] == "_REAPER_SCAN_S" and ticks["_start_idle_reaper._loop loop"]["sub_kind"] == "starter"
+    assert ticks["_poll_loop loop"]["interval"] == "1.0"
+    assert "_wake_resume_if_owner._retry loop" not in ticks, "a deadline-bounded retry is not a schedule"
+    entry = "entrypoint:gateway:tui_gateway/entry.py"
+    runs = {e["target"] for e in model["interplay"]["edges"] if e["source"] == entry and e["relation"] == "runs"}
+    assert ticks["main loop"]["id"] in runs and ticks["_start_idle_reaper._loop loop"]["id"] in runs
+    assert ticks["main loop"]["id"] not in {e["target"] for e in model["interplay"]["edges"] if e["source"] != entry and e["relation"] == "runs"}, "another entry's top level does not run this one's loop"
+    subscriptions = next(n for n in nodes.values() if n["kind"] == "state" and n["label"] == "_SUBSCRIPTIONS")
+    poller_keeps = [e for e in model["interplay"]["edges"] if e["source"] == ticks["_poll_loop loop"]["id"] and e["target"] == subscriptions["id"]]
+    assert poller_keeps and poller_keeps[0]["via"] == ["_poll_loop", "run_due"]
+    sessions = next(n for n in nodes.values() if n["kind"] == "state" and n["label"] == "_sessions" and n["path"] == "tui_gateway/server.py")
+    assert (entry, sessions["id"]) in {(e["source"], e["target"]) for e in model["interplay"]["edges"] if e["relation"] == "keeps"}
+    assert nodes_by_kind(model, "table") == [], "the gateway declares no SQL tables of its own"
+
+
+def test_the_harness_state_schema_foreign_keys_match_the_statements(tmp_path):
+    import shutil
+
+    root = tmp_path / "hs"
+    shutil.copy(REPO / "hermes_state_schema.py", root / "hermes_state_schema.py") if root.mkdir() is None else None
+    config(root)
+    model = compile_service(root)
+    tables = {n["label"]: n for n in model["interplay"]["nodes"] if n["kind"] == "table"}
+    assert set(tables) == {"gateway_routing", "session_model_usage", "sessions"}, "two CREATE TABLE statements (one issued twice) and the table they reference"
+    assert tables["sessions"]["sub_kind"] == "referenced", "sessions is created in another module; it is on the map as the referenced table"
+    assert relation_edges(model, "references") == [
+        ("table:core:session_model_usage", "table:core:sessions", (), {"column": "session_id", "target_column": "id", "on_delete": "CASCADE"})]

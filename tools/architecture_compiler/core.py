@@ -38,6 +38,8 @@ from tools.architecture_compile_python import (  # noqa: E402  (reused, never ed
     build_ci,
     load_config,
 )
+from tools.architecture_compiler import completeness, process, usage  # noqa: E402
+from tools.architecture_compiler.calls import CallIndex  # noqa: E402
 from tools.architecture_compiler.packs import PACKS, pack_for_path  # noqa: E402
 from tools.architecture_compiler.packs.base import (  # noqa: E402
     Citation,
@@ -46,6 +48,7 @@ from tools.architecture_compiler.packs.base import (  # noqa: E402
     Rule,
     enclosing_type,
     mask,
+    probe_lines,
     query_citations,
     regex_citations,
 )
@@ -61,6 +64,8 @@ CORE_RULES: Dict[str, Tuple[str, str]] = {
     "module": ("Every analysed source file is a construction: the file that declares what the other passes find", "wiring"),
     SIGNATURE_RULE: ("A configured external-system signature present in the code (scope code) or inside a string literal (scope strings)", "boundary"),
     DECLARED_RULE: ("A construction a person declared in architecture/config.json, citing the file and line it lives at (semantic layer, not extraction)", "wiring"),
+    usage.INJECTED_METHOD: ("A route's handler calls a method on something handed to it — a module-level store object, a constructor-injected field, a module imported under a name — and the store site or external system is in that method's body or further down: followed by name up to four calls, the chain on the edge", "wiring"),
+    usage.CLIENT_WRAPPER: ("A client member whose body spells a path as a literal prefix and one of its own parameters lends the prefix to every sibling call that passes a literal; the composed path is matched against the service's routes like any other", "wiring"),
 }
 SEMANTIC_RULES = {DECLARED_RULE}
 LIMITATIONS = (
@@ -178,6 +183,8 @@ class FileExtraction:
         source = self.text.encode("utf-8")
         tree = parser.parse(source)
         root = tree.root_node
+        self.source = source
+        self.tree_root = root
         self.code, self.raw, self.strings = mask(self.text, root, self.pack.comment_types, self.pack.string_types)
         self.declarations: List[Declaration] = sorted(self.pack.census(root, source), key=lambda d: (d.line, -d.end_line, d.kind, d.name))
         self.imports = self.pack.imports(root, source)
@@ -196,6 +203,11 @@ class FileExtraction:
             if rule.id.endswith(".import_external"):
                 self.citations.extend(Citation(rule.id, line, root_name) for root_name, line in self.external_roots)
         self.citations.sort(key=lambda c: (c.line, c.rule, c.label))
+        # The wider shape each probing rule reads a subset of: every line it fires on, cited or not.
+        self.probes: Dict[str, List[int]] = {
+            rule.id: lines for rule in list(self.pack.rules) + list(project_rules)
+            if rule.probe for lines in [probe_lines(rule, self.code, self.raw, self.strings)] if lines
+        }
 
     def enclosing(self, line: int) -> Optional[Declaration]:
         return enclosing_type(self.declarations, line)
@@ -260,7 +272,7 @@ def build_model(root: Path, config: Dict[str, Any], files: List[Dict[str, Any]],
             rules_by_id[rule.id] = rule
 
     nodes: Dict[str, Dict[str, Any]] = {}
-    edges: Set[Tuple[str, str, str, str]] = set()
+    edges: Dict[Tuple[str, str, str, str], Dict[str, Any]] = {}
     origins: Dict[str, List[Tuple[str, int, str]]] = {}
     types_by_name: Dict[str, List[Tuple[str, str, str]]] = {}  # name → [(component, language, node id)]
     enums_by_name: Dict[str, List[Tuple[str, str, str]]] = {}
@@ -283,11 +295,14 @@ def build_model(root: Path, config: Dict[str, Any], files: List[Dict[str, Any]],
     def add_origin(node_id: str, path: str, line: int, rule: str) -> None:
         origins.setdefault(node_id, []).append((path, line, rule))
 
-    def add_edge(source: str, target: str, relation: str, edge_class: str) -> None:
+    def add_edge(source: str, target: str, relation: str, edge_class: str, **attrs: Any) -> None:
+        """An edge, deduplicated by its four-tuple; attributes (``via``, ``hops``,
+        ``columns`` …) describe how the edge was found and are kept from the
+        first sighting."""
         if edge_class not in EDGE_CLASSES:
             raise CompileError(f"edge class {edge_class!r} is not one of {EDGE_CLASSES}")
         if source != target:
-            edges.add((source, target, relation, edge_class))
+            edges.setdefault((source, target, relation, edge_class), {k: v for k, v in attrs.items() if v not in (None, [], "")})
 
     # Modules, types, entrypoints.
     for ex in extractions:
@@ -378,6 +393,8 @@ def build_model(root: Path, config: Dict[str, Any], files: List[Dict[str, Any]],
                 add_edge(module_id(ex.component, ex.rel), target, "uses", "boundary")
 
     # Rule-produced constructions.
+    sites: Dict[Tuple[str, int, str], str] = {}  # (path, line, rule) → the node the citation produced
+    exposed: List[Tuple[str, FileExtraction, int]] = []  # server-side endpoints with the registration that exposes them
     for ex in extractions:
         for citation in ex.citations:
             rule = rules_by_id.get(citation.rule)
@@ -392,13 +409,97 @@ def build_model(root: Path, config: Dict[str, Any], files: List[Dict[str, Any]],
                 node_id = f"endpoint:{ex.component}:{slug(rule.sub_kind or 'route')}:{slug(label)}"
                 add_node(node_id, kind="endpoint", sub_kind=rule.sub_kind or "route", label=label, component=ex.component, path=ex.rel, line=citation.line,
                          owner_type=(ex.enclosing(citation.line).name if ex.enclosing(citation.line) else ex.rel))
+                if rule.wiring[0] == "exposes":
+                    exposed.append((node_id, ex, citation.line))
             else:
                 node_id = f"{rule.produces}:{ex.component}:{ex.rel}:{citation.line}"
                 add_node(node_id, kind=rule.produces, sub_kind=rule.sub_kind or rule.id.rsplit(".", 1)[-1], label=label, component=ex.component, path=ex.rel,
                          line=citation.line, owner_type=(ex.enclosing(citation.line).name if ex.enclosing(citation.line) else ex.rel))
+            sites[(ex.rel, citation.line, rule.id)] = node_id
             add_origin(node_id, ex.rel, citation.line, rule.id)
             relation, edge_class = rule.wiring
             add_edge(owner_of(ex, citation.line), node_id, relation, edge_class)
+
+    # The call index: members and functions by id, calls between them resolved by name through
+    # typed receivers and local imports. The usage rules walk it; completeness is proved on it.
+    store_rules = frozenset(rule.id for rule in rules_by_id.values() if rule.family == "store")
+    store_type_ids = frozenset(nid for nid, node in nodes.items() if node["kind"] == "store" and nid.startswith("type:"))
+    index = CallIndex(extractions, lambda name, ex: resolve(types_by_name, name, ex), store_rules, store_type_ids)
+    by_rel = {ex.rel: ex for ex in extractions}
+    for edge in usage.injected_method_edges(index, exposed, sites, store_rules, SIGNATURE_RULE):
+        add_edge(edge["source"], edge["target"], edge["relation"], edge["edge_class"], via=edge["via"], hops=edge["hops"], rule=usage.INJECTED_METHOD)
+        by_rel[edge["path"]].cite(usage.INJECTED_METHOD, edge["line"], edge["target"])
+        add_origin(edge["source"], edge["path"], edge["line"], usage.INJECTED_METHOD)
+    routes = {nodes[nid]["label"]: nid for nid, _, _ in exposed if nodes[nid].get("sub_kind") == "route"}
+    wrapper_edges, composed_paths, wrapper_spans = usage.client_wrapper_edges(index, routes, type_id)
+    for edge in wrapper_edges:
+        add_edge(edge["source"], edge["target"], edge["relation"], edge["edge_class"], via=edge["via"], composed=edge["composed"], rule=usage.CLIENT_WRAPPER)
+        by_rel[edge["path"]].cite(usage.CLIENT_WRAPPER, edge["line"], edge["composed"])
+        add_origin(edge["target"], edge["path"], edge["line"], usage.CLIENT_WRAPPER)
+
+    # What each process does for its life (process.py): the paced loops the entry point runs and the
+    # starters in its import closure (ticks), the collections it keeps (state) and which ticks write them.
+    for ex in extractions:
+        if not ex.entrypoints:
+            continue
+        eid = f"entrypoint:{ex.component}:{ex.rel}"
+        closure = process.runtime_closure(index, ex.rel)
+        ticks: List[Tuple[str, Dict[str, Any]]] = []
+        for tick in process.ticks_for_entry(index, ex.rel, closure):
+            tick_ex = index.by_path[tick["path"]]
+            rule_id = f"{tick_ex.pack.name}.launch.{tick['sub_kind']}"
+            if rule_id not in rules_by_id:
+                continue
+            tid = f"tick:{tick_ex.component}:{tick['path']}:{tick['line']}"
+            holder = tick["holder"]
+            add_node(tid, kind="tick", sub_kind=tick["sub_kind"], label=tick["label"], component=tick_ex.component, path=tick["path"], line=tick["line"],
+                     owner_type=(holder.owner.split(".")[0] if holder is not None and holder.owner else tick["path"]), holder=holder.label if holder else "",
+                     interval=tick["interval"], pacing=tick["pacing"], condition=tick["condition"], steps=tick["steps"])
+            add_origin(tid, tick["path"], tick["line"], rule_id)
+            tick_ex.cite(rule_id, tick["line"], tick["label"])
+            add_edge(owner_of(tick_ex, tick["line"]), tid, "declares", "structure")
+            add_edge(eid, tid, "runs", "interplay", via=[tick["path"]] if tick["path"] != ex.rel else None, interval=tick["interval"], rule=rule_id)
+            ticks.append((tid, tick))
+        for state in process.resident_state_in(index, closure):
+            state_ex = index.by_path[state["path"]]
+            rule_id = f"{state_ex.pack.name}.state.resident"
+            if rule_id not in rules_by_id:
+                continue
+            sid = f"state:{state_ex.component}:{state['path']}:{state['line']}"
+            label = f"{state['holder']}.{state['name']}" if state["holder"] else state["name"]
+            add_node(sid, kind="state", sub_kind=state["shape"], label=label, component=state_ex.component, path=state["path"], line=state["line"],
+                     owner_type=state["holder"] or state["path"], holder_kind=state["holder_kind"], writes=state["writes"])
+            if sid not in origins:
+                add_origin(sid, state["path"], state["line"], rule_id)
+                state_ex.cite(rule_id, state["line"], label)
+            add_edge(owner_of(state_ex, state["line"]), sid, "keeps", "usage")
+            add_edge(eid, sid, "keeps", "usage", via=[state["path"]] if state["path"] != ex.rel else None, rule=rule_id)
+            for tid, tick in ticks:
+                chain = process.writers_of(index, state, tick)
+                if chain:
+                    add_edge(tid, sid, "keeps", "usage", via=chain, hops=len(chain) - 1, rule=rule_id)
+
+    # Tables a file declares and the foreign keys between them (schema.table / schema.references).
+    for table in process.tables_in(index):
+        table_ex = index.by_path[table["path"]]
+        table_rule, references_rule = f"{table_ex.pack.name}.schema.table", f"{table_ex.pack.name}.schema.references"
+        if table_rule not in rules_by_id:
+            continue
+        tid = f"table:{table_ex.component}:{slug(table['table'])}"
+        add_node(tid, kind="table", sub_kind=table["form"], label=table["table"], component=table_ex.component, path=table["path"], line=table["line"],
+                 owner_type=(table_ex.enclosing(table["line"]).name if table_ex.enclosing(table["line"]) else table["path"]), columns=table["columns"])
+        if nodes[tid].get("sub_kind") == "referenced":  # declared after a reference named it: the declaration wins
+            nodes[tid].update(sub_kind=table["form"], path=table["path"], line=table["line"], columns=table["columns"])
+        add_origin(tid, table["path"], table["line"], table_rule)
+        table_ex.cite(table_rule, table["line"], table["table"])
+        add_edge(owner_of(table_ex, table["line"]), tid, "declares", "structure")
+        for reference in table["references"]:
+            target = f"table:{table_ex.component}:{slug(reference['table'])}"
+            add_node(target, kind="table", sub_kind="referenced", label=reference["table"], component=table_ex.component, path=table["path"], line=table["line"],
+                     owner_type=table["path"], columns=[])
+            add_origin(target, table["path"], table["line"], references_rule)
+            table_ex.cite(references_rule, table["line"], f"{table['table']} → {reference['table']}")
+            add_edge(tid, target, "references", "structure", column=reference["column"], target_column=reference["target_column"], on_delete=reference["on_delete"], rule=references_rule)
 
     # State machines: an enum type assigned somewhere in the tree.
     for ex in extractions:
@@ -472,8 +573,10 @@ def build_model(root: Path, config: Dict[str, Any], files: List[Dict[str, Any]],
                 raise CompileError(f"declared edge {item['source']} -{item['relation']}-> {item['target']}: {end} {item[end]!r} is not on the map")
         add_edge(item["source"], item["target"], item["relation"], "usage")
 
+    route_labels = sorted(routes)
+
     node_list = [nodes[k] for k in sorted(nodes)]
-    edge_list = [{"source": s, "target": t, "relation": r, "class": c} for s, t, r, c in sorted(edges)]
+    edge_list = [{"source": s, "target": t, "relation": r, "class": c, **edges[(s, t, r, c)]} for s, t, r, c in sorted(edges)]
     edge_keys = {(e["source"], e["target"], e["relation"]) for e in edge_list}
 
     flows: List[Dict[str, Any]] = []
@@ -523,6 +626,10 @@ def build_model(root: Path, config: Dict[str, Any], files: List[Dict[str, Any]],
          "why": "Every construction on the map was extracted from a cited file and line, or declared by a person citing one."},
         {"id": "externals-declared-and-observed", "kind": "externals_declared_and_observed", "status": "holds", "checked": len(systems),
          "why": "Every declared external system was observed through at least one of its signatures; a silent declaration fails the build."},
+        completeness.routes_declared_literally(extractions, rules_by_id),
+        completeness.store_calls_resolve(index),
+        completeness.client_paths_resolve(extractions, rules_by_id, route_labels, composed_paths, wrapper_spans),
+        completeness.vendors_declared(extractions, absorbing),
     ]
     for item in declared.get("invariants") or []:
         for key in ("id", "kind", "why"):
@@ -550,6 +657,7 @@ def build_model(root: Path, config: Dict[str, Any], files: List[Dict[str, Any]],
         descriptions[f"{pack_name}.type"] = (f"A {PACKS[pack_name].label} type declaration (class, struct, enum, protocol, interface, trait, actor, extension)", "wiring")
         descriptions[f"{pack_name}.entrypoint"] = (f"Where a {PACKS[pack_name].label} program starts", "trigger")
     extraction = build_extraction(extractions, node_list, origins, semantic_by_file, descriptions)
+    extraction["summary"]["completeness"] = completeness.summary(invariants)
 
     components = []
     for configured in config["components"]:

@@ -334,11 +334,28 @@ def:
         boundary groups, gates, contract validation, `--check`, byte determinism) and one tree-sitter
         language pack each for Swift, TypeScript/JavaScript, Go, Rust and Python (declaration census,
         imports, entrypoints, a rule table of passes with file:line citations). Project rule tables in
-        `architecture/config.json` add passes on top of a pack's baseline.
+        `architecture/config.json` add passes on top of a pack's baseline. A rule may carry a *probe*,
+        the wider shape it reads a subset of; the remainder is counted per site and proved as
+        completeness invariants (`routes-declared-literally`, `store-calls-resolve`,
+        `client-paths-resolve`, `vendors-declared`) over a language-independent call index
+        (members by `path#Type.member`, receivers typed through fields, bindings and local imports).
+        Two usage rules walk the index: `usage.injected_method` follows a route's handler through
+        the objects and modules handed to it to the store sites and systems it reaches (chain on the
+        edge); `usage.client_wrapper` composes the paths a client spells through a prefix-lending
+        member and matches them against the routes. The Python pack adds the process shape from the
+        entry point's import closure: paced loops and started workers as `tick` nodes with intervals
+        and the body's calls in source order, written module and instance collections as `state` the
+        process and its loops keep, `CREATE TABLE` text and SQLAlchemy models as `table` nodes with
+        `references` edges for foreign keys.
       globs:
         - "tools/architecture_compiler/__init__.py"
         - "tools/architecture_compiler/__main__.py"
         - "tools/architecture_compiler/core.py"
+        - "tools/architecture_compiler/calls.py"
+        - "tools/architecture_compiler/completeness.py"
+        - "tools/architecture_compiler/usage.py"
+        - "tools/architecture_compiler/process.py"
+        - "tools/architecture_compiler/packs/python_process.py"
         - "tools/architecture_compiler/requirements.txt"
         - "tools/architecture_compiler/packs/__init__.py"
         - "tools/architecture_compiler/packs/base.py"
@@ -348,6 +365,21 @@ def:
         - "tools/architecture_compiler/packs/rust.py"
         - "tools/architecture_compiler/packs/python.py"
         - "tests/tools/test_architecture_compiler.py"
+    - title: "Architecture ratchet"
+      description: |
+        `tools/architecture_ratchet.py` compiles a service as it is on the base branch (a
+        temporary worktree) and as it is in the working tree, with the same compiler, and refuses
+        anything looser: a proven or declared invariant removed or re-kinded, a proven invariant
+        that held and is violated now, a completeness invariant whose unparsed sites grew (named),
+        a component, external system, group, gate command, project rule or declared construction
+        removed, `exclude` grown, `languages` narrowed, and — when a model carries a semantic
+        layer — a record or flow that went stale. A `constraints-loosened` label turns into
+        `--allow-loosening`: the loosening is reported and passes, on record. The `Architecture`
+        workflow (`.github/workflows/architecture-check.yml`) runs the compiler tests and the
+        ratchet on every pull request.
+      globs:
+        - "tools/architecture_ratchet.py"
+        - "tests/tools/test_architecture_ratchet.py"
     - title: "Push notifications (APNs)"
       description: Device registration and APNs delivery for HermesNative clients.
       globs:

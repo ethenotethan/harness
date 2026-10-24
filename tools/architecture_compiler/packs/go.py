@@ -67,7 +67,8 @@ def local_roots(rels: Sequence[str], config: Dict[str, Any]) -> frozenset:
 RULES: Tuple[Rule, ...] = (
     Rule("go.import_external", "An import of a module outside the Go standard library and outside this module (the first path segment carries a domain)", "boundary", "code", r"(?!x)x"),
     Rule("go.route", "A route registration: HandleFunc/Handle(\"/path\") or a router's GET/POST/PUT/DELETE/PATCH(\"/path\")", "trigger", "raw",
-         r"\b(?:HandleFunc|Handle|GET|POST|PUT|DELETE|PATCH)\(\s*\"([^\"]+)\"", produces="endpoint", sub_kind="route", label_group=1),
+         r"\b(?:HandleFunc|Handle|GET|POST|PUT|DELETE|PATCH)\(\s*\"([^\"]+)\"", produces="endpoint", sub_kind="route", label_group=1,
+         probe=r"\b(?:HandleFunc|Handle|GET|POST|PUT|DELETE|PATCH)\("),
     Rule("go.http_client", "An HTTP client: http.Get/Post/Head/NewRequest/Client/DefaultClient", "boundary", "code",
          r"\bhttp\.(?:Get|Post|Head|NewRequest|NewRequestWithContext|Client|DefaultClient)\b", produces="resource", sub_kind="http_client"),
     Rule("go.socket_or_server", "A listener or connection: net.Listen*/Dial*, http.ListenAndServe*, grpc.Dial/NewServer, websocket", "boundary", "code",
