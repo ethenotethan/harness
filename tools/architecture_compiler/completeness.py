@@ -81,14 +81,16 @@ def store_calls_resolve(index: CallIndex) -> Dict[str, Any]:
 
 
 def client_paths_resolve(extractions: Sequence[Any], rules_by_id: Dict[str, Any], routes: Sequence[str],
-                         composed: Sequence[Tuple[str, int, str]] = ()) -> Dict[str, Any]:
+                         composed: Sequence[Tuple[str, int, str]] = (), wrapper_spans: Sequence[Tuple[str, int, int]] = ()) -> Dict[str, Any]:
     """Client call sites whose literal path falls under a prefix the service's own
     routes answer: each must match a declared route. ``composed`` adds the paths
-    a client spells through a wrapper member (path, line, composed path)."""
+    a client spells through a wrapper member (path, line, composed path); the
+    wrapper bodies themselves (``wrapper_spans``) hold the prefix, not a path."""
     first_segments = {segments(route)[0] for route in routes if segments(route)}
     sites: List[Tuple[str, int, str]] = []
     for ex in extractions:
         client_lines = {c.line for c in ex.citations if (rules_by_id.get(c.rule) is not None and rules_by_id[c.rule].sub_kind == "http_client")}
+        client_lines -= {line for path, start, end in wrapper_spans if path == ex.rel for line in range(start, end + 1)}
         for line, contents in ex.strings:
             if line in client_lines:
                 path = normalize_path(contents)

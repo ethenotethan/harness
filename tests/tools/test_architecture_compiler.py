@@ -612,3 +612,171 @@ def test_a_probe_is_a_regex_in_the_rules_own_scope():
             if rule.probe:
                 re.compile(rule.probe)
                 assert rule.produces == "endpoint", f"{rule.id}: probes count the registrations the map may be short of"
+
+
+# ── Usage rules on the call index ────────────────────────────────────────────
+
+PY_REACH_STORE = '''import json
+
+class SessionStore:
+    def save(self, sessions):
+        with open("sessions.json", "w") as handle:
+            json.dump(sessions, handle)
+    def load(self):
+        return {}
+
+def write_index(payload):
+    with open("index.json", "w") as handle:
+        json.dump(payload, handle)
+
+def record(payload):
+    write_index(payload)
+'''
+PY_REACH_API = '''import requests
+from flask import Flask
+from app.store import SessionStore
+from app import store as storemod
+
+app = Flask(__name__)
+_store = SessionStore()
+
+class Notifier:
+    def __init__(self, store: SessionStore):
+        self.store = store
+    def notify(self, text):
+        self.store.save({"text": text})
+        requests.post("https://api.telegram.org/bot/send", json={"text": text})
+
+_notifier = Notifier(_store)
+
+@app.post("/api/sessions")
+def save_sessions():
+    _notifier.notify("saved")
+    storemod.record({})
+    return "ok"
+
+@app.get("/api/sessions/<int:session_id>")
+def one_session(session_id):
+    return _store.load()
+
+class ApiClient:
+    def __init__(self, base):
+        self.base = base
+    def call(self, path, method="GET"):
+        return requests.request(method, self.base + "/api" + path)
+    def sessions(self):
+        return self.call("/sessions")
+    def ghosts(self):
+        return self.call("/ghosts")
+'''
+
+
+def usage_edges(model, rule):
+    return sorted(((e["source"], e["target"], e["relation"], e["class"], tuple(e.get("via") or []), e.get("hops"), e.get("composed"))
+                   for e in model["interplay"]["edges"] if e.get("rule") == rule))
+
+
+def test_injected_method_follows_a_handler_to_the_stores_and_systems_it_reaches(tmp_path):
+    root = tmp_path / "reach"
+    config(root, external_systems=[{"id": "telegram", "label": "Telegram", "category": "messaging", "description": "Bot API.",
+                                     "signatures": [{"pattern": r"api\.telegram\.org", "scope": "strings"}]}])
+    write(root, "app/store.py", PY_REACH_STORE)
+    write(root, "app/api.py", PY_REACH_API)
+    model = compile_service(root)
+    assert validate_document(model) == []
+    endpoint = "endpoint:core:route:/api/sessions"
+    # Through a module-level object whose class took the store in its constructor (two hops, chain on the edge) …
+    assert (endpoint, "store:core:app/store.py:5", "uses", "usage", ("Notifier.notify", "SessionStore.save"), 2, None) in usage_edges(model, "usage.injected_method")
+    # … through a module imported under a name, to a function it calls in turn …
+    assert (endpoint, "store:core:app/store.py:11", "uses", "usage", ("record", "write_index"), 2, None) in usage_edges(model, "usage.injected_method")
+    # … and to the external system the first hop's body names.
+    assert (endpoint, "external:telegram", "touches", "boundary", ("Notifier.notify",), 1, None) in usage_edges(model, "usage.injected_method")
+    # A handler that reaches no mechanism adds nothing; the direct citations stay with their owners.
+    assert not any(s == "endpoint:core:route:/api/sessions/-int-session_id" for s, *_ in usage_edges(model, "usage.injected_method"))
+    assert ("type:core:SessionStore", "store:core:app/store.py:5", "persists-to", "lifecycle") in edges(model)
+    fired = passes(model)
+    assert fired["usage.injected_method"]["class"] == "mechanical" and fired["usage.injected_method"]["citations"] == 2, "one citation per first-hop call line in the handler"
+    assert {("app/api.py", 20, "usage.injected_method", "wiring"), ("app/api.py", 21, "usage.injected_method", "wiring")} <= origins_of(model, endpoint)
+    # A client wrapper: the member spelling "/api" + path lends the prefix; the sibling that passes "/sessions" invokes the route.
+    assert usage_edges(model, "usage.client_wrapper") == [("type:core:ApiClient", endpoint, "invokes", "interplay", ("ApiClient.call",), None, "/api/sessions")]
+    assert unparsed_sites(model, "client-paths-resolve", "client_path") == [("app/api.py", 36, "/api/ghosts")]
+    assert invariants_of(model)["client-paths-resolve"]["checked"] == 2, "the wrapper's own prefix literal is not a client path"
+    assert invariants_of(model)["store-calls-resolve"]["status"] == "holds"
+
+
+TS_REACH_STORE = '''import { writeFileSync } from "fs";
+export class ItemStore {
+  save(items: string[]): void {
+    writeFileSync("items.json", JSON.stringify(items));
+  }
+}
+export class ItemService {
+  constructor(private readonly store: ItemStore) {}
+  add(item: string): void {
+    this.store.save([item]);
+  }
+}
+'''
+TS_REACH_SERVER = '''import express from "express";
+import { ItemStore, ItemService } from "./store";
+const app = express();
+const service = new ItemService(new ItemStore());
+app.post("/api/items", (req, res) => { service.add(req.body); res.send("ok"); });
+app.get("/api/spaces/:id/threads", (req, res) => res.json([]));
+app.listen(3000);
+'''
+TS_REACH_CLIENT = '''const space = (id: string) => `/spaces/${id}`;
+export class Client {
+  constructor(private base: string) {}
+  request(path: string, init?: RequestInit) {
+    return fetch(this.base + `/api${path}`, init);
+  }
+  threads(id: string) {
+    return this.request(`${space(id)}/threads`);
+  }
+  missing() {
+    return this.request("/nowhere");
+  }
+}
+'''
+
+
+def test_typescript_inline_handlers_constructor_properties_and_template_helpers(tmp_path):
+    root = tmp_path / "ts-reach"
+    config(root)
+    write(root, "src/store.ts", TS_REACH_STORE)
+    write(root, "src/server.ts", TS_REACH_SERVER)
+    write(root, "src/client.ts", TS_REACH_CLIENT)
+    model = compile_service(root)
+    assert validate_document(model) == []
+    # The inline arrow handler's span is the start; `service` is a module binding; `store` is a constructor parameter property.
+    assert usage_edges(model, "usage.injected_method") == [
+        ("endpoint:core:route:/api/items", "store:core:src/store.ts:4", "uses", "usage", ("ItemService.add", "ItemStore.save"), 2, None)]
+    # `${space(id)}/threads` through the wrapper `/api${path}` with the module's template helper inlined is /api/spaces/${id}/threads.
+    assert usage_edges(model, "usage.client_wrapper") == [
+        ("type:core:Client", "endpoint:core:route:/api/spaces/-id/threads", "invokes", "interplay", ("Client.request",), None, "/api/spaces/${id}/threads")]
+    assert unparsed_sites(model, "client-paths-resolve", "client_path") == [("src/client.ts", 11, "/api/nowhere")]
+
+
+def test_the_harness_gateway_handlers_reach_their_stores_through_module_imports(tmp_path):
+    """The proof on harness itself: an RPC handler that imports a store module inside its body
+    reaches the module's JSON write through two further calls, chain recorded."""
+    import shutil
+
+    root = tmp_path / "gw"
+    shutil.copytree(REPO / "tui_gateway", root / "tui_gateway", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    config(root, components=[{"id": "gateway", "label": "Gateway", "description": "The JSON-RPC gateway.", "patterns": ["tui_gateway/**"]}],
+           languages=["python"],
+           rules=[{"id": "rpc_method", "description": "A JSON-RPC method registration: @method(\"namespace.name\")", "family": "trigger", "language": "python",
+                   "scope": "raw", "regex": r"@(?:\w+\.)?method\(\s*\"([^\"]+)\"", "produces": {"kind": "endpoint", "sub_kind": "rpc", "label_group": 1}}])
+    model = compile_service(root)
+    assert validate_document(model) == []
+    reached = {(s, t): via for s, t, _, _, via, _, _ in usage_edges(model, "usage.injected_method")}
+    describe = [(t, via) for (s, t), via in reached.items() if s == "endpoint:gateway:rpc:architecture.describe"]
+    assert describe, "architecture.describe reaches a store site"
+    target, via = describe[0]
+    assert target.startswith("store:gateway:tui_gateway/architecture_store.py:") and via[0] == "describe" and via[-1] == "_write_json"
+    assert len(reached) >= 40, f"many handlers reach a mechanism through the modules they import: {len(reached)}"
+    found = invariants_of(model)
+    assert found["store-calls-resolve"]["status"] == "holds", found["store-calls-resolve"]["unparsed"]
+    assert found["routes-declared-literally"]["status"] == "holds"

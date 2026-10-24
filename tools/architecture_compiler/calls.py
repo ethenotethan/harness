@@ -57,6 +57,7 @@ class Member:
     code: str          # body with comments and string contents blanked
     raw: str           # body with comments blanked, strings visible
     nested: bool = False
+    synthetic: bool = False  # a registration's argument span standing in for an inline handler; not a declaration
     params: Set[str] = field(default_factory=set)
     param_types: Dict[str, str] = field(default_factory=dict)
     bindings: Dict[str, str] = field(default_factory=dict)
@@ -214,11 +215,14 @@ class CallIndex:
             owner = owner_type.name if owner_type else ""
             if nested and outer_function is not None:
                 owner = f"{owner}.{outer_function.name}" if owner else outer_function.name
-            member = Member(f"{ex.rel}#{owner}.{declaration.name}" if owner else f"{ex.rel}#{declaration.name}", ex.rel, ex.component, pack.name,
-                            owner, declaration.name, declaration.line, declaration.end_line, code[start:end], raw[start:end], nested=nested)
+            member_id = f"{ex.rel}#{owner}.{declaration.name}" if owner else f"{ex.rel}#{declaration.name}"
+            if member_id in self.members:  # several functions of one name in a file (decorated handlers named `_`): each is its own member
+                member_id = f"{member_id}@{declaration.line}"
+            member = Member(member_id, ex.rel, ex.component, pack.name, owner, declaration.name, declaration.line, declaration.end_line,
+                            code[start:end], raw[start:end], nested=nested)
             member.params, member.param_types = signature_params(member.code)
             member.bindings = {m.group(1): (m.group(2) or m.group(3)) for m in BINDING_RE.finditer(member.code)}
-            self.members.setdefault(member.id, member)
+            self.members[member.id] = member
             if owner_type is not None and not nested:
                 self.members_of_type[(ex.component, owner_type.name)].setdefault(declaration.name, member.id)
             elif not nested:
@@ -283,7 +287,24 @@ class CallIndex:
                 for match in re.finditer(r"(?<![\w$])" + re.escape(self_name) + r"\.(#?[A-Za-z_$][\w$]*)\s*=\s*([A-Za-z_$][\w$]*)\s*(?:;|$)", member.code, re.MULTILINE):
                     if match.group(2) in member.param_types:
                         add(match.group(1), member.param_types[match.group(2)])
+                # A constructor parameter with an accessibility modifier declares the field itself.
+                signature_end = balanced(member.code, member.code.find("(")) if "(" in member.code else 0
+                for match in re.finditer(r"\b(?:private|public|protected|readonly)\s+(?:readonly\s+)?([A-Za-z_$][\w$]*)\s*[?!]?\s*:\s*([A-Z][\w$]*)", member.code[:signature_end]):
+                    add(match.group(1), match.group(2))
         return found
+
+    def assigned_fields(self, component: str, type_name: str) -> Set[str]:
+        """Names the type's body assigns as fields of its own object (``self.x = …``):
+        calling one is a call through a callable field, not a missing member."""
+        location = self.type_lines.get((component, type_name))
+        if location is None:
+            return set()
+        path, line, end_line = location
+        ex = self.by_path[path]
+        if not ex.pack.self_name:
+            return set()
+        body = ex.code[_offset(ex.code, line):_offset(ex.code, end_line + 1)]
+        return {m.group(1) for m in re.finditer(r"(?<![\w$])" + re.escape(ex.pack.self_name) + r"\.(#?[A-Za-z_$][\w$]*)\s*(?::[^=\n]+)?=(?!=)", body)}
 
     def has_foreign_base(self, component: str, type_name: str) -> bool:
         """Whether the type extends something the service does not declare, so
@@ -383,8 +404,8 @@ class CallIndex:
         for call in self.calls_in(member.code):
             if not call.chain:
                 local = self.module_functions.get((member.path, call.method))
-                if not local and member.owner:
-                    local = self.members.get(f"{member.path}#{member.owner}.{call.method}")
+                if not local and member.owner and f"{member.path}#{member.owner}.{call.method}" in self.members:
+                    local = f"{member.path}#{member.owner}.{call.method}"
                 if local:
                     add(local, call.offset)
                     continue
@@ -443,6 +464,8 @@ class CallIndex:
         seen = 0
         unparsed: List[Dict[str, Any]] = []
         for member in self.members.values():
+            if member.synthetic:
+                continue
             ex = self.by_path[member.path]
             for call in self.calls_in(member.code):
                 if not call.chain:
@@ -458,7 +481,7 @@ class CallIndex:
                 if not store_hits:
                     continue
                 seen += 1
-                if not any(self.member_named(c, t, call.method, ex) or self.has_foreign_base(c, t) for c, t in store_hits):
+                if not any(self.member_named(c, t, call.method, ex) or self.has_foreign_base(c, t) or call.method in self.assigned_fields(c, t) for c, t in store_hits):
                     unparsed.append({"path": member.path, "line": line, "excerpt": excerpt(ex.text, line), "receiver": ".".join(f"{c}:{t}" for c, t in store_hits), "method": call.method})
         unparsed.sort(key=lambda u: (u["path"], u["line"], u["method"]))
         return seen, unparsed

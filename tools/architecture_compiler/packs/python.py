@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 import sys
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .base import Declaration, ImportRecord, LanguagePack, LocalImport, Rule, child_of_type, node_end_line, node_line, node_text, walk
 
@@ -121,6 +121,47 @@ def local_imports(root: Any, source: bytes, rel: str, all_rels: "frozenset[str]"
     return records
 
 
+def handler_line(root: Any, source: bytes, line: int) -> Optional[int]:
+    """The function a decorator on ``line`` decorates: where its ``def`` starts."""
+    for node in walk(root):
+        if node.type != "decorated_definition":
+            continue
+        decorators = [c for c in node.children if c.type == "decorator"]
+        if not any(node_line(d) <= line <= node_end_line(d) for d in decorators):
+            continue
+        definition = child_of_type(node, "function_definition", "class_definition")
+        if definition is not None:
+            return node_line(definition)
+    return None
+
+
+WRAPPER_FORMS = (
+    r"f[\"'](/[A-Za-z0-9_./-]*?)\{(\w+)\}[\"']",                              # f"/api/items{path}"
+    r"[\"'](/[A-Za-z0-9_./-]*?)[\"']\s*\+\s*(\w+)\b",                           # "/api/items" + path
+    r"[\"'](/[A-Za-z0-9_./-]*?)%s[\"']\s*%\s*\(?(\w+)\b",                        # "/api/items%s" % path
+    r"[\"'](/[A-Za-z0-9_./-]*?)\{\}[\"']\.format\(\s*(\w+)\b",                   # "/api/items{}".format(path)
+)
+
+
+def wrapper_prefix(body: str, params: "set[str]") -> Optional[str]:
+    """The literal prefix a member lends when its body spells a path as that
+    prefix plus one of its own parameters."""
+    for form in WRAPPER_FORMS:
+        for match in re.finditer(form, body):
+            if match.group(2) in params:
+                return match.group(1)
+    return None
+
+
+def literal_calls(body: str, member: str, module_raw: str) -> List[Tuple[str, int]]:
+    """``self.<member>("literal")`` and ``self.<member>(f"…")`` calls in a body:
+    the literal (an f-string's holes kept as ``{x}`` segments) and its offset."""
+    found: List[Tuple[str, int]] = []
+    for match in re.finditer(r"\bself\." + re.escape(member) + r"\(\s*(?:f|r|rf|fr)?([\"'])([^\"'\n]*)\1", body):
+        found.append((match.group(2), match.start()))
+    return found
+
+
 def entrypoints(root: Any, text: str, rel: str) -> List[Tuple[int, str]]:
     match = re.search(r"^if\s+__name__\s*==\s*[\"']__main__[\"']", text, re.MULTILINE)
     if match:
@@ -176,6 +217,9 @@ PACK = LanguagePack(
     self_name="self",
     local_imports=local_imports,
     construct_pattern=r"(?<![\w.])([A-Z][A-Za-z0-9_]*)\s*\(",
+    wrapper_prefix=wrapper_prefix,
+    literal_calls=literal_calls,
+    handler_line=handler_line,
     limitations=(
         "Python: decorators assembled at runtime, getattr-based wiring and plugin registries are invisible to the passes.",
         "Python: a route decorator whose path is not a literal is counted as unparsed, not registered as an endpoint.",

@@ -339,12 +339,17 @@ def:
         completeness invariants (`routes-declared-literally`, `store-calls-resolve`,
         `client-paths-resolve`, `vendors-declared`) over a language-independent call index
         (members by `path#Type.member`, receivers typed through fields, bindings and local imports).
+        Two usage rules walk the index: `usage.injected_method` follows a route's handler through
+        the objects and modules handed to it to the store sites and systems it reaches (chain on the
+        edge); `usage.client_wrapper` composes the paths a client spells through a prefix-lending
+        member and matches them against the routes.
       globs:
         - "tools/architecture_compiler/__init__.py"
         - "tools/architecture_compiler/__main__.py"
         - "tools/architecture_compiler/core.py"
         - "tools/architecture_compiler/calls.py"
         - "tools/architecture_compiler/completeness.py"
+        - "tools/architecture_compiler/usage.py"
         - "tools/architecture_compiler/requirements.txt"
         - "tools/architecture_compiler/packs/__init__.py"
         - "tools/architecture_compiler/packs/base.py"

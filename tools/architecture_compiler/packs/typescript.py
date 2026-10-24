@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .base import Declaration, ImportRecord, LanguagePack, LocalImport, Rule, child_of_type, descendant_of_type, node_end_line, node_line, node_text, strip_quotes, walk
 
@@ -155,6 +155,46 @@ def local_imports(root: Any, source: bytes, rel: str, all_rels: "frozenset[str]"
     return records
 
 
+WRAPPER_PREFIX_RE = re.compile(r"`(/[A-Za-z0-9_./-]*?)\$\{([A-Za-z_$][\w$]*)\}`")  # a template that is a literal prefix and one parameter hole
+CONCAT_PREFIX_RE = re.compile(r"[\"'](/[A-Za-z0-9_./-]*?)[\"']\s*\+\s*([A-Za-z_$][\w$]*)\b")
+TEMPLATE_HELPER_RE = re.compile(r"\b(?:const|let|function)\s+([A-Za-z_$][\w$]*)\s*=?\s*\(([^)]*)\)\s*(?::\s*string\s*)?(?:=>\s*|\{\s*return\s+)`([^`]*)`")
+
+
+def wrapper_prefix(body: str, params: "set[str]") -> Optional[str]:
+    """`/api/items${path}` or "/api/items" + path, with the hole one of the member's parameters."""
+    for pattern in (WRAPPER_PREFIX_RE, CONCAT_PREFIX_RE):
+        for match in pattern.finditer(body):
+            if match.group(2) in params:
+                return match.group(1)
+    return None
+
+
+def template_helpers(module_raw: str) -> Dict[str, str]:
+    """Module functions whose body is one template literal (const space = (id) => `/spaces/${id}`)."""
+    return {m.group(1): m.group(3) for m in TEMPLATE_HELPER_RE.finditer(module_raw)}
+
+
+def inline_helpers(fragment: str, helpers: Dict[str, str], depth: int = 0) -> str:
+    if depth > 3 or not helpers:
+        return fragment
+
+    def swap(match: "re.Match[str]") -> str:
+        body = helpers.get(match.group(1))
+        return inline_helpers(body, helpers, depth + 1) if body is not None else match.group(0)
+
+    return re.sub(r"\$\{([A-Za-z_$][\w$]*)\([^{}]*\)\}", swap, fragment)
+
+
+def literal_calls(body: str, member: str, module_raw: str) -> List[Tuple[str, int]]:
+    """``this.<member>(`…`)`` / ``this.<member>("…")`` calls: the literal with the
+    module's template helpers inlined (remaining holes stay as ``${x}`` segments)."""
+    helpers = template_helpers(module_raw)
+    found: List[Tuple[str, int]] = []
+    for match in re.finditer(r"\bthis\." + re.escape(member) + r"(?:<[^>\n]*>)?\(\s*(?:`([^`]*)`|\"([^\"\n]*)\"|'([^'\n]*)')", body):
+        found.append((inline_helpers(match.group(1) or match.group(2) or match.group(3) or "", helpers), match.start()))
+    return found
+
+
 def entrypoints(root: Any, text: str, rel: str) -> List[Tuple[int, str]]:
     match = re.search(r"^\s*(?:export\s+)?(?:async\s+)?function\s+main\s*\(", text, re.MULTILINE)
     if match:
@@ -209,6 +249,8 @@ PACK = LanguagePack(
     self_name="this",
     local_imports=local_imports,
     construct_pattern=r"\bnew\s+([A-Z][\w$]*)\s*\(",
+    wrapper_prefix=wrapper_prefix,
+    literal_calls=literal_calls,
     limitations=(
         "TypeScript: routes are recognised on app/router/server/api receivers; frameworks that register handlers by decorator or by object literal are not attributed.",
         "TypeScript: a route registration whose path is a variable or a template with a hole is counted as unparsed, not registered as an endpoint.",

@@ -38,7 +38,7 @@ from tools.architecture_compile_python import (  # noqa: E402  (reused, never ed
     build_ci,
     load_config,
 )
-from tools.architecture_compiler import completeness  # noqa: E402
+from tools.architecture_compiler import completeness, usage  # noqa: E402
 from tools.architecture_compiler.calls import CallIndex  # noqa: E402
 from tools.architecture_compiler.packs import PACKS, pack_for_path  # noqa: E402
 from tools.architecture_compiler.packs.base import (  # noqa: E402
@@ -64,6 +64,8 @@ CORE_RULES: Dict[str, Tuple[str, str]] = {
     "module": ("Every analysed source file is a construction: the file that declares what the other passes find", "wiring"),
     SIGNATURE_RULE: ("A configured external-system signature present in the code (scope code) or inside a string literal (scope strings)", "boundary"),
     DECLARED_RULE: ("A construction a person declared in architecture/config.json, citing the file and line it lives at (semantic layer, not extraction)", "wiring"),
+    usage.INJECTED_METHOD: ("A route's handler calls a method on something handed to it — a module-level store object, a constructor-injected field, a module imported under a name — and the store site or external system is in that method's body or further down: followed by name up to four calls, the chain on the edge", "wiring"),
+    usage.CLIENT_WRAPPER: ("A client member whose body spells a path as a literal prefix and one of its own parameters lends the prefix to every sibling call that passes a literal; the composed path is matched against the service's routes like any other", "wiring"),
 }
 SEMANTIC_RULES = {DECLARED_RULE}
 LIMITATIONS = (
@@ -391,6 +393,8 @@ def build_model(root: Path, config: Dict[str, Any], files: List[Dict[str, Any]],
                 add_edge(module_id(ex.component, ex.rel), target, "uses", "boundary")
 
     # Rule-produced constructions.
+    sites: Dict[Tuple[str, int, str], str] = {}  # (path, line, rule) → the node the citation produced
+    exposed: List[Tuple[str, FileExtraction, int]] = []  # server-side endpoints with the registration that exposes them
     for ex in extractions:
         for citation in ex.citations:
             rule = rules_by_id.get(citation.rule)
@@ -405,13 +409,33 @@ def build_model(root: Path, config: Dict[str, Any], files: List[Dict[str, Any]],
                 node_id = f"endpoint:{ex.component}:{slug(rule.sub_kind or 'route')}:{slug(label)}"
                 add_node(node_id, kind="endpoint", sub_kind=rule.sub_kind or "route", label=label, component=ex.component, path=ex.rel, line=citation.line,
                          owner_type=(ex.enclosing(citation.line).name if ex.enclosing(citation.line) else ex.rel))
+                if rule.wiring[0] == "exposes":
+                    exposed.append((node_id, ex, citation.line))
             else:
                 node_id = f"{rule.produces}:{ex.component}:{ex.rel}:{citation.line}"
                 add_node(node_id, kind=rule.produces, sub_kind=rule.sub_kind or rule.id.rsplit(".", 1)[-1], label=label, component=ex.component, path=ex.rel,
                          line=citation.line, owner_type=(ex.enclosing(citation.line).name if ex.enclosing(citation.line) else ex.rel))
+            sites[(ex.rel, citation.line, rule.id)] = node_id
             add_origin(node_id, ex.rel, citation.line, rule.id)
             relation, edge_class = rule.wiring
             add_edge(owner_of(ex, citation.line), node_id, relation, edge_class)
+
+    # The call index: members and functions by id, calls between them resolved by name through
+    # typed receivers and local imports. The usage rules walk it; completeness is proved on it.
+    store_rules = frozenset(rule.id for rule in rules_by_id.values() if rule.family == "store")
+    store_type_ids = frozenset(nid for nid, node in nodes.items() if node["kind"] == "store" and nid.startswith("type:"))
+    index = CallIndex(extractions, lambda name, ex: resolve(types_by_name, name, ex), store_rules, store_type_ids)
+    by_rel = {ex.rel: ex for ex in extractions}
+    for edge in usage.injected_method_edges(index, exposed, sites, store_rules, SIGNATURE_RULE):
+        add_edge(edge["source"], edge["target"], edge["relation"], edge["edge_class"], via=edge["via"], hops=edge["hops"], rule=usage.INJECTED_METHOD)
+        by_rel[edge["path"]].cite(usage.INJECTED_METHOD, edge["line"], edge["target"])
+        add_origin(edge["source"], edge["path"], edge["line"], usage.INJECTED_METHOD)
+    routes = {nodes[nid]["label"]: nid for nid, _, _ in exposed if nodes[nid].get("sub_kind") == "route"}
+    wrapper_edges, composed_paths, wrapper_spans = usage.client_wrapper_edges(index, routes, type_id)
+    for edge in wrapper_edges:
+        add_edge(edge["source"], edge["target"], edge["relation"], edge["edge_class"], via=edge["via"], composed=edge["composed"], rule=usage.CLIENT_WRAPPER)
+        by_rel[edge["path"]].cite(usage.CLIENT_WRAPPER, edge["line"], edge["composed"])
+        add_origin(edge["target"], edge["path"], edge["line"], usage.CLIENT_WRAPPER)
 
     # State machines: an enum type assigned somewhere in the tree.
     for ex in extractions:
@@ -485,12 +509,7 @@ def build_model(root: Path, config: Dict[str, Any], files: List[Dict[str, Any]],
                 raise CompileError(f"declared edge {item['source']} -{item['relation']}-> {item['target']}: {end} {item[end]!r} is not on the map")
         add_edge(item["source"], item["target"], item["relation"], "usage")
 
-    # The call index: members and functions by id, calls between them resolved by name through
-    # typed receivers and local imports. Completeness is proved on it, and the usage rules walk it.
-    store_rules = frozenset(rule.id for rule in rules_by_id.values() if rule.family == "store")
-    store_type_ids = frozenset(nid for nid, node in nodes.items() if node["kind"] == "store" and nid.startswith("type:"))
-    index = CallIndex(extractions, lambda name, ex: resolve(types_by_name, name, ex), store_rules, store_type_ids)
-    route_labels = sorted({node["label"] for node in nodes.values() if node["kind"] == "endpoint" and node.get("sub_kind") == "route"})
+    route_labels = sorted(routes)
 
     node_list = [nodes[k] for k in sorted(nodes)]
     edge_list = [{"source": s, "target": t, "relation": r, "class": c, **edges[(s, t, r, c)]} for s, t, r, c in sorted(edges)]
@@ -545,7 +564,7 @@ def build_model(root: Path, config: Dict[str, Any], files: List[Dict[str, Any]],
          "why": "Every declared external system was observed through at least one of its signatures; a silent declaration fails the build."},
         completeness.routes_declared_literally(extractions, rules_by_id),
         completeness.store_calls_resolve(index),
-        completeness.client_paths_resolve(extractions, rules_by_id, route_labels),
+        completeness.client_paths_resolve(extractions, rules_by_id, route_labels, composed_paths, wrapper_spans),
         completeness.vendors_declared(extractions, absorbing),
     ]
     for item in declared.get("invariants") or []:
