@@ -80,7 +80,7 @@ def base_tree(root: Path, base_ref: str) -> Tuple[Optional[Path], Optional[tempf
     holder = tempfile.TemporaryDirectory(prefix="architecture-ratchet-")
     worktree = Path(holder.name) / "base"
     result = subprocess.run(["git", "-C", str(root), "worktree", "add", "--detach", "--quiet", str(worktree), base_ref],
-                            capture_output=True, text=True, check=False)
+                            capture_output=True, text=True, check=False, stdin=subprocess.DEVNULL)
     if result.returncode != 0:
         holder.cleanup()
         return None, None
@@ -89,7 +89,7 @@ def base_tree(root: Path, base_ref: str) -> Tuple[Optional[Path], Optional[tempf
 
 def release_tree(root: Path, worktree: Optional[Path], holder: Optional[tempfile.TemporaryDirectory]) -> None:
     if worktree is not None:
-        subprocess.run(["git", "-C", str(root), "worktree", "remove", "--force", str(worktree)], capture_output=True, text=True, check=False)
+        subprocess.run(["git", "-C", str(root), "worktree", "remove", "--force", str(worktree)], capture_output=True, text=True, check=False, stdin=subprocess.DEVNULL)
     if holder is not None:
         holder.cleanup()
 
