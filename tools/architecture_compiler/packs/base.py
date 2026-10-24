@@ -167,10 +167,12 @@ class LanguagePack:
     # decorated or registered function starts at, or None when the route's
     # handler is the registration's own argument span.
     handler_line: Optional[Callable[[Any, bytes, int], Optional[int]]] = None
-    # Process shape (core/process.py, H4): loops, thread targets, resident
-    # collections and schema declarations; a pack without them has none.
+    # Process shape (process.py): the loops a file holds, the calls that hand a
+    # function to a thread or task (regexes, group 1 the function), the
+    # collections a module or class keeps in memory, and the tables a file
+    # declares with their foreign keys. A pack without them has none.
     loops: Optional[Callable[[Any, bytes, str], List[Dict[str, Any]]]] = None
-    thread_targets: Optional[Callable[[Any, bytes], List[Dict[str, Any]]]] = None
+    task_starter_patterns: Tuple[str, ...] = ()
     resident_state: Optional[Callable[[Any, bytes, str], List[Dict[str, Any]]]] = None
     schema: Optional[Callable[[Any, bytes, str, List[Tuple[int, str]]], List[Dict[str, Any]]]] = None
 

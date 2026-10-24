@@ -780,3 +780,176 @@ def test_the_harness_gateway_handlers_reach_their_stores_through_module_imports(
     found = invariants_of(model)
     assert found["store-calls-resolve"]["status"] == "holds", found["store-calls-resolve"]["unparsed"]
     assert found["routes-declared-literally"]["status"] == "holds"
+
+
+# ── What a process does for its life: ticks, state, tables ───────────────────
+
+PY_PROC_MAIN = '''import sys
+from svc import jobs
+from svc.store import Registry
+
+_registry = Registry()
+
+def main():
+    jobs.start_reaper()
+    while True:
+        raw = sys.stdin.readline()
+        if not raw:
+            break
+        _registry.put(raw)
+        jobs.schedule(raw)
+
+if __name__ == "__main__":
+    main()
+'''
+PY_PROC_JOBS = '''import threading
+import time
+
+_QUEUE: list = []
+_SEEN = {}
+
+def schedule(item):
+    _QUEUE.append(item)
+
+def _reap():
+    while True:
+        time.sleep(5)
+        drain()
+
+def drain():
+    while _QUEUE:
+        _QUEUE.pop()
+
+def start_reaper():
+    threading.Thread(target=_reap, daemon=True).start()
+
+def retry(fn):
+    def attempt():
+        while True:
+            time.sleep(1)
+            fn()
+    return attempt
+
+def wait_for(ready):
+    attempts = 0
+    while attempts < 3:
+        time.sleep(1)
+        attempts += 1
+'''
+PY_PROC_STORE = '''class Registry:
+    def __init__(self):
+        self.items = {}
+    def put(self, key):
+        self.items[key] = 1
+
+class Unused:
+    def __init__(self):
+        self.cache = {}
+    def add(self, key):
+        self.cache[key] = 1
+'''
+PY_PROC_SCHEMA = '''SCHEMA = """
+CREATE TABLE sessions (id TEXT PRIMARY KEY);
+CREATE TABLE session_model_usage (
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    model TEXT NOT NULL
+);
+CREATE TABLE tags (
+    session_id TEXT,
+    name TEXT,
+    FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
+"""
+'''
+
+
+def relation_edges(model, relation):
+    return sorted((e["source"], e["target"], tuple(e.get("via") or []), {k: v for k, v in e.items() if k in ("interval", "column", "target_column", "on_delete")})
+                  for e in model["interplay"]["edges"] if e["relation"] == relation)
+
+
+def test_python_process_ticks_state_and_foreign_keys(tmp_path):
+    from tui_gateway.architecture_contract import KNOWN_NODE_KINDS, KNOWN_RELATIONS
+
+    root = tmp_path / "proc"
+    config(root)
+    write(root, "svc/main.py", PY_PROC_MAIN)
+    write(root, "svc/jobs.py", PY_PROC_JOBS)
+    write(root, "svc/store.py", PY_PROC_STORE)
+    write(root, "svc/schema.py", PY_PROC_SCHEMA)
+    model = compile_service(root)
+    assert validate_document(model) == []
+    nodes = {n["id"]: n for n in model["interplay"]["nodes"]}
+    entry = "entrypoint:core:svc/main.py"
+    # Ticks: the entry's own read-paced loop, and the timer loop handed to a thread one import away. Not the
+    # unpaced drain loop, not the closure handed out by retry, not the bounded wait_for retry.
+    assert nodes_by_kind(model, "tick") == ["tick:core:svc/jobs.py:11", "tick:core:svc/main.py:9"]
+    main_loop, reaper = nodes["tick:core:svc/main.py:9"], nodes["tick:core:svc/jobs.py:11"]
+    assert main_loop["sub_kind"] == "loop" and main_loop["pacing"] == "read" and main_loop["label"] == "main loop"
+    assert [s["call"] for s in main_loop["steps"]] == ["sys.stdin.readline", "_registry.put", "jobs.schedule"], "the body's calls in source order — the only order the compiler claims"
+    assert reaper["sub_kind"] == "starter" and reaper["interval"] == "5" and reaper["holder"] == "_reap"
+    assert relation_edges(model, "runs") == [(entry, "tick:core:svc/jobs.py:11", ("svc/jobs.py",), {"interval": "5"}), (entry, "tick:core:svc/main.py:9", (), {})]
+    # State: the written module list and the field of the class main.py constructs; not the never-written _SEEN, not the unconstructed Unused.cache.
+    assert nodes_by_kind(model, "state") == ["state:core:svc/jobs.py:4", "state:core:svc/store.py:3"]
+    assert nodes["state:core:svc/store.py:3"]["label"] == "Registry.items" and nodes["state:core:svc/jobs.py:4"]["sub_kind"] == "list"
+    keeps = relation_edges(model, "keeps")
+    assert (entry, "state:core:svc/jobs.py:4", ("svc/jobs.py",), {}) in keeps and (entry, "state:core:svc/store.py:3", ("svc/store.py",), {}) in keeps
+    # Which loop writes which state, through what: the chain on the edge.
+    assert ("tick:core:svc/main.py:9", "state:core:svc/store.py:3", ("main", "Registry.put"), {}) in keeps
+    assert ("tick:core:svc/main.py:9", "state:core:svc/jobs.py:4", ("main", "schedule"), {}) in keeps
+    assert ("tick:core:svc/jobs.py:11", "state:core:svc/jobs.py:4", ("_reap", "drain"), {}) in keeps
+    # Tables and foreign keys, column-level and table-level, with the delete rule.
+    assert nodes_by_kind(model, "table") == ["table:core:session_model_usage", "table:core:sessions", "table:core:tags"]
+    assert nodes["table:core:session_model_usage"]["columns"] == ["session_id", "model"]
+    assert relation_edges(model, "references") == [
+        ("table:core:session_model_usage", "table:core:sessions", (), {"column": "session_id", "target_column": "id", "on_delete": "CASCADE"}),
+        ("table:core:tags", "table:core:sessions", (), {"column": "session_id", "target_column": "id"}),
+    ]
+    fired = passes(model)
+    for rule in ("python.launch.loop", "python.launch.starter", "python.state.resident", "python.schema.table", "python.schema.references"):
+        assert rule in fired and fired[rule]["class"] == "mechanical", rule
+    assert ("svc/jobs.py", 11, "python.launch.starter", "behaviour") in origins_of(model, "tick:core:svc/jobs.py:11")
+    # The vocabulary stays the contract's.
+    assert {n["kind"] for n in model["interplay"]["nodes"]} <= set(KNOWN_NODE_KINDS)
+    assert {e["relation"] for e in model["interplay"]["edges"]} <= set(KNOWN_RELATIONS)
+
+
+def test_the_harness_gateway_runs_its_loops_and_keeps_its_registries(tmp_path):
+    """The proof on harness: the gateway's stdin loop and its background workers appear as ticks with
+    their intervals, and the subscription registry is state the query poller writes."""
+    import shutil
+
+    root = tmp_path / "gw"
+    shutil.copytree(REPO / "tui_gateway", root / "tui_gateway", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    config(root, components=[{"id": "gateway", "label": "Gateway", "description": "The JSON-RPC gateway.", "patterns": ["tui_gateway/**"]}], languages=["python"])
+    model = compile_service(root)
+    nodes = {n["id"]: n for n in model["interplay"]["nodes"]}
+    ticks = {n["label"]: n for n in nodes.values() if n["kind"] == "tick" and n["path"] != "tui_gateway/slash_worker.py"}  # the slash worker is a process of its own
+    assert ticks["main loop"]["path"] == "tui_gateway/entry.py" and ticks["main loop"]["sub_kind"] == "loop" and ticks["main loop"]["pacing"] == "read"
+    assert ticks["_start_idle_reaper._loop loop"]["interval"] == "_REAPER_SCAN_S" and ticks["_start_idle_reaper._loop loop"]["sub_kind"] == "starter"
+    assert ticks["_poll_loop loop"]["interval"] == "1.0"
+    assert "_wake_resume_if_owner._retry loop" not in ticks, "a deadline-bounded retry is not a schedule"
+    entry = "entrypoint:gateway:tui_gateway/entry.py"
+    runs = {e["target"] for e in model["interplay"]["edges"] if e["source"] == entry and e["relation"] == "runs"}
+    assert ticks["main loop"]["id"] in runs and ticks["_start_idle_reaper._loop loop"]["id"] in runs
+    assert ticks["main loop"]["id"] not in {e["target"] for e in model["interplay"]["edges"] if e["source"] != entry and e["relation"] == "runs"}, "another entry's top level does not run this one's loop"
+    subscriptions = next(n for n in nodes.values() if n["kind"] == "state" and n["label"] == "_SUBSCRIPTIONS")
+    poller_keeps = [e for e in model["interplay"]["edges"] if e["source"] == ticks["_poll_loop loop"]["id"] and e["target"] == subscriptions["id"]]
+    assert poller_keeps and poller_keeps[0]["via"] == ["_poll_loop", "run_due"]
+    sessions = next(n for n in nodes.values() if n["kind"] == "state" and n["label"] == "_sessions" and n["path"] == "tui_gateway/server.py")
+    assert (entry, sessions["id"]) in {(e["source"], e["target"]) for e in model["interplay"]["edges"] if e["relation"] == "keeps"}
+    assert nodes_by_kind(model, "table") == [], "the gateway declares no SQL tables of its own"
+
+
+def test_the_harness_state_schema_foreign_keys_match_the_statements(tmp_path):
+    import shutil
+
+    root = tmp_path / "hs"
+    shutil.copy(REPO / "hermes_state_schema.py", root / "hermes_state_schema.py") if root.mkdir() is None else None
+    config(root)
+    model = compile_service(root)
+    tables = {n["label"]: n for n in model["interplay"]["nodes"] if n["kind"] == "table"}
+    assert set(tables) == {"gateway_routing", "session_model_usage", "sessions"}, "two CREATE TABLE statements (one issued twice) and the table they reference"
+    assert tables["sessions"]["sub_kind"] == "referenced", "sessions is created in another module; it is on the map as the referenced table"
+    assert relation_edges(model, "references") == [
+        ("table:core:session_model_usage", "table:core:sessions", (), {"column": "session_id", "target_column": "id", "on_delete": "CASCADE"})]

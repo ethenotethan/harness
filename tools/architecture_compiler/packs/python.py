@@ -13,6 +13,7 @@ import sys
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .base import Declaration, ImportRecord, LanguagePack, LocalImport, Rule, child_of_type, node_end_line, node_line, node_text, walk
+from .python_process import TASK_STARTER_PATTERNS, loops, resident_state, schema
 
 PY_STDLIB = frozenset(getattr(sys, "stdlib_module_names", ())) | {"__future__"}
 ENUM_BASE_RE = re.compile(r"\b(?:enum\.)?(?:Enum|IntEnum|StrEnum|Flag|IntFlag)\b")
@@ -197,6 +198,12 @@ RULES: Tuple[Rule, ...] = (
     Rule("python.concurrency", "Concurrency: threading.Thread, multiprocessing.Process, asyncio.create_task/ensure_future/gather, concurrent.futures", "behaviour", "code",
          r"\bthreading\.Thread\(|\bmultiprocessing\.Process\(|\basyncio\.(?:create_task|ensure_future|gather)\(|\bconcurrent\.futures\."),
     Rule("python.state_machine", "An Enum subclass whose members are assigned to an attribute somewhere in the tree: a lifecycle state, and each assignment a transition", "behaviour", "code", r"(?!x)x"),
+    # The four below are driven by the core (process.py) from the pack's loops/resident_state/schema hooks; the pattern never fires on its own.
+    Rule("python.launch.loop", "A paced loop the entry point runs for the process's life — `while` on a stop flag or forever, its body sleeping, waiting or blocking on a read — named for its holder, with the interval expression and the calls its body makes in source order", "behaviour", "code", r"(?!x)x", produces="tick", sub_kind="loop"),
+    Rule("python.launch.starter", "Periodic work a module the entry point loads runs for the process's life: a function handed to a thread, timer or task (`Thread(target=f)`, `create_task(f())`) whose body holds a paced loop, or a loop-holding function called at module level; closures handed out per job are not starters", "behaviour", "code", r"(?!x)x", produces="tick", sub_kind="starter"),
+    Rule("python.state.resident", "A collection a process keeps in its own memory: a module-level name or an instance field initialised to a dict, list, set or deque in a module the entry point loads, and written somewhere in that module; a class field counts only where the class is constructed outside its body. The process keeps it, and so does every loop whose calls write it", "behaviour", "code", r"(?!x)x", produces="state"),
+    Rule("python.schema.table", "A table the file declares: `CREATE TABLE name (…)` inside a string literal, or a SQLAlchemy class with `__tablename__`", "store", "code", r"(?!x)x", produces="table", sub_kind="sql"),
+    Rule("python.schema.references", "A foreign key: a column's `REFERENCES other(col) [ON DELETE …]`, a table-level `FOREIGN KEY (…) REFERENCES other(…)`, or a SQLAlchemy `ForeignKey(\"other.col\", ondelete=…)` — the table references the table named, with the columns on both sides and the delete rule", "store", "code", r"(?!x)x"),
 )
 
 PACK = LanguagePack(
@@ -220,8 +227,13 @@ PACK = LanguagePack(
     wrapper_prefix=wrapper_prefix,
     literal_calls=literal_calls,
     handler_line=handler_line,
+    loops=loops,
+    task_starter_patterns=TASK_STARTER_PATTERNS,
+    resident_state=resident_state,
+    schema=schema,
     limitations=(
         "Python: decorators assembled at runtime, getattr-based wiring and plugin registries are invisible to the passes.",
         "Python: a route decorator whose path is not a literal is counted as unparsed, not registered as an endpoint.",
+        "Python: a loop is a tick only when its body is paced by a timer, a wait or a blocking read; a loop that spins on data is an algorithm, not a schedule. SQL tables are read from CREATE TABLE text inside string literals; tables built by an ORM's metadata at runtime are not seen.",
     ),
 )

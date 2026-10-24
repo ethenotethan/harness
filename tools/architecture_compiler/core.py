@@ -38,7 +38,7 @@ from tools.architecture_compile_python import (  # noqa: E402  (reused, never ed
     build_ci,
     load_config,
 )
-from tools.architecture_compiler import completeness, usage  # noqa: E402
+from tools.architecture_compiler import completeness, process, usage  # noqa: E402
 from tools.architecture_compiler.calls import CallIndex  # noqa: E402
 from tools.architecture_compiler.packs import PACKS, pack_for_path  # noqa: E402
 from tools.architecture_compiler.packs.base import (  # noqa: E402
@@ -436,6 +436,70 @@ def build_model(root: Path, config: Dict[str, Any], files: List[Dict[str, Any]],
         add_edge(edge["source"], edge["target"], edge["relation"], edge["edge_class"], via=edge["via"], composed=edge["composed"], rule=usage.CLIENT_WRAPPER)
         by_rel[edge["path"]].cite(usage.CLIENT_WRAPPER, edge["line"], edge["composed"])
         add_origin(edge["target"], edge["path"], edge["line"], usage.CLIENT_WRAPPER)
+
+    # What each process does for its life (process.py): the paced loops the entry point runs and the
+    # starters in its import closure (ticks), the collections it keeps (state) and which ticks write them.
+    for ex in extractions:
+        if not ex.entrypoints:
+            continue
+        eid = f"entrypoint:{ex.component}:{ex.rel}"
+        closure = process.runtime_closure(index, ex.rel)
+        ticks: List[Tuple[str, Dict[str, Any]]] = []
+        for tick in process.ticks_for_entry(index, ex.rel, closure):
+            tick_ex = index.by_path[tick["path"]]
+            rule_id = f"{tick_ex.pack.name}.launch.{tick['sub_kind']}"
+            if rule_id not in rules_by_id:
+                continue
+            tid = f"tick:{tick_ex.component}:{tick['path']}:{tick['line']}"
+            holder = tick["holder"]
+            add_node(tid, kind="tick", sub_kind=tick["sub_kind"], label=tick["label"], component=tick_ex.component, path=tick["path"], line=tick["line"],
+                     owner_type=(holder.owner.split(".")[0] if holder is not None and holder.owner else tick["path"]), holder=holder.label if holder else "",
+                     interval=tick["interval"], pacing=tick["pacing"], condition=tick["condition"], steps=tick["steps"])
+            add_origin(tid, tick["path"], tick["line"], rule_id)
+            tick_ex.cite(rule_id, tick["line"], tick["label"])
+            add_edge(owner_of(tick_ex, tick["line"]), tid, "declares", "structure")
+            add_edge(eid, tid, "runs", "interplay", via=[tick["path"]] if tick["path"] != ex.rel else None, interval=tick["interval"], rule=rule_id)
+            ticks.append((tid, tick))
+        for state in process.resident_state_in(index, closure):
+            state_ex = index.by_path[state["path"]]
+            rule_id = f"{state_ex.pack.name}.state.resident"
+            if rule_id not in rules_by_id:
+                continue
+            sid = f"state:{state_ex.component}:{state['path']}:{state['line']}"
+            label = f"{state['holder']}.{state['name']}" if state["holder"] else state["name"]
+            add_node(sid, kind="state", sub_kind=state["shape"], label=label, component=state_ex.component, path=state["path"], line=state["line"],
+                     owner_type=state["holder"] or state["path"], holder_kind=state["holder_kind"], writes=state["writes"])
+            if sid not in origins:
+                add_origin(sid, state["path"], state["line"], rule_id)
+                state_ex.cite(rule_id, state["line"], label)
+            add_edge(owner_of(state_ex, state["line"]), sid, "keeps", "usage")
+            add_edge(eid, sid, "keeps", "usage", via=[state["path"]] if state["path"] != ex.rel else None, rule=rule_id)
+            for tid, tick in ticks:
+                chain = process.writers_of(index, state, tick)
+                if chain:
+                    add_edge(tid, sid, "keeps", "usage", via=chain, hops=len(chain) - 1, rule=rule_id)
+
+    # Tables a file declares and the foreign keys between them (schema.table / schema.references).
+    for table in process.tables_in(index):
+        table_ex = index.by_path[table["path"]]
+        table_rule, references_rule = f"{table_ex.pack.name}.schema.table", f"{table_ex.pack.name}.schema.references"
+        if table_rule not in rules_by_id:
+            continue
+        tid = f"table:{table_ex.component}:{slug(table['table'])}"
+        add_node(tid, kind="table", sub_kind=table["form"], label=table["table"], component=table_ex.component, path=table["path"], line=table["line"],
+                 owner_type=(table_ex.enclosing(table["line"]).name if table_ex.enclosing(table["line"]) else table["path"]), columns=table["columns"])
+        if nodes[tid].get("sub_kind") == "referenced":  # declared after a reference named it: the declaration wins
+            nodes[tid].update(sub_kind=table["form"], path=table["path"], line=table["line"], columns=table["columns"])
+        add_origin(tid, table["path"], table["line"], table_rule)
+        table_ex.cite(table_rule, table["line"], table["table"])
+        add_edge(owner_of(table_ex, table["line"]), tid, "declares", "structure")
+        for reference in table["references"]:
+            target = f"table:{table_ex.component}:{slug(reference['table'])}"
+            add_node(target, kind="table", sub_kind="referenced", label=reference["table"], component=table_ex.component, path=table["path"], line=table["line"],
+                     owner_type=table["path"], columns=[])
+            add_origin(target, table["path"], table["line"], references_rule)
+            table_ex.cite(references_rule, table["line"], f"{table['table']} → {reference['table']}")
+            add_edge(tid, target, "references", "structure", column=reference["column"], target_column=reference["target_column"], on_delete=reference["on_delete"], rule=references_rule)
 
     # State machines: an enum type assigned somewhere in the tree.
     for ex in extractions:
