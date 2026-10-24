@@ -366,8 +366,9 @@ class CallIndex:
             key = self.resolve_type_key(head, ex) if head[:1].isupper() else None
             if key and (self.type_lines[key][0] == member.path or head in {i.member for i in imports.values()}):
                 types = [key]
-        for sub in chain[1:]:
-            types = [self.resolve_type_key(t, self.by_path[self.type_lines[c][0]]) or (c[0], t) for c in types for t in self.field_types(c[0], c[1]).get(sub, [])]
+        for sub in chain[1:]:  # guard 1: only through fields whose type is known, to that type alone
+            resolved = [self.resolve_type_key(t, self.by_path[self.type_lines[c][0]]) for c in types for t in self.field_types(c[0], c[1]).get(sub, [])]
+            types = [key for key in resolved if key is not None]
             module = None
         return types, module
 

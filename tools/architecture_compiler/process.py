@@ -29,7 +29,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
-from .calls import CallIndex, Member, excerpt
+from .calls import CallIndex, Member
 
 MAX_HOPS = 4
 
@@ -47,14 +47,6 @@ def runtime_closure(index: CallIndex, entry_path: str) -> List[str]:
                     next_frontier.append(record.module)
         frontier = next_frontier
     return seen
-
-
-def _holder_member(index: CallIndex, path: str, loop: Dict[str, Any]) -> Optional[Member]:
-    return index.member_at(path, loop["line"])
-
-
-def _label(member: Optional[Member]) -> str:
-    return member.label if member is not None else "<module>"
 
 
 def _task_targets(index: CallIndex, path: str) -> List[Tuple[str, int, Member]]:
@@ -84,7 +76,7 @@ def ticks_for_entry(index: CallIndex, entry_path: str, closure: Sequence[str]) -
         if (path, loop["line"]) in seen_loops:
             return
         seen_loops.add((path, loop["line"]))
-        found.append({"path": path, "line": loop["line"], "end_line": loop["end_line"], "holder": holder, "label": f"{_label(holder)} loop" if holder is None or holder.name else "module loop",
+        found.append({"path": path, "line": loop["line"], "end_line": loop["end_line"], "holder": holder, "label": "module loop" if holder is None else f"{holder.label} loop",
                       "sub_kind": sub_kind, "interval": loop["interval"], "pacing": loop["pacing"], "condition": loop["condition"], "steps": loop["steps"], "started_at": started_at})
 
     def paced_loops(path: str) -> List[Dict[str, Any]]:
@@ -97,13 +89,13 @@ def ticks_for_entry(index: CallIndex, entry_path: str, closure: Sequence[str]) -
     top = index.members.get(f"{entry_path}#")
     top_callees = {callee for callee, _ in index.callees(top.id)} if top else set()
     for loop in paced_loops(entry_path):
-        holder = _holder_member(index, entry_path, loop)
+        holder = index.member_at(entry_path, loop["line"])
         if holder is None or (not holder.nested and not holder.owner and holder.id in top_callees):
             add(entry_path, loop, holder, "loop", None)
     for path in closure:
         by_holder: Dict[str, List[Dict[str, Any]]] = {}
         for loop in paced_loops(path):
-            holder = _holder_member(index, path, loop)
+            holder = index.member_at(path, loop["line"])
             if holder is not None:
                 by_holder.setdefault(holder.id, []).append(loop)
         if not by_holder:
@@ -182,6 +174,3 @@ def tables_in(index: CallIndex) -> List[Dict[str, Any]]:
             found.append({**table, "path": ex.rel, "component": ex.component})
     return found
 
-
-def state_excerpt(index: CallIndex, state: Dict[str, Any]) -> str:
-    return excerpt(index.by_path[state["path"]].text, state["line"])
