@@ -5,7 +5,7 @@ a compiler-emitted architecture model (system map, invariants, stores,
 externals, CI plane). These handlers read it, snapshot it per revision, run the
 service's own ``--check`` on demand, and list what was recorded — for a local
 checkout that is never pushed as much as for a GitHub repository. Portal opens
-the model from the service node on the dataflow graph. Contract: docs/api/architecture.md.
+the model from the service node on the dataflow graph. Contract: website/docs/developer-guide/api/architecture.md.
 Log sinks a manifest declares are read by ``service.logs`` (methods_service.py).
 """
 from __future__ import annotations

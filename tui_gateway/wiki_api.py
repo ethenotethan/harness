@@ -17,7 +17,8 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
-import yaml
+
+from hermes_yaml import safe_load
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ def _load_wiki_registry() -> dict:
         return {}
     try:
         with open(registry_path, encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
+            data = safe_load(f) or {}
     except Exception:
         return {}
     if not isinstance(data, dict):
@@ -72,7 +73,7 @@ def resolve_wiki(name: Optional[str] = None) -> str:
         registry_path = Path(os.path.expanduser("~/.hermes/wikis.yaml"))
         try:
             with open(registry_path, encoding="utf-8") as f:
-                data = yaml.safe_load(f) or {}
+                data = safe_load(f) or {}
             default_name = data.get("default")
             if default_name and default_name in registry:
                 return registry[default_name]
@@ -593,7 +594,7 @@ def wiki_taxonomy(wiki_path: Optional[str] = None) -> Optional[dict]:
         return None
     try:
         with open(taxonomy_path, encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
+            return safe_load(f) or {}
     except Exception:
         return None
 

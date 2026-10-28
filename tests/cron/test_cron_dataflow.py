@@ -978,6 +978,15 @@ def _cron_manage_handler():
     # The server rebinds handler globals at install time (that's where `json`
     # comes from in production); a direct invocation has to supply it.
     handler.__globals__.setdefault("json", __import__("json"))
+    # The profile-scope wrapper (`_profile_scoped_rpc`) resolves these from server.py at install
+    # time; a direct invocation runs with no profile bound.
+    import contextlib
+
+    handler.__globals__.setdefault("contextlib", contextlib)
+    handler.__globals__.setdefault("ProfileUnavailableError", FileNotFoundError)
+    handler.__globals__.setdefault("_profile_home", lambda profile: None)
+    handler.__globals__.setdefault("_session_profile_runtime_scope", lambda scope: contextlib.nullcontext())
+    handler.__globals__.setdefault("is_truthy_value", lambda v: str(v).strip().lower() in {"1", "true", "yes", "on"})
     return handler
 
 

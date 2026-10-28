@@ -181,8 +181,8 @@ def _emit_changed(payload: dict) -> None:
 ARTIFACT_SCHEMA = {
     "name": "artifact",
     "description": (
-        "Read and maintain LIVING ARTIFACTS: named, persistent models the user "
-        "views in their client (kinds: map, chart, graph, stats, table, markdown, "
+        "Read and maintain living artifacts the user views in their client. "
+        "They are named, persistent models (kinds: map, chart, graph, stats, table, markdown, "
         "dataset, html — content is the same JSON/markdown/HTML you would put in "
         "a fenced block of that kind). Artifacts survive across sessions and are shared "
         "with scheduled jobs and workflows; every change is revisioned.\n\n"

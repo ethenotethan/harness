@@ -10,8 +10,8 @@ base:
   # The upstream commit this fork is rebased onto. CI (`scripts/check_forkdiff.py`)
   # requires this to equal `git merge-base HEAD upstream/main`, so a rebase onto
   # newer upstream fails the gate until the hash — and the sections below — are
-  # brought up to date. Upstream main as of 2026-08-12.
-  hash: a871948d8d4b0f774d4ec40467bab1078a9f28d5
+  # brought up to date. Upstream main as of 2026-10-28.
+  hash: 0431192d69d4afd2443a7da15bb9e129a424414c
 fork:
   name: harness
   url: https://github.com/ethenotethan/harness
@@ -50,13 +50,25 @@ def:
             `methods_harness.py` holds the Portal-facing handlers (wiki, feed, files, push,
             artifacts); `server.py` installs each registry onto its method table at the end of
             import, and `entry.py` loads user plugin handlers before the first RPC can arrive.
+            Upstream validates every method against a Pydantic wire contract
+            (`tui_gateway/contracts`), so `contracts/harness.py` declares the params, results
+            and events of the fork's whole RPC surface and the generated TypeScript/OpenRPC
+            catalog carries them; `gateway.capabilities` keeps upstream's field and adds the
+            fork's capability names.
           globs:
             - "tui_gateway/methods_harness.py"
             - "tui_gateway/server.py"
             - "tui_gateway/entry.py"
+            - "tui_gateway/contracts/harness.py"
+            - "tui_gateway/contracts/__init__.py"
+            - "tui_gateway/contracts/liveness.py"
+            - "tui_gateway/contracts/tools_commands.py"
+            - "apps/shared/src/gateway-contract.generated.ts"
+            - "apps/shared/src/gateway-contract.openrpc.json"
             - "tests/gateway/test_methods_harness_imports.py"
+            - "tui_gateway/methods_connectors_account.py"
             - "tests/gateway/test_methods_harness_dispatch.py"
-            - "tests/test_tui_gateway_server.py"
+            - "tests/tui_gateway/test_tui_gateway_server.py"
         - title: "Tool-adjacent RPCs (`cron.*`, skills, learning frames)"
           description: |
             `methods_tools.py` gains `cron.graph`, the person-facing `cron.manage` actions
@@ -74,8 +86,11 @@ def:
             tool-enabled turn. Portal's hands-free voice conversation routes its replies here.
           globs:
             - "tui_gateway/methods_prompt.py"
+            - "tui_gateway/prompt_turn.py"
+            - "tui_gateway/contracts/prompt_voice.py"
             - "agent/conversation_loop.py"
-            - "run_agent.py"
+            - "agent/turn_facade.py"
+            - "agent/turn_request_assembly.py"
     - title: "Wiki API and changesets"
       description: |
         Portal renders the LLM Wiki as a live graph with a timeline. Upstream only had a
@@ -103,13 +118,13 @@ def:
             - "tests/tui_gateway/test_changeset_diff.py"
             - "tests/tui_gateway/test_wiki_changeset_loader.py"
             - "tests/tui_gateway/test_wiki_provenance.py"
-            - "docs/api/wiki-changesets.md"
+            - "website/docs/developer-guide/api/wiki-changesets.md"
         - title: "Glossary"
           description: Per-wiki glossary RPCs behind a capability gate, for Portal's glossary editor.
           globs:
             - "tui_gateway/wiki_glossary.py"
             - "tests/tui_gateway/test_wiki_glossary.py"
-            - "docs/api/wiki-glossary.md"
+            - "website/docs/developer-guide/api/wiki-glossary.md"
         - title: "`llm-wiki-native` skill"
           description: |
             An API-native variant of the LLM Wiki skill that goes through the gateway RPCs above,
@@ -134,6 +149,7 @@ def:
           globs:
             - "cron/jobs.py"
             - "tools/cronjob_tools.py"
+            - "tools/cronjob_job_args.py"
             - "hermes_cli/cron.py"
             - "hermes_cli/subcommands/cron.py"
             - "hermes_cli/cli_commands_mixin.py"
@@ -141,7 +157,7 @@ def:
             - "tests/cron/test_cronjob_schema.py"
             - "tests/cron/test_jobs_file_ownership.py"
             - "tests/tui_gateway/test_cron_graph_contract.py"
-            - "docs/api/cron-manage.md"
+            - "website/docs/developer-guide/api/cron-manage.md"
         - title: "Changeset log for the dataflow"
           description: |
             A content-addressed commitment over the graph *as configured* (mirrored bit-for-bit
@@ -158,7 +174,10 @@ def:
             verified before it is drawn.
           globs:
             - "tools/terminal_tool.py"
+            - "tools/terminal_tool_background.py"
             - "tools/process_registry.py"
+            - "tools/process_registry_checkpoint.py"
+            - "tests/tools/test_code_execution_file_rpc.py"
             - "tools/docker_services.py"
             - "tools/launchd_services.py"
             - "tools/nomad_services.py"
@@ -232,7 +251,7 @@ def:
             - "tests/gateway/test_artifact_actions.py"
             - "tests/gateway/test_artifact_plugin_loader.py"
             - "tests/gateway/test_artifact_invocation_ledger.py"
-            - "docs/plugins/actions.md"
+            - "website/docs/developer-guide/plugins/actions.md"
         - title: "Queries: read handlers, subscriptions, Postgres reference plugin"
           description: |
             The read side of intents. Artifacts declare `queries` naming registered handlers;
@@ -245,16 +264,17 @@ def:
           globs:
             - "tui_gateway/artifact_queries.py"
             - "tests/gateway/test_artifact_queries.py"
-            - "docs/plugins/queries.md"
-            - "docs/plugins/postgres_queries/postgres_queries.py"
-            - "docs/plugins/postgres_queries/statements/orders.open.sql"
-            - "docs/api/artifact-queries.md"
+            - "website/docs/developer-guide/plugins/queries.md"
+            - "website/docs/developer-guide/plugins/postgres_queries/postgres_queries.py"
+            - "website/docs/developer-guide/plugins/postgres_queries/statements/orders.open.sql"
+            - "website/docs/developer-guide/api/artifact-queries.md"
     - title: "Learning surface"
       description: |
         Courses, flashcard decks and progress as gateway state (`learning.*` RPCs) with a
         `learning` tool the agent uses to build them, and a pre-rendered journey timeline for
         the TUI.
       globs:
+        - "hermes_cli/tools_config.py"
         - "tui_gateway/learning_store.py"
         - "tui_gateway/methods_learning.py"
         - "tools/learning_tool.py"
@@ -279,7 +299,7 @@ def:
         - "tui_gateway/files_browse.py"
         - "tui_gateway/file_serve.py"
         - "tests/gateway/test_files_browse.py"
-        - "docs/api/files-browse.md"
+        - "website/docs/developer-guide/api/files-browse.md"
     - title: "Architecture models"
       description: |
         The architecture standard as a gateway surface: a per-service manifest under
@@ -303,8 +323,8 @@ def:
         - "tui_gateway/methods_service.py"
         - "tests/gateway/test_service_logs.py"
         - "tests/gateway/test_deployments.py"
-        - "docs/api/service-logs.md"
-        - "docs/api/architecture-document-v1.schema.json"
+        - "website/docs/developer-guide/api/service-logs.md"
+        - "website/docs/developer-guide/api/architecture-document-v1.schema.json"
         - "tests/gateway/architecture_fixtures.py"
         - "tests/gateway/test_architecture_contract.py"
         - "tests/gateway/test_architecture_history.py"
@@ -314,7 +334,7 @@ def:
         - "tests/gateway/test_architecture_store.py"
         - "tests/gateway/test_methods_architecture.py"
         - "tests/cron/test_architecture_services.py"
-        - "docs/api/architecture.md"
+        - "website/docs/developer-guide/api/architecture.md"
     - title: "Architecture compiler for Python services"
       description: |
         `tools/architecture_compile_python.py` turns any Python service plus a small
@@ -354,7 +374,7 @@ def:
         - "tui_gateway/apns_sender.py"
         - "tui_gateway/push_store.py"
         - "tests/tui_gateway/test_push_store.py"
-        - "docs/api/apns-push.md"
+        - "website/docs/developer-guide/api/apns-push.md"
     - title: "HTTP API server: media and WebSocket routes"
       description: |
         `/v1/upload`, `/v1/files` and the `/v1/ws` WebSocket endpoint the native media pipeline
@@ -364,7 +384,7 @@ def:
       globs:
         - "gateway/platforms/api_server.py"
         - "tests/gateway/test_api_server_ws_concurrency.py"
-        - "docs/api/websocket.md"
+        - "website/docs/developer-guide/api/websocket.md"
     - title: "Agent guidance and prompt assembly"
       description: |
         Native-primitive guidance (prefer the gateway's own artifacts / wiki / cron over ad-hoc
@@ -376,13 +396,13 @@ def:
         - "agent/system_prompt.py"
         - "agent/chat_completion_helpers.py"
         - "tests/agent/test_system_prompt.py"
-        - "tests/test_ctx_halving_fix.py"
+        - "tests/agent/test_ctx_halving_fix.py"
     - title: "Smart approvals policy file"
       description: |
         An optional markdown policy loaded from disk and appended to the smart-approval
         guardian's trusted system prompt (`approvals.policy_file`).
       globs:
-        - "tools/approval.py"
+        - "tools/approval_smart.py"
         - "hermes_cli/config_defaults.py"
     - title: "Fork tooling"
       description: |
@@ -392,17 +412,8 @@ def:
       globs:
         - "scripts/check_forkdiff.py"
         - "tests/scripts/test_check_forkdiff.py"
-        - "docs/forkdiff.md"
+        - "website/docs/developer-guide/forkdiff.md"
         - "README.md"
-
-    - title: "Test determinism"
-      description: |
-        Upstream tests that reached the network are pinned to the seams the rest of the
-        suite already uses, so CI does not depend on what a live provider answers today
-        (the primary-runtime-restore file probed the Nous inference API for a model's
-        context window and failed when the API reported a window below the 64K floor).
-      globs:
-        - "tests/run_agent/test_primary_runtime_restore.py"
 
 # ignored globally, does not count towards line count
 ignore:

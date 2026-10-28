@@ -68,6 +68,7 @@ def test_installed_handlers_resolve_every_name_at_runtime(home, tmp_path):
     fake = types.ModuleType("fake_server")
     events = []
     fake._methods = {}
+    fake.register_method = fake._methods.__setitem__
     fake._ok = lambda rid, result: {"rid": rid, "result": result}
     fake._err = lambda rid, code, msg: {"rid": rid, "error": {"code": code, "message": msg}}
     fake._broadcast_global_event = lambda event, payload=None: events.append((event, payload))

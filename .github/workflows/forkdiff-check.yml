@@ -55,7 +55,7 @@ jobs:
       - name: Verify fork.yaml against the real diff
         id: check
         run: |
-          python3 -m pip install --quiet pyyaml
+          python3 -m pip install --quiet ruamel.yaml
           set +e
           python3 scripts/check_forkdiff.py \
             --upstream-ref refs/remotes/upstream/main \

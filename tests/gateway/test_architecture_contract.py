@@ -104,10 +104,10 @@ def test_a_file_cited_only_by_people_is_untouched():
 
 
 def test_schema_export_and_digest_do_not_drift():
-    exported = (ROOT / "docs/api/architecture-document-v1.schema.json").read_text(encoding="utf-8")
+    exported = (ROOT / "website/docs/developer-guide/api/architecture-document-v1.schema.json").read_text(encoding="utf-8")
     assert exported == contract.schema_json(), "regenerate with: python3 tui_gateway/architecture_contract.py --schema"
-    docs = (ROOT / "docs/api/architecture.md").read_text(encoding="utf-8")
-    assert contract.schema_digest() in docs, "docs/api/architecture.md must quote the current schema digest"
+    docs = (ROOT / "website/docs/developer-guide/api/architecture.md").read_text(encoding="utf-8")
+    assert contract.schema_digest() in docs, "website/docs/developer-guide/api/architecture.md must quote the current schema digest"
     schema = json.loads(exported)
     assert schema["required"] == ["schema_version", "title", "description", "source_tree_sha256", *contract.REQUIRED_SECTIONS]
 

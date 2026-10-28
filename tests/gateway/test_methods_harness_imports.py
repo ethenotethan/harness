@@ -130,10 +130,10 @@ def _function_unresolved_names(func: ast.AST, module_names: set[str]) -> set[str
 
 
 def _server_globals() -> set[str]:
-    """Names bound at module scope in tui_gateway/server.py — the namespace
-    handler bodies are rebound onto at install time."""
-    tree = ast.parse((_GATEWAY_DIR / "server.py").read_text())
-    return _module_scope_names(tree)
+    """The namespace handler bodies are rebound onto at install time: ``tui_gateway.server``
+    after import, which is server.py's own module scope plus every helper the split modules
+    publish onto it through ``method_ctx.bind_module``."""
+    return set(vars(importlib.import_module("tui_gateway.server")))
 
 
 @pytest.mark.parametrize("module_path", _SPLIT_MODULES, ids=lambda p: p.name)
@@ -156,6 +156,8 @@ def test_handler_names_resolve(module_path: Path) -> None:
 # ── Runtime check: names must resolve in the namespace handlers actually run in ──
 
 _BUILTIN_NAMES = set(dir(builtins))
+# The fork's own handler modules: losing their registrations is a regression, not a helper-only module.
+_FORK_HANDLER_MODULES = {"methods_harness", "methods_learning", "methods_architecture", "methods_service"}
 
 
 def _loaded_global_names(code: types.CodeType) -> set[str]:
@@ -202,7 +204,9 @@ def test_handler_globals_resolve_in_rebound_namespace(module_name: str) -> None:
     if registry is None:
         pytest.skip(f"{module_name} has no HandlerRegistry")
     pending = list(registry._pending)
-    assert pending, f"{module_name} registers no handlers"
+    if not pending:
+        assert module_name not in _FORK_HANDLER_MODULES, f"{module_name} registers no handlers"
+        pytest.skip(f"{module_name} publishes helpers only (no @method handlers)")
 
     # The module must be reachable through the real registration path, i.e.
     # server.py imported it and called register(); otherwise the rebinding we

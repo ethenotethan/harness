@@ -16,9 +16,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Mapping
 
-import yaml
-
 from hermes_constants import get_hermes_home
+from hermes_yaml import YAMLError, safe_dump, safe_load
 
 GLOSSARY_FILENAME = "glossary.yaml"
 GLOSSARY_VERSION = 1
@@ -28,46 +27,6 @@ MAX_ALIASES_PER_ENTRY = 50
 MAX_TERM_LENGTH = 256
 MAX_DESCRIPTION_LENGTH = 2_000
 _WRITE_LOCK = threading.Lock()
-
-
-class _UniqueKeyLoader(yaml.SafeLoader):
-    """Safe YAML loader that rejects duplicate mapping keys."""
-
-
-def _construct_unique_mapping(
-    loader: yaml.SafeLoader, node: yaml.nodes.MappingNode, deep: bool = False
-) -> dict:
-    mapping: dict[Any, Any] = {}
-    for key_node, value_node in node.value:
-        key = loader.construct_object(key_node, deep=deep)
-        try:
-            duplicate = key in mapping
-        except TypeError as exc:
-            raise yaml.constructor.ConstructorError(
-                "while constructing a mapping",
-                node.start_mark,
-                "found an unhashable key",
-                key_node.start_mark,
-            ) from exc
-        if duplicate:
-            raise yaml.constructor.ConstructorError(
-                "while constructing a mapping",
-                node.start_mark,
-                f"found duplicate key {key!r}",
-                key_node.start_mark,
-            )
-        mapping[key] = loader.construct_object(value_node, deep=deep)
-    return mapping
-
-
-_UniqueKeyLoader.add_constructor(
-    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
-    _construct_unique_mapping,
-)
-
-
-def _safe_load_unique(value: str) -> Any:
-    return yaml.load(value, Loader=_UniqueKeyLoader)
 
 
 @contextmanager
@@ -238,8 +197,8 @@ def load_glossary(wiki_root: str | os.PathLike[str]) -> dict[str, Any]:
 
     try:
         decoded = raw.decode("utf-8")
-        parsed = _safe_load_unique(decoded)
-    except (UnicodeDecodeError, yaml.YAMLError) as exc:
+        parsed = safe_load(decoded)
+    except (UnicodeDecodeError, YAMLError) as exc:
         raise GlossaryValidationError(f"invalid {GLOSSARY_FILENAME}: {exc}") from exc
 
     normalized = normalize_glossary(parsed)
@@ -345,7 +304,7 @@ def update_glossary(
         if if_match is not None and if_match != current["revision"]:
             raise GlossaryConflictError("glossary revision conflict")
 
-        rendered = yaml.safe_dump(
+        rendered = safe_dump(
             normalized,
             allow_unicode=True,
             sort_keys=False,
@@ -386,10 +345,10 @@ def load_configured_wikis() -> tuple[str | None, dict[str, str]]:
     """Return one validated registry snapshot as ``(default, wikis)``."""
     registry_path = Path(get_hermes_home()) / "wikis.yaml"
     try:
-        parsed = _safe_load_unique(registry_path.read_text(encoding="utf-8"))
+        parsed = safe_load(registry_path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
         raise GlossaryValidationError("no configured wiki registry") from exc
-    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+    except (OSError, UnicodeDecodeError, YAMLError) as exc:
         raise GlossaryValidationError(f"invalid wiki registry: {exc}") from exc
     if not isinstance(parsed, Mapping):
         raise GlossaryValidationError("wiki registry must be an object")
