@@ -78,7 +78,6 @@ def:
             - "agent/conversation_loop.py"
             - "agent/turn_facade.py"
             - "agent/turn_request_assembly.py"
-            - "run_agent.py"
     - title: "Wiki API and changesets"
       description: |
         Portal renders the LLM Wiki as a live graph with a timeline. Upstream only had a
