@@ -177,6 +177,7 @@ def:
             - "tools/terminal_tool_background.py"
             - "tools/process_registry.py"
             - "tools/process_registry_checkpoint.py"
+            - "tests/tools/test_code_execution_file_rpc.py"
             - "tools/docker_services.py"
             - "tools/launchd_services.py"
             - "tools/nomad_services.py"
