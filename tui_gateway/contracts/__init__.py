@@ -10,6 +10,7 @@ from . import (
     display,
     events,
     groups_bot_relay,
+    harness,
     i18n,
     liveness,
     machine,

@@ -22,6 +22,7 @@ def _account_method(params_model=None, *, creates_guest, invalid="", invalid_rea
         def handler(rid, params):
             from pydantic import ValidationError
             from tools.connectors.gateway.errors import GatewayAuthError
+            from tui_gateway.contracts.connectors import ConnectorErrorReason
 
             with _desktop_page_vars():
                 if gate_error := _account_gate_closed(rid):

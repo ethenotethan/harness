@@ -2218,6 +2218,7 @@ for _m in (
     _methods_session_control, _methods_subagents, _methods_vault, _methods_free_tier, _methods_connectors,
     _methods_connectors_account, _methods_display, _methods_display_watch, _methods_onboarding,
     _methods_i18n, _methods_machine, _methods_shared_metrics, _methods_plugin_catalog,
-    _methods_harness, _methods_learning, _methods_architecture, _methods_service):
+    _methods_harness, _methods_learning, _methods_architecture, _methods_service,
+):
     _m.register(sys.modules[__name__])
 del _m

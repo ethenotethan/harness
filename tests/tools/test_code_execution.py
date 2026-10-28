@@ -487,7 +487,8 @@ class TestStubSchemaDrift(unittest.TestCase):
         # Fork (harness): service declarations only apply to tracked background
         # processes; execute_code intentionally exposes foreground terminal execution.
         "service_name", "service_description", "service_inputs", "service_outputs",
-        "service_side_effects", "service_relationships", "service_health", "service_code_control",
+        "service_side_effects", "service_relationships", "service_source_files", "service_health",
+        "service_code_control",
     }
 
     def test_stubs_cover_all_schema_params(self):

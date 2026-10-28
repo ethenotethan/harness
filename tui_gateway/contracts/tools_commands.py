@@ -453,6 +453,22 @@ class CronManageParams(Params):
     continuity: bool | str | None = None
     deliver: str | None = None
     profile: str | None = None
+    # Fork (harness): describe / history / revisions reads and the field-level update.
+    actor: str | None = None
+    job_name: str | None = None
+    limit: int | None = None
+    offset: int | None = None
+    inputs: list[str] | str | None = None
+    outputs: list[str] | str | None = None
+    side_effects: list[str] | str | None = None
+    source_files: list[str] | str | None = None
+    skills: list[str] | None = None
+    script: str | None = None
+    monitor_script: str | None = None
+    monitor_url: str | None = None
+    context_from: list[str] | None = None
+    workdir: str | None = None
+    enabled_toolsets: list[str] | None = None
 
 
 class CronJobRow(_Open):
@@ -491,6 +507,14 @@ class CronJobRow(_Open):
     continuity: bool | None = None
     context_from: list[str] | None = None
     attach_to_session: bool | None = None
+    # Fork (harness): dataflow declarations and the full prompt on ``describe``.
+    prompt: str | None = None
+    inputs: list[str] | None = None
+    outputs: list[str] | None = None
+    side_effects: list[str] | None = None
+    source_files: list[str] | None = None
+    source_files_resolved: list[JsonValue] | None = None
+    context_from_resolved: JsonValue | None = None
 
 
 class CronRemovedJob(Result):

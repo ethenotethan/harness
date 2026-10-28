@@ -50,11 +50,23 @@ def:
             `methods_harness.py` holds the Portal-facing handlers (wiki, feed, files, push,
             artifacts); `server.py` installs each registry onto its method table at the end of
             import, and `entry.py` loads user plugin handlers before the first RPC can arrive.
+            Upstream validates every method against a Pydantic wire contract
+            (`tui_gateway/contracts`), so `contracts/harness.py` declares the params, results
+            and events of the fork's whole RPC surface and the generated TypeScript/OpenRPC
+            catalog carries them; `gateway.capabilities` keeps upstream's field and adds the
+            fork's capability names.
           globs:
             - "tui_gateway/methods_harness.py"
             - "tui_gateway/server.py"
             - "tui_gateway/entry.py"
+            - "tui_gateway/contracts/harness.py"
+            - "tui_gateway/contracts/__init__.py"
+            - "tui_gateway/contracts/liveness.py"
+            - "tui_gateway/contracts/tools_commands.py"
+            - "apps/shared/src/gateway-contract.generated.ts"
+            - "apps/shared/src/gateway-contract.openrpc.json"
             - "tests/gateway/test_methods_harness_imports.py"
+            - "tui_gateway/methods_connectors_account.py"
             - "tests/gateway/test_methods_harness_dispatch.py"
             - "tests/tui_gateway/test_tui_gateway_server.py"
         - title: "Tool-adjacent RPCs (`cron.*`, skills, learning frames)"
@@ -75,6 +87,7 @@ def:
           globs:
             - "tui_gateway/methods_prompt.py"
             - "tui_gateway/prompt_turn.py"
+            - "tui_gateway/contracts/prompt_voice.py"
             - "agent/conversation_loop.py"
             - "agent/turn_facade.py"
             - "agent/turn_request_assembly.py"
@@ -163,6 +176,7 @@ def:
             - "tools/terminal_tool.py"
             - "tools/terminal_tool_background.py"
             - "tools/process_registry.py"
+            - "tools/process_registry_checkpoint.py"
             - "tools/docker_services.py"
             - "tools/launchd_services.py"
             - "tools/nomad_services.py"

@@ -17,8 +17,10 @@ class ProcessCheckpointMixin:
 
     # ----- Checkpoint (crash recovery) -----
 
-    def _write_checkpoint(self, extra_entries: Optional[list[dict[str, Any]]] = None):
-        """Write running process metadata to the checkpoint file atomically."""
+    def _write_checkpoint(self, extra_entries: Optional[list[dict[str, Any]]] = None, *, strict: bool = False):
+        """Write running process metadata to the checkpoint file atomically. ``strict`` turns a failed
+        write into ``RuntimeError`` so a spawn can roll back instead of running a process the next
+        gateway could never recover (fork: a service lease is only real once it is durable)."""
         from tools.process_registry import _checkpoint_path, _CHECKPOINT_FIELDS
 
         try:
@@ -54,6 +56,8 @@ class ProcessCheckpointMixin:
                 atomic_json_write(path, entries)
         except Exception as e:
             logger.debug("Failed to write checkpoint file: %s", e, exc_info=True)
+            if strict:
+                raise RuntimeError("process registry checkpoint commit failed") from e
 
     def _foreign_handoffs(self, path, known) -> list[dict[str, Any]]:
         """On-disk worker handoffs this registry never tracked whose log still decides an outcome:

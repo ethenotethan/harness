@@ -48,7 +48,7 @@ simply returns failed.
           linear_client.delete(row["linear_id"])    # stored field, not raw ref
 
 Built-in handlers conform to this rule; plugin authors must follow it too.
-See the plugin docs in docs/plugins/actions.md for the wrong-vs-right example.
+See the plugin docs in website/docs/developer-guide/plugins/actions.md for the wrong-vs-right example.
 
 Registered handlers (V1 slice)
 -------------------------------

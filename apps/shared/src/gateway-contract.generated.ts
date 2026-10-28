@@ -1900,6 +1900,476 @@ export interface BotRelayReplyParams {
   error?: string | null
   reason?: string | null
 }
+export interface PromptBreakdownResult {
+  session_id: string
+  model: string
+  context_limit: number
+  total_system_tokens: number
+  sections: PromptSection[]
+  tool_definitions: TokenCount
+  conversation_history: TokenCount
+}
+export interface PromptSection {
+  name: string
+  source: string
+  content_preview: string
+  full_content: string
+  token_count: number
+  char_count: number
+  color: string
+}
+export interface TokenCount {
+  token_count: number
+  count?: number | null
+  message_count?: number | null
+}
+export interface SessionTimelineResult {
+  session_id: string
+  events: TimelineEvent[]
+  total_duration_seconds: number
+  tool_calls: number
+  input_tokens: number
+  output_tokens: number
+  cost_usd?: number | null
+}
+export interface TimelineEvent {
+  type: string
+  timestamp?: number | null
+  [key: string]: unknown
+}
+export interface SetPromptParams {
+  session_id: string
+  profile?: string | null
+  prompt?: string | null
+}
+export interface SetPromptResult {
+  prompt: string
+}
+/** Client→server method params / server→client request params. Unknown keys are rejected. */
+export type Params = Record<string, never>
+export interface CreditsViewResult {
+  logged_in: boolean
+  balance_lines: string[]
+  identity_line?: string | null
+  topup_url?: string | null
+  depleted: boolean
+}
+export interface SkillsGetParams {
+  skill_id?: string | null
+  file_path?: string | null
+}
+export interface SkillFileResult {
+  skill: OpenModel
+  file_path: string
+  content: string
+  read_only: boolean
+}
+/** A result/payload row whose known fields are typed but which the producer may extend (the closed set is owned elsewhere: hermes_state rows, provider inventories). */
+export type OpenModel = Record<string, unknown>
+export interface SkillsUpdateParams {
+  skill_id?: string | null
+  content?: string | null
+}
+export interface SkillsUpdateResult {
+  skill: OpenModel
+}
+export interface FilesListParams {
+  root?: string | null
+  path?: string | null
+}
+export interface FilesListResult {
+  roots?: string[] | null
+  [key: string]: unknown
+}
+export interface FilesReadParams {
+  root?: string | null
+  path?: string | null
+}
+export interface WikiScanParams {
+  wiki?: string | null
+  path?: string | null
+}
+export interface WikiGraphResult {
+  pages: OpenModel[]
+  links: OpenModel[]
+  [key: string]: unknown
+}
+export interface WikiPageParams {
+  wiki?: string | null
+  path?: string | null
+}
+export interface WikiListResult {
+  wikis: OpenModel[]
+}
+export interface WikiParams {
+  wiki?: string | null
+}
+export interface WikiGlossaryUpdateParams {
+  wiki?: string | null
+  version?: number | null
+  mode?: string | null
+  proper_nouns?: unknown | null
+  if_match?: string | null
+}
+export interface WikiTaxonomyResult {
+  taxonomy: unknown
+  flat_paths: string[]
+}
+export interface WikiExpandLinksParams {
+  wiki?: string | null
+  slug?: string | null
+}
+export interface WikiChangesetsParams {
+  wiki?: string | null
+  page?: string | null
+  action?: string | null
+  trigger?: string | null
+  limit?: number | null
+  offset?: number | null
+  since?: string | null
+  until?: string | null
+}
+export interface WikiEventsParams {
+  wiki?: string | null
+  kind?: string | null
+  limit?: number | null
+  offset?: number | null
+  since?: string | null
+  until?: string | null
+}
+export interface WikiChangesetDiffParams {
+  wiki?: string | null
+  id?: string | null
+}
+export interface WikiChangesetDiffResult {
+  diff?: string | null
+  changeset?: OpenModel | null
+  [key: string]: unknown
+}
+export interface WikiUpdateParams {
+  wiki?: string | null
+  path?: string | null
+  body?: string | null
+  frontmatter?: unknown | null
+  if_match?: string | null
+  force?: boolean | null
+  trigger?: string | null
+  source_events?: string[] | null
+  summary?: string | null
+}
+export interface ArtifactSetParams {
+  id?: string | null
+  kind?: string | null
+  content?: string | null
+  title?: string | null
+  updated_by?: string | null
+  replace?: boolean | null
+  actions?: unknown[] | null
+  queries?: unknown[] | null
+}
+export interface ArtifactResult {
+  artifact: OpenModel
+}
+export interface ArtifactIdParams {
+  id?: string | null
+}
+export interface ArtifactListResult {
+  artifacts: OpenModel[]
+}
+export interface ArtifactDeletedResult {
+  deleted: string
+}
+export interface ArtifactRevisionsResult {
+  revisions: OpenModel[]
+}
+export interface ArtifactRevisionParams {
+  id?: string | null
+  rev?: number | null
+}
+export interface ArtifactRevisionResult {
+  revision: OpenModel
+}
+export interface ArtifactActionInvokeParams {
+  artifact_id?: string | null
+  artifact_rev?: number | null
+  binding_id?: string | null
+  entity_ref?: string | null
+  idempotency_key?: string | null
+  user_context?: unknown | null
+}
+export interface ArtifactActionResult {
+  status?: string | null
+  [key: string]: unknown
+}
+export interface ArtifactActionConfirmParams {
+  artifact_id?: string | null
+  challenge?: string | null
+}
+export interface ArtifactActionLogParams {
+  artifact_id?: string | null
+  binding_id?: string | null
+  entity_ref?: string | null
+  limit?: number | null
+}
+export interface ArtifactActionLogResult {
+  records: OpenModel[]
+}
+export interface ArtifactQueryInvokeParams {
+  artifact_id?: string | null
+  artifact_rev?: number | null
+  query_id?: string | null
+  params?: unknown | null
+  cursor?: unknown | null
+}
+export interface ArtifactQueryParams {
+  artifact_id?: string | null
+  artifact_rev?: number | null
+  query_id?: string | null
+  params?: unknown | null
+}
+export interface ArtifactQueryUnsubscribeParams {
+  subscription?: string | null
+}
+export interface ArtifactQueryUnsubscribeResult {
+  status: string
+  removed: boolean
+}
+export interface ArtifactQueryHandlersResult {
+  handlers: QueryHandlerInfo[]
+}
+export interface QueryHandlerInfo {
+  name: string
+  params: unknown
+}
+export interface ActionsReloadResult {
+  status?: string | null
+  error?: string | null
+  [key: string]: unknown
+}
+export interface GatewayRestartResult {
+  status: string
+}
+export interface FeedGetParams {
+  sources?: string[] | null
+  since?: string | null
+  limit?: number | null
+  offset?: number | null
+}
+export interface FeedSourcesResult {
+  sources: unknown
+  total: number
+}
+export interface FeedPublishParams {
+  source?: string | null
+  articles?: unknown[] | null
+}
+export interface FeedPublishResult {
+  total: number
+}
+export interface PushRegisterParams {
+  token?: string | null
+  platform?: string | null
+  device_name?: string | null
+  bundle_id?: string | null
+}
+export interface PushRegisterResult {
+  registered: boolean
+  apns_configured: boolean
+  entry: OpenModel
+}
+export interface PushUnregisterParams {
+  token?: string | null
+}
+export interface PushUnregisterResult {
+  removed: boolean
+}
+export interface LearningCourseSetParams {
+  id?: string | null
+  title?: string | null
+  summary?: string | null
+  source_session_id?: string | null
+  updated_by?: string | null
+}
+export interface LearningCourseResult {
+  course: OpenModel
+}
+export interface LearningIdParams {
+  id?: string | null
+}
+export interface LearningCourseGetResult {
+  course: OpenModel
+  progress?: unknown | null
+}
+export interface LearningCoursesResult {
+  courses: OpenModel[]
+}
+export interface LearningDeletedResult {
+  deleted: string | boolean
+}
+export interface LearningModuleSetParams {
+  id?: string | null
+  course_id?: string | null
+  title?: string | null
+  overview?: string | null
+  position?: number | null
+  updated_by?: string | null
+}
+export interface LearningRevResult {
+  rev?: number | null
+  [key: string]: unknown
+}
+export interface LearningModuleDeleteParams {
+  id?: string | null
+  course_id?: string | null
+  updated_by?: string | null
+}
+export interface LearningStepSetParams {
+  id?: string | null
+  course_id?: string | null
+  module_id?: string | null
+  title?: string | null
+  type?: string | null
+  markdown?: string | null
+  questions?: unknown[] | null
+  append_questions?: boolean | null
+  position?: number | null
+  updated_by?: string | null
+}
+export interface LearningStepDeleteParams {
+  id?: string | null
+  course_id?: string | null
+  module_id?: string | null
+  updated_by?: string | null
+}
+export interface LearningDeckSetParams {
+  id?: string | null
+  topic?: string | null
+  updated_by?: string | null
+}
+export interface LearningDeckResult {
+  deck: OpenModel
+}
+export interface LearningDeckGetResult {
+  deck: OpenModel
+  srs?: unknown | null
+}
+export interface LearningDecksResult {
+  decks: OpenModel[]
+}
+export interface LearningCardSetParams {
+  deck_id?: string | null
+  cards?: unknown[] | null
+  updated_by?: string | null
+}
+export interface LearningCardDeleteParams {
+  id?: string | null
+  deck_id?: string | null
+  updated_by?: string | null
+}
+export interface LearningProgressParams {
+  course_id?: string | null
+  step_id?: string | null
+  kind?: string | null
+  score_percent?: number | null
+  at?: string | null
+}
+export interface LearningProgressResult {
+  progress: OpenModel
+}
+export interface LearningReviewParams {
+  deck_id?: string | null
+  card_id?: string | null
+  quality?: number | null
+  reviewed_at?: string | null
+  state?: unknown | null
+}
+export interface LearningReviewResult {
+  state: unknown
+  applied: boolean
+}
+export interface LearningAttemptParams {
+  topic?: string | null
+  score?: number | null
+  total?: number | null
+  completed_at?: string | null
+  questions?: unknown | null
+  selected?: unknown | null
+  course_id?: string | null
+  step_id?: string | null
+  source_session_id?: string | null
+}
+export interface LearningAttemptResult {
+  attempt_id: string
+}
+export interface LearningAttemptListParams {
+  limit?: number | null
+}
+export interface LearningAttemptsResult {
+  attempts: OpenModel[]
+}
+export interface ArchitectureListResult {
+  services: OpenModel[]
+  contract: unknown
+}
+export interface ArchitectureDescribeParams {
+  service?: string | null
+  revision?: string | null
+}
+export interface ServiceParams {
+  service?: string | null
+}
+export interface ArchitectureCheckResult {
+  service: string
+  check: OpenModel
+}
+export interface ArchitectureDiffParams {
+  service?: string | null
+  from?: string | null
+  to?: string | null
+}
+export interface ServiceLogsParams {
+  service?: string | null
+  sink?: string | null
+  lines?: number | null
+  cursor?: unknown | null
+}
+export interface ServiceLogsFollowParams {
+  service?: string | null
+  sink?: string | null
+  lines?: number | null
+  cursor?: unknown | null
+  enabled?: boolean | null
+}
+export interface ServiceLogsFollowResult {
+  service: string
+  following: boolean
+  sink: string
+  cursor?: string | null
+  stopped?: boolean | null
+}
+export interface ServiceDeploymentsResult {
+  service: string
+  deployments: OpenModel[]
+}
+export interface ServiceDeploymentsProbeParams {
+  service?: string | null
+  deployment?: string | null
+}
+export interface GraphResult {
+  nodes?: OpenModel[] | null
+  edges?: OpenModel[] | null
+  [key: string]: unknown
+}
+export interface CronChangesetsParams {
+  limit?: number | null
+  offset?: number | null
+  since?: string | null
+  until?: string | null
+  job?: string | null
+}
+export interface CronChangesetDiffParams {
+  id?: string | null
+}
 export interface I18nLanguagesResult {
   languages: LanguageOption[]
 }
@@ -1928,6 +2398,16 @@ export interface PingResult {
 }
 export interface GatewayCapabilitiesResult {
   per_session_exclusive_submit: boolean
+  gateway_version?: string | null
+  architecture?: SurfaceCapabilities | null
+  service?: SurfaceCapabilities | null
+  capability_names?: string[] | null
+}
+/** Fork (harness): one feature area's RPC method and event names. */
+export interface SurfaceCapabilities {
+  methods: string[]
+  events: string[]
+  contract?: unknown | null
 }
 export interface ClientCapabilitiesParams {
   server_requests?: boolean
@@ -1937,8 +2417,6 @@ export interface ClientCapabilitiesResult {
   server_requests: string[]
   declines_not_shown?: boolean
 }
-/** Client→server method params / server→client request params. Unknown keys are rejected. */
-export type Params = Record<string, never>
 /** ``machine_kind`` is ``Spark``, ``Mac``, ``PC`` or ``computer``. ``nvidia_platform`` is ``products.nvidia_platform()``: ``rtx_spark``, ``dgx_spark``, ``discrete`` or null. ``locale`` is the OS account's first UI language, null when the OS has none. */
 export interface MachineFactsResult {
   machine: MachineInfo
@@ -2746,6 +3224,7 @@ export interface PromptSubmitParams {
   surface?: string | null
   voice_context?: string | null
   voice_turn?: boolean | null
+  mode?: string | null
   title_preview?: string | null
   truncate_before_user_ordinal?: number | null
   truncate_before_row_id?: number | null
@@ -3935,6 +4414,21 @@ export interface CronManageParams {
   continuity?: boolean | string | null
   deliver?: string | null
   profile?: string | null
+  actor?: string | null
+  job_name?: string | null
+  limit?: number | null
+  offset?: number | null
+  inputs?: string[] | string | null
+  outputs?: string[] | string | null
+  side_effects?: string[] | string | null
+  source_files?: string[] | string | null
+  skills?: string[] | null
+  script?: string | null
+  monitor_script?: string | null
+  monitor_url?: string | null
+  context_from?: string[] | null
+  workdir?: string | null
+  enabled_toolsets?: string[] | null
 }
 export type CronAction = 'list' | 'add' | 'remove' | 'pause' | 'resume'
 /** Pass-through of ``tools/cronjob_tools.py::cronjob`` JSON: ``list`` → ``jobs``/``count`` (+ ``scoped`` when profile-scoped); ``add`` → the created job's summary + ``job``; ``remove`` → ``removed_job``; ``pause``/``resume`` → ``job``. A tool-level failure lands in ``error``. */
@@ -3995,6 +4489,13 @@ export interface CronJobRow {
   continuity?: boolean | null
   context_from?: string[] | null
   attach_to_session?: boolean | null
+  prompt?: string | null
+  inputs?: string[] | null
+  outputs?: string[] | null
+  side_effects?: string[] | null
+  source_files?: string[] | null
+  source_files_resolved?: unknown[] | null
+  context_from_resolved?: unknown | null
   [key: string]: unknown
 }
 export interface CronRemovedJob {
@@ -6028,10 +6529,36 @@ export interface PetHatchProgressPayload {
 }
 /** ``change_watcher._CHANGE_WATCHES`` payload fn — ``{}`` for every watch except pet.changed. */
 export type ChangeSignalPayload = Record<string, unknown>
+export interface ArchitectureChangedPayload {
+  service: string
+  revision?: string | null
+  source: string
+  reason: string
+  status?: string | null
+}
+export interface ArtifactChangedPayload {
+  id: string
+  kind?: string | null
+  title?: string | null
+  rev?: number | null
+  updated_at?: string | null
+  updated_by?: string | null
+  deleted?: boolean | null
+}
+export interface LearningChangedPayload {
+  entity: string
+  id?: string | null
+  rev?: number | null
+  updated_at?: string | null
+  updated_by?: string | null
+  deleted?: boolean | null
+}
 export type ConnectorErrorReason = 'INVALID_PARAMS' | 'NOT_OWNER' | 'UNSUPPORTED_RUNTIME' | 'CONNECTOR_REQUEST_FAILED' | 'INVALID_CONNECTOR_RESPONSE' | 'UNKNOWN_TARGET' | 'LINK_STILL_VALID' | 'REISSUE_REFUSED' | 'UNKNOWN_OPERATION' | 'INVALID_ANSWER' | 'NEEDS_NOUS_AUTH' | 'CONNECTOR_NOT_FOUND' | 'TOOLS_UNAVAILABLE' | 'CONNECTORS_UNAVAILABLE' | 'CATALOG_UNAVAILABLE' | 'ACCOUNTS_UNAVAILABLE' | 'CONNECTION_NOT_FOUND' | 'POLICY_UNAVAILABLE' | 'POLICY_CONFLICT' | 'FORBIDDEN_SCOPE' | 'ORG_REQUIRED' | 'ORG_ACCESS_DENIED' | 'INVALID_POLICY' | 'ALIAS_TAKEN'
 
 // ── Client→server methods ──
 export interface RpcMethods {
+  /** Reload plugin action handlers from ~/.hermes/plugins/actions/. */
+  'actions.reload': { params: Params; result: ActionsReloadResult }
   /** Registry-wide background process summary for ``/agents``. */
   'agents.list': { params: AgentsListParams; result: AgentsListResult }
   /** Replay the approvals still waiting on this session (reconnect / polling). */
@@ -6040,6 +6567,42 @@ export interface RpcMethods {
   'approval.received': { params: ApprovalReceivedParams; result: ApprovalReceivedResult }
   /** Deliver the user's decision on a dangerous command (falls back to durable identity on a stale sid). */
   'approval.respond': { params: ApprovalRespondParams; result: ApprovalRespondResult }
+  /** Run the service's own --check in its root and record the result. */
+  'architecture.check': { params: ServiceParams; result: ArchitectureCheckResult }
+  /** The hermes.architecture document for one service at its current or a stored revision. */
+  'architecture.describe': { params: ArchitectureDescribeParams; result: OpenModel }
+  /** What changed between two stored revisions of a service's model. */
+  'architecture.diff': { params: ArchitectureDiffParams; result: OpenModel }
+  /** Stored revisions with the commits behind them, the deployed revision and check runs. */
+  'architecture.history': { params: ServiceParams; result: OpenModel }
+  /** Every manifest-declared service with its source, revision, last check and conformance. */
+  'architecture.list': { params: Params; result: ArchitectureListResult }
+  /** Complete a pending destructive intent after native confirmation. */
+  'artifact.action.confirm': { params: ArtifactActionConfirmParams; result: ArtifactActionResult }
+  /** Invoke a backend intent declared in an artifact's action manifest. */
+  'artifact.action.invoke': { params: ArtifactActionInvokeParams; result: ArtifactActionResult }
+  /** The invocation ledger for an artifact, newest first. */
+  'artifact.action.log': { params: ArtifactActionLogParams; result: ArtifactActionLogResult }
+  /** Remove an artifact and its revisions; emits artifact.changed with deleted=true. */
+  'artifact.delete': { params: ArtifactIdParams; result: ArtifactDeletedResult }
+  /** One artifact with content. */
+  'artifact.get': { params: ArtifactIdParams; result: ArtifactResult }
+  /** All artifacts without content, newest first. */
+  'artifact.list': { params: Params; result: ArtifactListResult }
+  /** The registered query handler names and their parameter schemas. */
+  'artifact.query.handlers': { params: Params; result: ArtifactQueryHandlersResult }
+  /** Run a query the artifact declares, with page-supplied parameters. */
+  'artifact.query.invoke': { params: ArtifactQueryInvokeParams; result: ArtifactActionResult }
+  /** Follow a declared query; the current result plus a subscription handle. */
+  'artifact.query.subscribe': { params: ArtifactQueryParams; result: ArtifactActionResult }
+  /** Drop a subscription handle from artifact.query.subscribe. */
+  'artifact.query.unsubscribe': { params: ArtifactQueryUnsubscribeParams; result: ArtifactQueryUnsubscribeResult }
+  /** One revision's full content. */
+  'artifact.revision': { params: ArtifactRevisionParams; result: ArtifactRevisionResult }
+  /** Revision metadata for an artifact, newest first. */
+  'artifact.revisions': { params: ArtifactIdParams; result: ArtifactRevisionsResult }
+  /** Upsert a living artifact; appends a revision and emits artifact.changed. */
+  'artifact.set': { params: ArtifactSetParams; result: ArtifactResult }
   /** Enable/disable auto top-up with its threshold and reload amount (billing:manage). */
   'billing.auto_reload': { params: BillingAutoReloadParams; result: BillingMutationResult }
   /** Start a one-off top-up charge (billing:manage, idempotent). */
@@ -6070,6 +6633,8 @@ export interface RpcMethods {
   'client.capabilities': { params: ClientCapabilitiesParams; result: ClientCapabilitiesResult }
   /** Save the host clipboard image into the session and queue it for the next turn. */
   'clipboard.paste': { params: ClipboardPasteParams; result: AttachedImageResult }
+  /** The code knowledge graph of one service built from its declared source files. */
+  'code.graph': { params: ServiceParams; result: GraphResult }
   /** Run a quick/plugin/bundle/skill/built-in slash command and answer a structured directive. */
   'command.dispatch': { params: CommandDispatchParams; result: CommandDispatchResult }
   /** Canonical registry command for a name or alias. */
@@ -6110,6 +6675,14 @@ export interface RpcMethods {
   'connectors.policy.set': { params: ConnectorPolicySetParams; result: ConnectorPolicySetResult }
   /** The scoped profile's cached or current tool list for one connector. */
   'connectors.tools': { params: ConnectorToolsParams; result: ConnectorToolsResult }
+  /** Structured Nous credit view for the /credits command; fail-open to logged_in=false. */
+  'credits.view': { params: Params; result: CreditsViewResult }
+  /** The configurations on either side of one recorded cron change. */
+  'cron.changeset_diff': { params: CronChangesetDiffParams; result: OpenModel }
+  /** Recorded history of the cron configuration, newest first. */
+  'cron.changesets': { params: CronChangesetsParams; result: OpenModel }
+  /** The cron interflow dataflow graph: crons, sources, artifacts, services and typed edges. */
+  'cron.graph': { params: Params; result: GraphResult }
   /** List/add/remove/pause/resume cron jobs in the (optionally profile-scoped) cron store. */
   'cron.manage': { params: CronManageParams; result: CronManageResult }
   /** Block/unblock NEW spawns globally (active children keep running); returns the new state. */
@@ -6136,8 +6709,18 @@ export interface RpcMethods {
   'display.switchSandboxImage': { params: DisplaySwitchSandboxImageParams; result: DisplaySwitchSandboxImageResult }
   /** One JPEG grab of the bot's screen; read-only, never changes the lease. */
   'display.thumbnail': { params: ProfileParams; result: DisplayThumbnailResult }
+  /** The curated news feed from digest pipelines. */
+  'feed.get': { params: FeedGetParams; result: OpenModel }
+  /** Append articles to the news feed store, deduped per source. */
+  'feed.publish': { params: FeedPublishParams; result: FeedPublishResult }
+  /** Available feed sources and article counts. */
+  'feed.sources': { params: Params; result: FeedSourcesResult }
   /** Stage a non-image file into the session workspace and hand back its @file: ref. */
   'file.attach': { params: FileAttachParams; result: FileAttachResult }
+  /** Browsable roots (no root) or one root's bounded, containment-checked tree. */
+  'files.list': { params: FilesListParams; result: FilesListResult }
+  /** Read one UTF-8 text file from a browsable root. */
+  'files.read': { params: FilesReadParams; result: OpenModel }
   /** Mark the one-time availability notice as shown on the free-tier identity. */
   'free_tier.ack_notice': { params: ProfileParams; result: FreeTierAckNoticeResult }
   /** Report a browser window outcome for the matching pending attempt; mint remains authoritative. */
@@ -6150,6 +6733,8 @@ export interface RpcMethods {
   'free_tier.status': { params: ProfileParams; result: FreeTierStatusResult }
   /** What THIS build enforces (a client withholds a feature unless advertised). */
   'gateway.capabilities': { params: PingParams; result: GatewayCapabilitiesResult }
+  /** Re-exec the gateway process in place after the response is sent. */
+  'gateway.restart': { params: Params; result: GatewayRestartResult }
   /** Resolve one exact pending approval raised by a local or peer room member. */
   'groups.approve': { params: GroupsApproveParams; result: GroupsApproveResult }
   /** Read one committed attachment for a live room viewer. */
@@ -6212,6 +6797,30 @@ export interface RpcMethods {
   'input.detect_drop': { params: InputDetectDropParams; result: InputDetectDropResult }
   /** Session/message counts over the last ``days`` for the (optionally scoped) profile store. */
   'insights.get': { params: InsightsGetParams; result: InsightsGetResult }
+  /** Newest-first quiz attempt history. */
+  'learning.attempt.list': { params: LearningAttemptListParams; result: LearningAttemptsResult }
+  /** Append one finished quiz session to the immutable attempt log. */
+  'learning.attempt.record': { params: LearningAttemptParams; result: LearningAttemptResult }
+  /** Delete a card. */
+  'learning.card.delete': { params: LearningCardDeleteParams; result: LearningRevResult }
+  /** Batched card upsert by id: one rev bump for N cards. */
+  'learning.card.set': { params: LearningCardSetParams; result: LearningRevResult }
+  /** Delete a course. */
+  'learning.course.delete': { params: LearningIdParams; result: LearningDeletedResult }
+  /** One course with the learner's progress. */
+  'learning.course.get': { params: LearningIdParams; result: LearningCourseGetResult }
+  /** All courses. */
+  'learning.course.list': { params: Params; result: LearningCoursesResult }
+  /** Create or update a course shell (title/summary). */
+  'learning.course.set': { params: LearningCourseSetParams; result: LearningCourseResult }
+  /** Delete a deck. */
+  'learning.deck.delete': { params: LearningIdParams; result: LearningDeletedResult }
+  /** One deck with its spaced-repetition state. */
+  'learning.deck.get': { params: LearningIdParams; result: LearningDeckGetResult }
+  /** All decks. */
+  'learning.deck.list': { params: Params; result: LearningDecksResult }
+  /** Create or update a deck. */
+  'learning.deck.set': { params: LearningDeckSetParams; result: LearningDeckResult }
   /** Archive a skill (restorable via curator) or remove a memory chunk. */
   'learning.delete': { params: LearningNodeParams; result: LearningMutationResult }
   /** Node content (SKILL.md or memory chunk) for an edit prefill. */
@@ -6220,6 +6829,18 @@ export interface RpcMethods {
   'learning.edit': { params: LearningEditParams; result: LearningMutationResult }
   /** Pre-render the /journey timeline (frames + legend/summary) so the TUI walks it locally. */
   'learning.frames': { params: LearningFramesParams; result: LearningFramesResult }
+  /** Delete a module. */
+  'learning.module.delete': { params: LearningModuleDeleteParams; result: LearningRevResult }
+  /** Upsert one module; an omitted id mints one. */
+  'learning.module.set': { params: LearningModuleSetParams; result: LearningRevResult }
+  /** Fold one learner progress event (commutative, so racing devices converge). */
+  'learning.progress.record': { params: LearningProgressParams; result: LearningProgressResult }
+  /** Fold one SRS review; the server recomputes SM-2. */
+  'learning.review.record': { params: LearningReviewParams; result: LearningReviewResult }
+  /** Delete a step. */
+  'learning.step.delete': { params: LearningStepDeleteParams; result: LearningRevResult }
+  /** Upsert one lesson/quiz step; append_questions extends a quiz without resending it. */
+  'learning.step.set': { params: LearningStepSetParams; result: LearningRevResult }
   /** Stateless one-shot LLM completion (titles, ideas) on the session's or the task backend. */
   'llm.oneshot': { params: LlmOneshotParams; result: LlmOneshotResult }
   /** Facts about the machine running this backend and its OS account, for the desktop first run. */
@@ -6362,6 +6983,10 @@ export interface RpcMethods {
   'prompt.btw': { params: SideAgentParams; result: TaskIdResult }
   /** Send a user turn to a live session; busy sessions queue / steer / redirect instead of refusing. */
   'prompt.submit': { params: PromptSubmitParams; result: PromptSubmitResult }
+  /** Register an APNs device token for remote push notifications. */
+  'push.register': { params: PushRegisterParams; result: PushRegisterResult }
+  /** Remove an APNs device token. */
+  'push.unregister': { params: PushUnregisterParams; result: PushUnregisterResult }
   /** Re-read ~/.hermes/.env (CLI /reload parity); built agents keep their pool until /new. */
   'reload.env': { params: ReloadEnvParams; result: ReloadEnvResult }
   /** Tear down and rediscover MCP servers for every live session (prompt cache is invalidated). */
@@ -6374,6 +6999,14 @@ export interface RpcMethods {
   'rollback.list': { params: RollbackListParams; result: RollbackListResult }
   /** Restore the working tree (or one file) to a checkpoint by hash or 1-based index. */
   'rollback.restore': { params: RollbackRestoreParams; result: RollbackRestoreResult }
+  /** A manifest's deployments with probes, log sinks and last known health. */
+  'service.deployments': { params: ServiceParams; result: ServiceDeploymentsResult }
+  /** Run the declared health and revision probes now and return the results. */
+  'service.deployments.probe': { params: ServiceDeploymentsProbeParams; result: ServiceDeploymentsResult }
+  /** A bounded read of one log sink of a service, with a cursor to continue from. */
+  'service.logs': { params: ServiceLogsParams; result: OpenModel }
+  /** Start or stop following a sink; appended lines arrive as service.log events. */
+  'service.logs.follow': { params: ServiceLogsFollowParams; result: ServiceLogsFollowResult }
   /** Attach the frontend to a live session without closing the previously focused one. */
   'session.activate': { params: SessionActivateParams; result: SessionActivateResult }
   /** Live sessions in this process, insertion order (not a DB browser). */
@@ -6420,6 +7053,8 @@ export interface RpcMethods {
   'session.list': { params: SessionListParams; result: SessionListResult }
   /** Most recent human-facing session; errors fold into a null session_id. */
   'session.most_recent': { params: SessionMostRecentParams; result: SessionMostRecentResult }
+  /** The session's system prompt decomposed into sections with token counts. */
+  'session.prompt_breakdown': { params: SessionParams; result: PromptBreakdownResult }
   /** Redirect the active turn (queued for the next turn while the agent is still building). */
   'session.redirect': { params: SessionCorrectionParams; result: SessionCorrectionResult }
   /** Attach to a stored session: reuse it if live here, else lazy / deferred / cold / eager rebuild. */
@@ -6428,10 +7063,14 @@ export interface RpcMethods {
   'session.save': { params: SessionSaveParams; result: SessionSaveResult }
   /** Set/clear hidden (out of the default list, still resumable by its owner) on a session + lineage. */
   'session.set_hidden': { params: SessionSetHiddenParams; result: SessionSetHiddenResult }
+  /** Set (or clear with an empty string) an ephemeral system prompt append on the live agent. */
+  'session.set_prompt': { params: SetPromptParams; result: SetPromptResult }
   /** Rendered /status text for the session. */
   'session.status': { params: SessionStatusParams; result: SessionStatusResult }
   /** Inject text into the next tool result without interrupting the turn. */
   'session.steer': { params: SessionCorrectionParams; result: SessionCorrectionResult }
+  /** Temporally structured session events (turns, tool starts/ends) for playback. */
+  'session.timeline': { params: SessionParams; result: SessionTimelineResult }
   /** Read or set a live session's title; a title set before the row exists is queued. */
   'session.title': { params: SessionTitleParams; result: SessionTitleResult }
   /** Drop the last user turn (and everything after it) from an idle session. */
@@ -6466,10 +7105,14 @@ export interface RpcMethods {
   'shared_metrics.update_run': { params: SharedMetricsUpdateRunParams; result: SharedMetricsUpdateRunResult }
   /** Run a safe (non-dangerous) shell command captured for ``!cmd`` / inline substitution. */
   'shell.exec': { params: ShellExecParams; result: ShellExecResult }
+  /** Read a locally installed skill's SKILL.md (or one file inside its directory). */
+  'skills.get': { params: SkillsGetParams; result: SkillFileResult }
   /** Skills hub backend: list the profile's skills or search / browse / inspect / install from the hub. */
   'skills.manage': { params: SkillsManageParams; result: SkillsManageResult }
   /** Re-scan skill dirs; the pre-rendered ``output`` is what /reload-skills prints. */
   'skills.reload': { params: SkillsReloadParams; result: SkillsReloadResult }
+  /** Replace a locally installed skill's SKILL.md content and reload skills. */
+  'skills.update': { params: SkillsUpdateParams; result: SkillsUpdateResult }
   /** Execute a slash command against the session's slash worker (or a live/plugin shortcut). */
   'slash.exec': { params: SlashExecParams; result: SlashExecResult }
   /** Saved spawn-tree snapshots, newest first. */
@@ -6544,13 +7187,54 @@ export interface RpcMethods {
   'wake.status': { params: WakeStatusParams; result: WakeStatusResult }
   /** Stop this surface's listener; persist also writes wake_word.enabled: false. */
   'wake.stop': { params: WakeStopParams; result: WakeStopResult }
+  /** The unified git diff of one changeset. */
+  'wiki.changeset_diff': { params: WikiChangesetDiffParams; result: WikiChangesetDiffResult }
+  /** Paginated wiki changesets (timeline view). */
+  'wiki.changesets': { params: WikiChangesetsParams; result: OpenModel }
+  /** The ingestion event log with the changesets each event produced. */
+  'wiki.events': { params: WikiEventsParams; result: OpenModel }
+  /** Expand a page's integration links into live status objects. */
+  'wiki.expand_links': { params: WikiExpandLinksParams; result: OpenModel }
+  /** The validated glossary of one configured wiki (disabled state when absent). */
+  'wiki.glossary': { params: WikiParams; result: OpenModel }
+  /** Validate and atomically replace a configured wiki's glossary (409 on a stale if_match). */
+  'wiki.glossary.update': { params: WikiGlossaryUpdateParams; result: OpenModel }
+  /** The configured wikis. */
+  'wiki.list': { params: Params; result: WikiListResult }
+  /** One wiki page with frontmatter and body. */
+  'wiki.page': { params: WikiPageParams; result: OpenModel }
+  /** Scan a wiki directory into pages and typed links. */
+  'wiki.scan': { params: WikiScanParams; result: WikiGraphResult }
+  /** The hierarchical taxonomy tree and its flattened paths. */
+  'wiki.taxonomy': { params: WikiParams; result: WikiTaxonomyResult }
+  /** Full-replace write of one wiki page with optimistic concurrency; records a changeset. */
+  'wiki.update': { params: WikiUpdateParams; result: OpenModel }
 }
 export type RpcMethod = keyof RpcMethods
 export const RPC_METHODS = [
+  'actions.reload',
   'agents.list',
   'approval.pending',
   'approval.received',
   'approval.respond',
+  'architecture.check',
+  'architecture.describe',
+  'architecture.diff',
+  'architecture.history',
+  'architecture.list',
+  'artifact.action.confirm',
+  'artifact.action.invoke',
+  'artifact.action.log',
+  'artifact.delete',
+  'artifact.get',
+  'artifact.list',
+  'artifact.query.handlers',
+  'artifact.query.invoke',
+  'artifact.query.subscribe',
+  'artifact.query.unsubscribe',
+  'artifact.revision',
+  'artifact.revisions',
+  'artifact.set',
   'billing.auto_reload',
   'billing.charge',
   'billing.charge_status',
@@ -6566,6 +7250,7 @@ export const RPC_METHODS = [
   'cli.exec',
   'client.capabilities',
   'clipboard.paste',
+  'code.graph',
   'command.dispatch',
   'command.resolve',
   'commands.catalog',
@@ -6586,6 +7271,10 @@ export const RPC_METHODS = [
   'connectors.policy.get',
   'connectors.policy.set',
   'connectors.tools',
+  'credits.view',
+  'cron.changeset_diff',
+  'cron.changesets',
+  'cron.graph',
   'cron.manage',
   'delegation.pause',
   'delegation.status',
@@ -6599,13 +7288,19 @@ export const RPC_METHODS = [
   'display.stop',
   'display.switchSandboxImage',
   'display.thumbnail',
+  'feed.get',
+  'feed.publish',
+  'feed.sources',
   'file.attach',
+  'files.list',
+  'files.read',
   'free_tier.ack_notice',
   'free_tier.challenge_result',
   'free_tier.claim_nudge',
   'free_tier.provision',
   'free_tier.status',
   'gateway.capabilities',
+  'gateway.restart',
   'groups.approve',
   'groups.attachment.download',
   'groups.attachment.upload',
@@ -6637,10 +7332,28 @@ export const RPC_METHODS = [
   'image.generate',
   'input.detect_drop',
   'insights.get',
+  'learning.attempt.list',
+  'learning.attempt.record',
+  'learning.card.delete',
+  'learning.card.set',
+  'learning.course.delete',
+  'learning.course.get',
+  'learning.course.list',
+  'learning.course.set',
+  'learning.deck.delete',
+  'learning.deck.get',
+  'learning.deck.list',
+  'learning.deck.set',
   'learning.delete',
   'learning.detail',
   'learning.edit',
   'learning.frames',
+  'learning.module.delete',
+  'learning.module.set',
+  'learning.progress.record',
+  'learning.review.record',
+  'learning.step.delete',
+  'learning.step.set',
   'llm.oneshot',
   'machine.facts',
   'mcp.catalog',
@@ -6712,12 +7425,18 @@ export const RPC_METHODS = [
   'prompt.background',
   'prompt.btw',
   'prompt.submit',
+  'push.register',
+  'push.unregister',
   'reload.env',
   'reload.mcp',
   'request.answer',
   'rollback.diff',
   'rollback.list',
   'rollback.restore',
+  'service.deployments',
+  'service.deployments.probe',
+  'service.logs',
+  'service.logs.follow',
   'session.activate',
   'session.active_list',
   'session.archive',
@@ -6741,12 +7460,15 @@ export const RPC_METHODS = [
   'session.interrupt',
   'session.list',
   'session.most_recent',
+  'session.prompt_breakdown',
   'session.redirect',
   'session.resume',
   'session.save',
   'session.set_hidden',
+  'session.set_prompt',
   'session.status',
   'session.steer',
+  'session.timeline',
   'session.title',
   'session.undo',
   'session.usage',
@@ -6764,8 +7486,10 @@ export const RPC_METHODS = [
   'shared_metrics.status',
   'shared_metrics.update_run',
   'shell.exec',
+  'skills.get',
   'skills.manage',
   'skills.reload',
+  'skills.update',
   'slash.exec',
   'spawn_tree.list',
   'spawn_tree.load',
@@ -6802,7 +7526,18 @@ export const RPC_METHODS = [
   'wake.resume',
   'wake.start',
   'wake.status',
-  'wake.stop'
+  'wake.stop',
+  'wiki.changeset_diff',
+  'wiki.changesets',
+  'wiki.events',
+  'wiki.expand_links',
+  'wiki.glossary',
+  'wiki.glossary.update',
+  'wiki.list',
+  'wiki.page',
+  'wiki.scan',
+  'wiki.taxonomy',
+  'wiki.update'
 ] as const satisfies readonly RpcMethod[]
 
 // ── Canonical (hermes-gateway-v1) methods only the session authority serves ──
@@ -7001,6 +7736,10 @@ export interface BackendGatewayEventMap {
   'agent.terminal.output': TerminalOutputPayload
   /** Pending gateway approvals were dropped by interrupt/reap/teardown; the wait resolved as deny (not a user refusal). */
   'approval.cancelled': ApprovalCancelledPayload
+  /** A service's model gained a revision (snapshot) or a check finished. */
+  'architecture.changed': ArchitectureChangedPayload
+  /** An artifact was written, acted on or deleted. */
+  'artifact.changed': ArtifactChangedPayload
   /** A /background side agent finished. */
   'background.complete': SideAgentCompletePayload
   /** Device-flow URL + code for the billing scope step-up; the client opens the browser. */
@@ -7031,6 +7770,8 @@ export interface BackendGatewayEventMap {
   'free_tier.challenge': FreeTierChallengePayload
   /** First frame of a connection: the resolved skin, the change-event capability and the replay epoch. */
   'gateway.ready': GatewayReadyPayload
+  /** A course, deck, progress record or attempt changed. */
+  'learning.changed': LearningChangedPayload
   /** The turn ended: final text, usage and outcome. */
   'message.complete': MessageCompletePayload
   /** One streamed chunk of the assistant reply (null text: segment boundary). */
@@ -7157,6 +7898,8 @@ export const GATEWAY_EVENT_TYPES = [
   'agent.print',
   'agent.terminal.output',
   'approval.cancelled',
+  'architecture.changed',
+  'artifact.changed',
   'background.complete',
   'billing.step_up.verification',
   'bot_relay.outbox.pending',
@@ -7172,6 +7915,7 @@ export const GATEWAY_EVENT_TYPES = [
   'error',
   'free_tier.challenge',
   'gateway.ready',
+  'learning.changed',
   'message.complete',
   'message.delta',
   'message.interim',

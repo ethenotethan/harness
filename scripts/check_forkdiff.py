@@ -34,7 +34,7 @@ import sys
 from pathlib import Path
 from typing import Iterable
 
-import yaml
+from ruamel.yaml import YAML
 
 GLOB_CLASS_RE = re.compile(r"\[([^\]]*)\]")
 
@@ -209,7 +209,7 @@ def main(argv: list[str] | None = None) -> int:
 
     repo = Path(args.repo).resolve()
     fork_path = repo / args.fork
-    spec = yaml.safe_load(fork_path.read_text(encoding="utf-8")) or {}
+    spec = YAML(typ="safe", pure=True).load(fork_path.read_text(encoding="utf-8")) or {}
     base = str((spec.get("base") or {}).get("hash") or "").strip()
     problems: list[str] = []
     lines: list[str] = []

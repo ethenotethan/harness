@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .base import Params, Result
+from .base import JsonValue, Params, Result
 from .registry import method
 
 
@@ -18,8 +18,21 @@ method("ping", params=PingParams, result=PingResult,
        doc="Cheapest liveness probe; answered on the WS reader thread even while every agent is mid-turn.")
 
 
+class SurfaceCapabilities(Result):
+    """Fork (harness): one feature area's RPC method and event names."""
+
+    methods: list[str]
+    events: list[str]
+    contract: JsonValue | None = None
+
+
 class GatewayCapabilitiesResult(Result):
     per_session_exclusive_submit: bool
+    # Fork (harness): what Portal feature-gates on (substring matches on ``capability_names``).
+    gateway_version: str | None = None
+    architecture: SurfaceCapabilities | None = None
+    service: SurfaceCapabilities | None = None
+    capability_names: list[str] | None = None
 
 
 method("gateway.capabilities", params=PingParams, result=GatewayCapabilitiesResult,

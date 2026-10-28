@@ -7,6 +7,24 @@
   },
   "methods": [
     {
+      "name": "actions.reload",
+      "summary": "Reload plugin action handlers from ~/.hermes/plugins/actions/.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/Params"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ActionsReloadResult"
+        }
+      }
+    },
+    {
       "name": "agents.list",
       "summary": "Registry-wide background process summary for ``/agents``.",
       "params": [
@@ -75,6 +93,330 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/ApprovalRespondResult"
+        }
+      }
+    },
+    {
+      "name": "architecture.check",
+      "summary": "Run the service's own --check in its root and record the result.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ServiceParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ArchitectureCheckResult"
+        }
+      }
+    },
+    {
+      "name": "architecture.describe",
+      "summary": "The hermes.architecture document for one service at its current or a stored revision.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ArchitectureDescribeParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/OpenModel"
+        }
+      }
+    },
+    {
+      "name": "architecture.diff",
+      "summary": "What changed between two stored revisions of a service's model.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ArchitectureDiffParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/OpenModel"
+        }
+      }
+    },
+    {
+      "name": "architecture.history",
+      "summary": "Stored revisions with the commits behind them, the deployed revision and check runs.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ServiceParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/OpenModel"
+        }
+      }
+    },
+    {
+      "name": "architecture.list",
+      "summary": "Every manifest-declared service with its source, revision, last check and conformance.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/Params"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ArchitectureListResult"
+        }
+      }
+    },
+    {
+      "name": "artifact.action.confirm",
+      "summary": "Complete a pending destructive intent after native confirmation.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ArtifactActionConfirmParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ArtifactActionResult"
+        }
+      }
+    },
+    {
+      "name": "artifact.action.invoke",
+      "summary": "Invoke a backend intent declared in an artifact's action manifest.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ArtifactActionInvokeParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ArtifactActionResult"
+        }
+      }
+    },
+    {
+      "name": "artifact.action.log",
+      "summary": "The invocation ledger for an artifact, newest first.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ArtifactActionLogParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ArtifactActionLogResult"
+        }
+      }
+    },
+    {
+      "name": "artifact.delete",
+      "summary": "Remove an artifact and its revisions; emits artifact.changed with deleted=true.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ArtifactIdParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ArtifactDeletedResult"
+        }
+      }
+    },
+    {
+      "name": "artifact.get",
+      "summary": "One artifact with content.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ArtifactIdParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ArtifactResult"
+        }
+      }
+    },
+    {
+      "name": "artifact.list",
+      "summary": "All artifacts without content, newest first.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/Params"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ArtifactListResult"
+        }
+      }
+    },
+    {
+      "name": "artifact.query.handlers",
+      "summary": "The registered query handler names and their parameter schemas.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/Params"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ArtifactQueryHandlersResult"
+        }
+      }
+    },
+    {
+      "name": "artifact.query.invoke",
+      "summary": "Run a query the artifact declares, with page-supplied parameters.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ArtifactQueryInvokeParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ArtifactActionResult"
+        }
+      }
+    },
+    {
+      "name": "artifact.query.subscribe",
+      "summary": "Follow a declared query; the current result plus a subscription handle.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ArtifactQueryParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ArtifactActionResult"
+        }
+      }
+    },
+    {
+      "name": "artifact.query.unsubscribe",
+      "summary": "Drop a subscription handle from artifact.query.subscribe.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ArtifactQueryUnsubscribeParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ArtifactQueryUnsubscribeResult"
+        }
+      }
+    },
+    {
+      "name": "artifact.revision",
+      "summary": "One revision's full content.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ArtifactRevisionParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ArtifactRevisionResult"
+        }
+      }
+    },
+    {
+      "name": "artifact.revisions",
+      "summary": "Revision metadata for an artifact, newest first.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ArtifactIdParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ArtifactRevisionsResult"
+        }
+      }
+    },
+    {
+      "name": "artifact.set",
+      "summary": "Upsert a living artifact; appends a revision and emits artifact.changed.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ArtifactSetParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ArtifactResult"
         }
       }
     },
@@ -345,6 +687,24 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/AttachedImageResult"
+        }
+      }
+    },
+    {
+      "name": "code.graph",
+      "summary": "The code knowledge graph of one service built from its declared source files.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ServiceParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/GraphResult"
         }
       }
     },
@@ -709,6 +1069,78 @@
       }
     },
     {
+      "name": "credits.view",
+      "summary": "Structured Nous credit view for the /credits command; fail-open to logged_in=false.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/Params"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/CreditsViewResult"
+        }
+      }
+    },
+    {
+      "name": "cron.changeset_diff",
+      "summary": "The configurations on either side of one recorded cron change.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/CronChangesetDiffParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/OpenModel"
+        }
+      }
+    },
+    {
+      "name": "cron.changesets",
+      "summary": "Recorded history of the cron configuration, newest first.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/CronChangesetsParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/OpenModel"
+        }
+      }
+    },
+    {
+      "name": "cron.graph",
+      "summary": "The cron interflow dataflow graph: crons, sources, artifacts, services and typed edges.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/Params"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/GraphResult"
+        }
+      }
+    },
+    {
       "name": "cron.manage",
       "summary": "List/add/remove/pause/resume cron jobs in the (optionally profile-scoped) cron store.",
       "params": [
@@ -943,6 +1375,60 @@
       }
     },
     {
+      "name": "feed.get",
+      "summary": "The curated news feed from digest pipelines.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/FeedGetParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/OpenModel"
+        }
+      }
+    },
+    {
+      "name": "feed.publish",
+      "summary": "Append articles to the news feed store, deduped per source.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/FeedPublishParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/FeedPublishResult"
+        }
+      }
+    },
+    {
+      "name": "feed.sources",
+      "summary": "Available feed sources and article counts.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/Params"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/FeedSourcesResult"
+        }
+      }
+    },
+    {
       "name": "file.attach",
       "summary": "Stage a non-image file into the session workspace and hand back its @file: ref.",
       "params": [
@@ -957,6 +1443,42 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/FileAttachResult"
+        }
+      }
+    },
+    {
+      "name": "files.list",
+      "summary": "Browsable roots (no root) or one root's bounded, containment-checked tree.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/FilesListParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/FilesListResult"
+        }
+      }
+    },
+    {
+      "name": "files.read",
+      "summary": "Read one UTF-8 text file from a browsable root.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/FilesReadParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/OpenModel"
         }
       }
     },
@@ -1065,6 +1587,24 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/GatewayCapabilitiesResult"
+        }
+      }
+    },
+    {
+      "name": "gateway.restart",
+      "summary": "Re-exec the gateway process in place after the response is sent.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/Params"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/GatewayRestartResult"
         }
       }
     },
@@ -1627,6 +2167,222 @@
       }
     },
     {
+      "name": "learning.attempt.list",
+      "summary": "Newest-first quiz attempt history.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/LearningAttemptListParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/LearningAttemptsResult"
+        }
+      }
+    },
+    {
+      "name": "learning.attempt.record",
+      "summary": "Append one finished quiz session to the immutable attempt log.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/LearningAttemptParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/LearningAttemptResult"
+        }
+      }
+    },
+    {
+      "name": "learning.card.delete",
+      "summary": "Delete a card.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/LearningCardDeleteParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/LearningRevResult"
+        }
+      }
+    },
+    {
+      "name": "learning.card.set",
+      "summary": "Batched card upsert by id: one rev bump for N cards.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/LearningCardSetParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/LearningRevResult"
+        }
+      }
+    },
+    {
+      "name": "learning.course.delete",
+      "summary": "Delete a course.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/LearningIdParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/LearningDeletedResult"
+        }
+      }
+    },
+    {
+      "name": "learning.course.get",
+      "summary": "One course with the learner's progress.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/LearningIdParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/LearningCourseGetResult"
+        }
+      }
+    },
+    {
+      "name": "learning.course.list",
+      "summary": "All courses.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/Params"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/LearningCoursesResult"
+        }
+      }
+    },
+    {
+      "name": "learning.course.set",
+      "summary": "Create or update a course shell (title/summary).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/LearningCourseSetParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/LearningCourseResult"
+        }
+      }
+    },
+    {
+      "name": "learning.deck.delete",
+      "summary": "Delete a deck.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/LearningIdParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/LearningDeletedResult"
+        }
+      }
+    },
+    {
+      "name": "learning.deck.get",
+      "summary": "One deck with its spaced-repetition state.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/LearningIdParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/LearningDeckGetResult"
+        }
+      }
+    },
+    {
+      "name": "learning.deck.list",
+      "summary": "All decks.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/Params"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/LearningDecksResult"
+        }
+      }
+    },
+    {
+      "name": "learning.deck.set",
+      "summary": "Create or update a deck.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/LearningDeckSetParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/LearningDeckResult"
+        }
+      }
+    },
+    {
       "name": "learning.delete",
       "summary": "Archive a skill (restorable via curator) or remove a memory chunk.",
       "params": [
@@ -1695,6 +2451,114 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/LearningFramesResult"
+        }
+      }
+    },
+    {
+      "name": "learning.module.delete",
+      "summary": "Delete a module.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/LearningModuleDeleteParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/LearningRevResult"
+        }
+      }
+    },
+    {
+      "name": "learning.module.set",
+      "summary": "Upsert one module; an omitted id mints one.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/LearningModuleSetParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/LearningRevResult"
+        }
+      }
+    },
+    {
+      "name": "learning.progress.record",
+      "summary": "Fold one learner progress event (commutative, so racing devices converge).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/LearningProgressParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/LearningProgressResult"
+        }
+      }
+    },
+    {
+      "name": "learning.review.record",
+      "summary": "Fold one SRS review; the server recomputes SM-2.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/LearningReviewParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/LearningReviewResult"
+        }
+      }
+    },
+    {
+      "name": "learning.step.delete",
+      "summary": "Delete a step.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/LearningStepDeleteParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/LearningRevResult"
+        }
+      }
+    },
+    {
+      "name": "learning.step.set",
+      "summary": "Upsert one lesson/quiz step; append_questions extends a quiz without resending it.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/LearningStepSetParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/LearningRevResult"
         }
       }
     },
@@ -2977,6 +3841,42 @@
       }
     },
     {
+      "name": "push.register",
+      "summary": "Register an APNs device token for remote push notifications.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/PushRegisterParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/PushRegisterResult"
+        }
+      }
+    },
+    {
+      "name": "push.unregister",
+      "summary": "Remove an APNs device token.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/PushUnregisterParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/PushUnregisterResult"
+        }
+      }
+    },
+    {
       "name": "reload.env",
       "summary": "Re-read ~/.hermes/.env (CLI /reload parity); built agents keep their pool until /new.",
       "params": [
@@ -3081,6 +3981,78 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/RollbackRestoreResult"
+        }
+      }
+    },
+    {
+      "name": "service.deployments",
+      "summary": "A manifest's deployments with probes, log sinks and last known health.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ServiceParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ServiceDeploymentsResult"
+        }
+      }
+    },
+    {
+      "name": "service.deployments.probe",
+      "summary": "Run the declared health and revision probes now and return the results.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ServiceDeploymentsProbeParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ServiceDeploymentsResult"
+        }
+      }
+    },
+    {
+      "name": "service.logs",
+      "summary": "A bounded read of one log sink of a service, with a cursor to continue from.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ServiceLogsParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/OpenModel"
+        }
+      }
+    },
+    {
+      "name": "service.logs.follow",
+      "summary": "Start or stop following a sink; appended lines arrive as service.log events.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ServiceLogsFollowParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ServiceLogsFollowResult"
         }
       }
     },
@@ -3499,6 +4471,24 @@
       }
     },
     {
+      "name": "session.prompt_breakdown",
+      "summary": "The session's system prompt decomposed into sections with token counts.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SessionParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/PromptBreakdownResult"
+        }
+      }
+    },
+    {
       "name": "session.redirect",
       "summary": "Redirect the active turn (queued for the next turn while the agent is still building).",
       "params": [
@@ -3571,6 +4561,24 @@
       }
     },
     {
+      "name": "session.set_prompt",
+      "summary": "Set (or clear with an empty string) an ephemeral system prompt append on the live agent.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SetPromptParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SetPromptResult"
+        }
+      }
+    },
+    {
       "name": "session.status",
       "summary": "Rendered /status text for the session.",
       "params": [
@@ -3603,6 +4611,24 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/SessionCorrectionResult"
+        }
+      }
+    },
+    {
+      "name": "session.timeline",
+      "summary": "Temporally structured session events (turns, tool starts/ends) for playback.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SessionParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SessionTimelineResult"
         }
       }
     },
@@ -3913,6 +4939,24 @@
       }
     },
     {
+      "name": "skills.get",
+      "summary": "Read a locally installed skill's SKILL.md (or one file inside its directory).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SkillsGetParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SkillFileResult"
+        }
+      }
+    },
+    {
       "name": "skills.manage",
       "summary": "Skills hub backend: list the profile's skills or search / browse / inspect / install from the hub.",
       "params": [
@@ -3945,6 +4989,24 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/SkillsReloadResult"
+        }
+      }
+    },
+    {
+      "name": "skills.update",
+      "summary": "Replace a locally installed skill's SKILL.md content and reload skills.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SkillsUpdateParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SkillsUpdateResult"
         }
       }
     },
@@ -4613,6 +5675,204 @@
           "$ref": "#/components/schemas/WakeStopResult"
         }
       }
+    },
+    {
+      "name": "wiki.changeset_diff",
+      "summary": "The unified git diff of one changeset.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/WikiChangesetDiffParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/WikiChangesetDiffResult"
+        }
+      }
+    },
+    {
+      "name": "wiki.changesets",
+      "summary": "Paginated wiki changesets (timeline view).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/WikiChangesetsParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/OpenModel"
+        }
+      }
+    },
+    {
+      "name": "wiki.events",
+      "summary": "The ingestion event log with the changesets each event produced.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/WikiEventsParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/OpenModel"
+        }
+      }
+    },
+    {
+      "name": "wiki.expand_links",
+      "summary": "Expand a page's integration links into live status objects.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/WikiExpandLinksParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/OpenModel"
+        }
+      }
+    },
+    {
+      "name": "wiki.glossary",
+      "summary": "The validated glossary of one configured wiki (disabled state when absent).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/WikiParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/OpenModel"
+        }
+      }
+    },
+    {
+      "name": "wiki.glossary.update",
+      "summary": "Validate and atomically replace a configured wiki's glossary (409 on a stale if_match).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/WikiGlossaryUpdateParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/OpenModel"
+        }
+      }
+    },
+    {
+      "name": "wiki.list",
+      "summary": "The configured wikis.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/Params"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/WikiListResult"
+        }
+      }
+    },
+    {
+      "name": "wiki.page",
+      "summary": "One wiki page with frontmatter and body.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/WikiPageParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/OpenModel"
+        }
+      }
+    },
+    {
+      "name": "wiki.scan",
+      "summary": "Scan a wiki directory into pages and typed links.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/WikiScanParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/WikiGraphResult"
+        }
+      }
+    },
+    {
+      "name": "wiki.taxonomy",
+      "summary": "The hierarchical taxonomy tree and its flattened paths.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/WikiParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/WikiTaxonomyResult"
+        }
+      }
+    },
+    {
+      "name": "wiki.update",
+      "summary": "Full-replace write of one wiki page with optimistic concurrency; records a changeset.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/WikiUpdateParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/OpenModel"
+        }
+      }
     }
   ],
   "components": {
@@ -4747,6 +6007,37 @@
           "type"
         ],
         "title": "AccountOwner",
+        "type": "object"
+      },
+      "ActionsReloadResult": {
+        "additionalProperties": true,
+        "properties": {
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Status"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error"
+          }
+        },
+        "title": "ActionsReloadResult",
         "type": "object"
       },
       "ActiveIdResult": {
@@ -5548,6 +6839,167 @@
         "title": "ApprovalResult",
         "type": "object"
       },
+      "ArchitectureChangedPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "service": {
+            "title": "Service",
+            "type": "string"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Revision"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Status"
+          }
+        },
+        "required": [
+          "service",
+          "source",
+          "reason"
+        ],
+        "title": "ArchitectureChangedPayload",
+        "type": "object"
+      },
+      "ArchitectureCheckResult": {
+        "additionalProperties": false,
+        "properties": {
+          "service": {
+            "title": "Service",
+            "type": "string"
+          },
+          "check": {
+            "$ref": "#/components/schemas/OpenModel"
+          }
+        },
+        "required": [
+          "service",
+          "check"
+        ],
+        "title": "ArchitectureCheckResult",
+        "type": "object"
+      },
+      "ArchitectureDescribeParams": {
+        "additionalProperties": false,
+        "properties": {
+          "service": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Service"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Revision"
+          }
+        },
+        "title": "ArchitectureDescribeParams",
+        "type": "object"
+      },
+      "ArchitectureDiffParams": {
+        "additionalProperties": false,
+        "properties": {
+          "service": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Service"
+          },
+          "from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "From"
+          },
+          "to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "To"
+          }
+        },
+        "title": "ArchitectureDiffParams",
+        "type": "object"
+      },
+      "ArchitectureListResult": {
+        "additionalProperties": false,
+        "properties": {
+          "services": {
+            "items": {
+              "$ref": "#/components/schemas/OpenModel"
+            },
+            "title": "Services",
+            "type": "array"
+          },
+          "contract": {
+            "title": "Contract"
+          }
+        },
+        "required": [
+          "services",
+          "contract"
+        ],
+        "title": "ArchitectureListResult",
+        "type": "object"
+      },
       "ArgumentMode": {
         "enum": [
           "options",
@@ -5556,6 +7008,691 @@
         ],
         "title": "ArgumentMode",
         "type": "string"
+      },
+      "ArtifactActionConfirmParams": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Artifact Id"
+          },
+          "challenge": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Challenge"
+          }
+        },
+        "title": "ArtifactActionConfirmParams",
+        "type": "object"
+      },
+      "ArtifactActionInvokeParams": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Artifact Id"
+          },
+          "artifact_rev": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Artifact Rev"
+          },
+          "binding_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Binding Id"
+          },
+          "entity_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Entity Ref"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "user_context": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "User Context"
+          }
+        },
+        "title": "ArtifactActionInvokeParams",
+        "type": "object"
+      },
+      "ArtifactActionLogParams": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Artifact Id"
+          },
+          "binding_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Binding Id"
+          },
+          "entity_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Entity Ref"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Limit"
+          }
+        },
+        "title": "ArtifactActionLogParams",
+        "type": "object"
+      },
+      "ArtifactActionLogResult": {
+        "additionalProperties": false,
+        "properties": {
+          "records": {
+            "items": {
+              "$ref": "#/components/schemas/OpenModel"
+            },
+            "title": "Records",
+            "type": "array"
+          }
+        },
+        "required": [
+          "records"
+        ],
+        "title": "ArtifactActionLogResult",
+        "type": "object"
+      },
+      "ArtifactActionResult": {
+        "additionalProperties": true,
+        "properties": {
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Status"
+          }
+        },
+        "title": "ArtifactActionResult",
+        "type": "object"
+      },
+      "ArtifactChangedPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Kind"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Title"
+          },
+          "rev": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Rev"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Updated At"
+          },
+          "updated_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Updated By"
+          },
+          "deleted": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Deleted"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "ArtifactChangedPayload",
+        "type": "object"
+      },
+      "ArtifactDeletedResult": {
+        "additionalProperties": false,
+        "properties": {
+          "deleted": {
+            "title": "Deleted",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deleted"
+        ],
+        "title": "ArtifactDeletedResult",
+        "type": "object"
+      },
+      "ArtifactIdParams": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Id"
+          }
+        },
+        "title": "ArtifactIdParams",
+        "type": "object"
+      },
+      "ArtifactListResult": {
+        "additionalProperties": false,
+        "properties": {
+          "artifacts": {
+            "items": {
+              "$ref": "#/components/schemas/OpenModel"
+            },
+            "title": "Artifacts",
+            "type": "array"
+          }
+        },
+        "required": [
+          "artifacts"
+        ],
+        "title": "ArtifactListResult",
+        "type": "object"
+      },
+      "ArtifactQueryHandlersResult": {
+        "additionalProperties": false,
+        "properties": {
+          "handlers": {
+            "items": {
+              "$ref": "#/components/schemas/QueryHandlerInfo"
+            },
+            "title": "Handlers",
+            "type": "array"
+          }
+        },
+        "required": [
+          "handlers"
+        ],
+        "title": "ArtifactQueryHandlersResult",
+        "type": "object"
+      },
+      "ArtifactQueryInvokeParams": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Artifact Id"
+          },
+          "artifact_rev": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Artifact Rev"
+          },
+          "query_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Query Id"
+          },
+          "params": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Params"
+          },
+          "cursor": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cursor"
+          }
+        },
+        "title": "ArtifactQueryInvokeParams",
+        "type": "object"
+      },
+      "ArtifactQueryParams": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Artifact Id"
+          },
+          "artifact_rev": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Artifact Rev"
+          },
+          "query_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Query Id"
+          },
+          "params": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Params"
+          }
+        },
+        "title": "ArtifactQueryParams",
+        "type": "object"
+      },
+      "ArtifactQueryUnsubscribeParams": {
+        "additionalProperties": false,
+        "properties": {
+          "subscription": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Subscription"
+          }
+        },
+        "title": "ArtifactQueryUnsubscribeParams",
+        "type": "object"
+      },
+      "ArtifactQueryUnsubscribeResult": {
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "removed": {
+            "title": "Removed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "status",
+          "removed"
+        ],
+        "title": "ArtifactQueryUnsubscribeResult",
+        "type": "object"
+      },
+      "ArtifactResult": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact": {
+            "$ref": "#/components/schemas/OpenModel"
+          }
+        },
+        "required": [
+          "artifact"
+        ],
+        "title": "ArtifactResult",
+        "type": "object"
+      },
+      "ArtifactRevisionParams": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Id"
+          },
+          "rev": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Rev"
+          }
+        },
+        "title": "ArtifactRevisionParams",
+        "type": "object"
+      },
+      "ArtifactRevisionResult": {
+        "additionalProperties": false,
+        "properties": {
+          "revision": {
+            "$ref": "#/components/schemas/OpenModel"
+          }
+        },
+        "required": [
+          "revision"
+        ],
+        "title": "ArtifactRevisionResult",
+        "type": "object"
+      },
+      "ArtifactRevisionsResult": {
+        "additionalProperties": false,
+        "properties": {
+          "revisions": {
+            "items": {
+              "$ref": "#/components/schemas/OpenModel"
+            },
+            "title": "Revisions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "revisions"
+        ],
+        "title": "ArtifactRevisionsResult",
+        "type": "object"
+      },
+      "ArtifactSetParams": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Id"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Kind"
+          },
+          "content": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Content"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Title"
+          },
+          "updated_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Updated By"
+          },
+          "replace": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Replace"
+          },
+          "actions": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Actions"
+          },
+          "queries": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Queries"
+          }
+        },
+        "title": "ArtifactSetParams",
+        "type": "object"
       },
       "AttachedImageResult": {
         "additionalProperties": false,
@@ -15332,6 +17469,57 @@
         "title": "CorrectionStatus",
         "type": "string"
       },
+      "CreditsViewResult": {
+        "additionalProperties": false,
+        "properties": {
+          "logged_in": {
+            "title": "Logged In",
+            "type": "boolean"
+          },
+          "balance_lines": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Balance Lines",
+            "type": "array"
+          },
+          "identity_line": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Identity Line"
+          },
+          "topup_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Topup Url"
+          },
+          "depleted": {
+            "title": "Depleted",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "logged_in",
+          "balance_lines",
+          "depleted"
+        ],
+        "title": "CreditsViewResult",
+        "type": "object"
+      },
       "CronAction": {
         "enum": [
           "list",
@@ -15374,6 +17562,92 @@
           "ok"
         ],
         "title": "CronCancelResult",
+        "type": "object"
+      },
+      "CronChangesetDiffParams": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Id"
+          }
+        },
+        "title": "CronChangesetDiffParams",
+        "type": "object"
+      },
+      "CronChangesetsParams": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Limit"
+          },
+          "offset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Offset"
+          },
+          "since": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Since"
+          },
+          "until": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Until"
+          },
+          "job": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Job"
+          }
+        },
+        "title": "CronChangesetsParams",
         "type": "object"
       },
       "CronJobRow": {
@@ -15744,6 +18018,101 @@
             ],
             "default": null,
             "title": "Attach To Session"
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Prompt"
+          },
+          "inputs": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Inputs"
+          },
+          "outputs": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Outputs"
+          },
+          "side_effects": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Side Effects"
+          },
+          "source_files": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Source Files"
+          },
+          "source_files_resolved": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Source Files Resolved"
+          },
+          "context_from_resolved": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Context From Resolved"
           }
         },
         "required": [
@@ -15863,6 +18232,219 @@
             ],
             "default": null,
             "title": "Profile"
+          },
+          "actor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Actor"
+          },
+          "job_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Job Name"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Limit"
+          },
+          "offset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Offset"
+          },
+          "inputs": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Inputs"
+          },
+          "outputs": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Outputs"
+          },
+          "side_effects": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Side Effects"
+          },
+          "source_files": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Source Files"
+          },
+          "skills": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Skills"
+          },
+          "script": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Script"
+          },
+          "monitor_script": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Monitor Script"
+          },
+          "monitor_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Monitor Url"
+          },
+          "context_from": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Context From"
+          },
+          "workdir": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Workdir"
+          },
+          "enabled_toolsets": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Enabled Toolsets"
           }
         },
         "title": "CronManageParams",
@@ -18001,6 +20583,128 @@
         "title": "FailedDelegation",
         "type": "object"
       },
+      "FeedGetParams": {
+        "additionalProperties": false,
+        "properties": {
+          "sources": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Sources"
+          },
+          "since": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Since"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Limit"
+          },
+          "offset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Offset"
+          }
+        },
+        "title": "FeedGetParams",
+        "type": "object"
+      },
+      "FeedPublishParams": {
+        "additionalProperties": false,
+        "properties": {
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Source"
+          },
+          "articles": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Articles"
+          }
+        },
+        "title": "FeedPublishParams",
+        "type": "object"
+      },
+      "FeedPublishResult": {
+        "additionalProperties": false,
+        "properties": {
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total"
+        ],
+        "title": "FeedPublishResult",
+        "type": "object"
+      },
+      "FeedSourcesResult": {
+        "additionalProperties": false,
+        "properties": {
+          "sources": {
+            "title": "Sources"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sources",
+          "total"
+        ],
+        "title": "FeedSourcesResult",
+        "type": "object"
+      },
       "FileAttachParams": {
         "additionalProperties": false,
         "description": "``path`` when the file is gateway-visible, else ``data_url`` carries the bytes; ``name`` labels\nan uploaded file.",
@@ -18112,6 +20816,90 @@
           "uploaded"
         ],
         "title": "FileAttachResult",
+        "type": "object"
+      },
+      "FilesListParams": {
+        "additionalProperties": false,
+        "properties": {
+          "root": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Root"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Path"
+          }
+        },
+        "title": "FilesListParams",
+        "type": "object"
+      },
+      "FilesListResult": {
+        "additionalProperties": true,
+        "properties": {
+          "roots": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Roots"
+          }
+        },
+        "title": "FilesListResult",
+        "type": "object"
+      },
+      "FilesReadParams": {
+        "additionalProperties": false,
+        "properties": {
+          "root": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Root"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Path"
+          }
+        },
+        "title": "FilesReadParams",
         "type": "object"
       },
       "ForeignSessionRow": {
@@ -18549,6 +21337,55 @@
           "per_session_exclusive_submit": {
             "title": "Per Session Exclusive Submit",
             "type": "boolean"
+          },
+          "gateway_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Gateway Version"
+          },
+          "architecture": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SurfaceCapabilities"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "service": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SurfaceCapabilities"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "capability_names": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Capability Names"
           }
         },
         "required": [
@@ -18603,6 +21440,20 @@
           "replay_epoch"
         ],
         "title": "GatewayReadyPayload",
+        "type": "object"
+      },
+      "GatewayRestartResult": {
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "GatewayRestartResult",
         "type": "object"
       },
       "GoalContractSnapshot": {
@@ -18814,6 +21665,43 @@
           "gates"
         ],
         "title": "GoalSnapshot",
+        "type": "object"
+      },
+      "GraphResult": {
+        "additionalProperties": true,
+        "properties": {
+          "nodes": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/OpenModel"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Nodes"
+          },
+          "edges": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/OpenModel"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Edges"
+          }
+        },
+        "title": "GraphResult",
         "type": "object"
       },
       "GroupsApproveParams": {
@@ -21297,6 +24185,167 @@
         "title": "LanguageOption",
         "type": "object"
       },
+      "LearningAttemptListParams": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Limit"
+          }
+        },
+        "title": "LearningAttemptListParams",
+        "type": "object"
+      },
+      "LearningAttemptParams": {
+        "additionalProperties": false,
+        "properties": {
+          "topic": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Topic"
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Score"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Total"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Completed At"
+          },
+          "questions": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Questions"
+          },
+          "selected": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Selected"
+          },
+          "course_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Course Id"
+          },
+          "step_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Step Id"
+          },
+          "source_session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Source Session Id"
+          }
+        },
+        "title": "LearningAttemptParams",
+        "type": "object"
+      },
+      "LearningAttemptResult": {
+        "additionalProperties": false,
+        "properties": {
+          "attempt_id": {
+            "title": "Attempt Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "attempt_id"
+        ],
+        "title": "LearningAttemptResult",
+        "type": "object"
+      },
+      "LearningAttemptsResult": {
+        "additionalProperties": false,
+        "properties": {
+          "attempts": {
+            "items": {
+              "$ref": "#/components/schemas/OpenModel"
+            },
+            "title": "Attempts",
+            "type": "array"
+          }
+        },
+        "required": [
+          "attempts"
+        ],
+        "title": "LearningAttemptsResult",
+        "type": "object"
+      },
       "LearningAxis": {
         "additionalProperties": false,
         "properties": {
@@ -21385,6 +24434,404 @@
           "nodes"
         ],
         "title": "LearningBucketRow",
+        "type": "object"
+      },
+      "LearningCardDeleteParams": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Id"
+          },
+          "deck_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Deck Id"
+          },
+          "updated_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Updated By"
+          }
+        },
+        "title": "LearningCardDeleteParams",
+        "type": "object"
+      },
+      "LearningCardSetParams": {
+        "additionalProperties": false,
+        "properties": {
+          "deck_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Deck Id"
+          },
+          "cards": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cards"
+          },
+          "updated_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Updated By"
+          }
+        },
+        "title": "LearningCardSetParams",
+        "type": "object"
+      },
+      "LearningChangedPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "entity": {
+            "title": "Entity",
+            "type": "string"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Id"
+          },
+          "rev": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Rev"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Updated At"
+          },
+          "updated_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Updated By"
+          },
+          "deleted": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Deleted"
+          }
+        },
+        "required": [
+          "entity"
+        ],
+        "title": "LearningChangedPayload",
+        "type": "object"
+      },
+      "LearningCourseGetResult": {
+        "additionalProperties": false,
+        "properties": {
+          "course": {
+            "$ref": "#/components/schemas/OpenModel"
+          },
+          "progress": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Progress"
+          }
+        },
+        "required": [
+          "course"
+        ],
+        "title": "LearningCourseGetResult",
+        "type": "object"
+      },
+      "LearningCourseResult": {
+        "additionalProperties": false,
+        "properties": {
+          "course": {
+            "$ref": "#/components/schemas/OpenModel"
+          }
+        },
+        "required": [
+          "course"
+        ],
+        "title": "LearningCourseResult",
+        "type": "object"
+      },
+      "LearningCourseSetParams": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Id"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Title"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Summary"
+          },
+          "source_session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Source Session Id"
+          },
+          "updated_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Updated By"
+          }
+        },
+        "title": "LearningCourseSetParams",
+        "type": "object"
+      },
+      "LearningCoursesResult": {
+        "additionalProperties": false,
+        "properties": {
+          "courses": {
+            "items": {
+              "$ref": "#/components/schemas/OpenModel"
+            },
+            "title": "Courses",
+            "type": "array"
+          }
+        },
+        "required": [
+          "courses"
+        ],
+        "title": "LearningCoursesResult",
+        "type": "object"
+      },
+      "LearningDeckGetResult": {
+        "additionalProperties": false,
+        "properties": {
+          "deck": {
+            "$ref": "#/components/schemas/OpenModel"
+          },
+          "srs": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Srs"
+          }
+        },
+        "required": [
+          "deck"
+        ],
+        "title": "LearningDeckGetResult",
+        "type": "object"
+      },
+      "LearningDeckResult": {
+        "additionalProperties": false,
+        "properties": {
+          "deck": {
+            "$ref": "#/components/schemas/OpenModel"
+          }
+        },
+        "required": [
+          "deck"
+        ],
+        "title": "LearningDeckResult",
+        "type": "object"
+      },
+      "LearningDeckSetParams": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Id"
+          },
+          "topic": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Topic"
+          },
+          "updated_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Updated By"
+          }
+        },
+        "title": "LearningDeckSetParams",
+        "type": "object"
+      },
+      "LearningDecksResult": {
+        "additionalProperties": false,
+        "properties": {
+          "decks": {
+            "items": {
+              "$ref": "#/components/schemas/OpenModel"
+            },
+            "title": "Decks",
+            "type": "array"
+          }
+        },
+        "required": [
+          "decks"
+        ],
+        "title": "LearningDecksResult",
+        "type": "object"
+      },
+      "LearningDeletedResult": {
+        "additionalProperties": false,
+        "properties": {
+          "deleted": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "boolean"
+              }
+            ],
+            "title": "Deleted"
+          }
+        },
+        "required": [
+          "deleted"
+        ],
+        "title": "LearningDeletedResult",
         "type": "object"
       },
       "LearningDetailResult": {
@@ -21645,6 +25092,25 @@
         "title": "LearningFramesResult",
         "type": "object"
       },
+      "LearningIdParams": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Id"
+          }
+        },
+        "title": "LearningIdParams",
+        "type": "object"
+      },
       "LearningLegendItem": {
         "additionalProperties": false,
         "properties": {
@@ -21686,6 +25152,128 @@
           "label"
         ],
         "title": "LearningLegendItem",
+        "type": "object"
+      },
+      "LearningModuleDeleteParams": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Id"
+          },
+          "course_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Course Id"
+          },
+          "updated_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Updated By"
+          }
+        },
+        "title": "LearningModuleDeleteParams",
+        "type": "object"
+      },
+      "LearningModuleSetParams": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Id"
+          },
+          "course_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Course Id"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Title"
+          },
+          "overview": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Overview"
+          },
+          "position": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Position"
+          },
+          "updated_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Updated By"
+          }
+        },
+        "title": "LearningModuleSetParams",
         "type": "object"
       },
       "LearningMutationResult": {
@@ -21776,6 +25364,371 @@
           "style"
         ],
         "title": "LearningNodeRow",
+        "type": "object"
+      },
+      "LearningProgressParams": {
+        "additionalProperties": false,
+        "properties": {
+          "course_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Course Id"
+          },
+          "step_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Step Id"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Kind"
+          },
+          "score_percent": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Score Percent"
+          },
+          "at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "At"
+          }
+        },
+        "title": "LearningProgressParams",
+        "type": "object"
+      },
+      "LearningProgressResult": {
+        "additionalProperties": false,
+        "properties": {
+          "progress": {
+            "$ref": "#/components/schemas/OpenModel"
+          }
+        },
+        "required": [
+          "progress"
+        ],
+        "title": "LearningProgressResult",
+        "type": "object"
+      },
+      "LearningRevResult": {
+        "additionalProperties": true,
+        "properties": {
+          "rev": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Rev"
+          }
+        },
+        "title": "LearningRevResult",
+        "type": "object"
+      },
+      "LearningReviewParams": {
+        "additionalProperties": false,
+        "properties": {
+          "deck_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Deck Id"
+          },
+          "card_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Card Id"
+          },
+          "quality": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Quality"
+          },
+          "reviewed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reviewed At"
+          },
+          "state": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "State"
+          }
+        },
+        "title": "LearningReviewParams",
+        "type": "object"
+      },
+      "LearningReviewResult": {
+        "additionalProperties": false,
+        "properties": {
+          "state": {
+            "title": "State"
+          },
+          "applied": {
+            "title": "Applied",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "state",
+          "applied"
+        ],
+        "title": "LearningReviewResult",
+        "type": "object"
+      },
+      "LearningStepDeleteParams": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Id"
+          },
+          "course_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Course Id"
+          },
+          "module_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Module Id"
+          },
+          "updated_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Updated By"
+          }
+        },
+        "title": "LearningStepDeleteParams",
+        "type": "object"
+      },
+      "LearningStepSetParams": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Id"
+          },
+          "course_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Course Id"
+          },
+          "module_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Module Id"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Title"
+          },
+          "type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Type"
+          },
+          "markdown": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Markdown"
+          },
+          "questions": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Questions"
+          },
+          "append_questions": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Append Questions"
+          },
+          "position": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Position"
+          },
+          "updated_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Updated By"
+          }
+        },
+        "title": "LearningStepSetParams",
         "type": "object"
       },
       "LeaseHolder": {
@@ -24954,6 +28907,13 @@
           }
         },
         "title": "OnboardingStateParams",
+        "type": "object"
+      },
+      "OpenModel": {
+        "additionalProperties": true,
+        "description": "A result/payload row whose known fields are typed but which the producer may extend\n(the closed set is owned elsewhere: hermes_state rows, provider inventories).",
+        "properties": {},
+        "title": "OpenModel",
         "type": "object"
       },
       "OpenRequestEntry": {
@@ -31885,6 +35845,51 @@
         "title": "ProjectsUpdateParams",
         "type": "object"
       },
+      "PromptBreakdownResult": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "context_limit": {
+            "title": "Context Limit",
+            "type": "integer"
+          },
+          "total_system_tokens": {
+            "title": "Total System Tokens",
+            "type": "integer"
+          },
+          "sections": {
+            "items": {
+              "$ref": "#/components/schemas/PromptSection"
+            },
+            "title": "Sections",
+            "type": "array"
+          },
+          "tool_definitions": {
+            "$ref": "#/components/schemas/TokenCount"
+          },
+          "conversation_history": {
+            "$ref": "#/components/schemas/TokenCount"
+          }
+        },
+        "required": [
+          "session_id",
+          "model",
+          "context_limit",
+          "total_system_tokens",
+          "sections",
+          "tool_definitions",
+          "conversation_history"
+        ],
+        "title": "PromptBreakdownResult",
+        "type": "object"
+      },
       "PromptCancelParams": {
         "additionalProperties": false,
         "properties": {
@@ -32069,6 +36074,50 @@
         "title": "PromptResponseResult",
         "type": "object"
       },
+      "PromptSection": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "content_preview": {
+            "title": "Content Preview",
+            "type": "string"
+          },
+          "full_content": {
+            "title": "Full Content",
+            "type": "string"
+          },
+          "token_count": {
+            "title": "Token Count",
+            "type": "integer"
+          },
+          "char_count": {
+            "title": "Char Count",
+            "type": "integer"
+          },
+          "color": {
+            "title": "Color",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "source",
+          "content_preview",
+          "full_content",
+          "token_count",
+          "char_count",
+          "color"
+        ],
+        "title": "PromptSection",
+        "type": "object"
+      },
       "PromptSubmitParams": {
         "additionalProperties": false,
         "description": "``text`` is normally a string; the relay / hosted paths may hand a structured (parts list)\npayload, and the busy path renders it. Truncation (rewind / edit / regenerate) needs explicit\nconsent: ``confirm_truncate`` plus one durable target (``truncate_before_row_id`` preferred,\n``truncate_before_message_id``, or the legacy ``truncate_before_user_ordinal``).",
@@ -32164,6 +36213,18 @@
             ],
             "default": null,
             "title": "Voice Turn"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Mode"
           },
           "title_preview": {
             "anyOf": [
@@ -32569,6 +36630,135 @@
           "used_percent"
         ],
         "title": "ProviderUsageWindow",
+        "type": "object"
+      },
+      "PushRegisterParams": {
+        "additionalProperties": false,
+        "properties": {
+          "token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Token"
+          },
+          "platform": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Platform"
+          },
+          "device_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Device Name"
+          },
+          "bundle_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Bundle Id"
+          }
+        },
+        "title": "PushRegisterParams",
+        "type": "object"
+      },
+      "PushRegisterResult": {
+        "additionalProperties": false,
+        "properties": {
+          "registered": {
+            "title": "Registered",
+            "type": "boolean"
+          },
+          "apns_configured": {
+            "title": "Apns Configured",
+            "type": "boolean"
+          },
+          "entry": {
+            "$ref": "#/components/schemas/OpenModel"
+          }
+        },
+        "required": [
+          "registered",
+          "apns_configured",
+          "entry"
+        ],
+        "title": "PushRegisterResult",
+        "type": "object"
+      },
+      "PushUnregisterParams": {
+        "additionalProperties": false,
+        "properties": {
+          "token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Token"
+          }
+        },
+        "title": "PushUnregisterParams",
+        "type": "object"
+      },
+      "PushUnregisterResult": {
+        "additionalProperties": false,
+        "properties": {
+          "removed": {
+            "title": "Removed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "removed"
+        ],
+        "title": "PushUnregisterResult",
+        "type": "object"
+      },
+      "QueryHandlerInfo": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "params": {
+            "title": "Params"
+          }
+        },
+        "required": [
+          "name",
+          "params"
+        ],
+        "title": "QueryHandlerInfo",
         "type": "object"
       },
       "QueuedPrompt": {
@@ -34741,6 +38931,244 @@
           "role"
         ],
         "title": "SeedMessage",
+        "type": "object"
+      },
+      "ServiceDeploymentsProbeParams": {
+        "additionalProperties": false,
+        "properties": {
+          "service": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Service"
+          },
+          "deployment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Deployment"
+          }
+        },
+        "title": "ServiceDeploymentsProbeParams",
+        "type": "object"
+      },
+      "ServiceDeploymentsResult": {
+        "additionalProperties": false,
+        "properties": {
+          "service": {
+            "title": "Service",
+            "type": "string"
+          },
+          "deployments": {
+            "items": {
+              "$ref": "#/components/schemas/OpenModel"
+            },
+            "title": "Deployments",
+            "type": "array"
+          }
+        },
+        "required": [
+          "service",
+          "deployments"
+        ],
+        "title": "ServiceDeploymentsResult",
+        "type": "object"
+      },
+      "ServiceLogsFollowParams": {
+        "additionalProperties": false,
+        "properties": {
+          "service": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Service"
+          },
+          "sink": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Sink"
+          },
+          "lines": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Lines"
+          },
+          "cursor": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cursor"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Enabled"
+          }
+        },
+        "title": "ServiceLogsFollowParams",
+        "type": "object"
+      },
+      "ServiceLogsFollowResult": {
+        "additionalProperties": false,
+        "properties": {
+          "service": {
+            "title": "Service",
+            "type": "string"
+          },
+          "following": {
+            "title": "Following",
+            "type": "boolean"
+          },
+          "sink": {
+            "title": "Sink",
+            "type": "string"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cursor"
+          },
+          "stopped": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Stopped"
+          }
+        },
+        "required": [
+          "service",
+          "following",
+          "sink"
+        ],
+        "title": "ServiceLogsFollowResult",
+        "type": "object"
+      },
+      "ServiceLogsParams": {
+        "additionalProperties": false,
+        "properties": {
+          "service": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Service"
+          },
+          "sink": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Sink"
+          },
+          "lines": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Lines"
+          },
+          "cursor": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cursor"
+          }
+        },
+        "title": "ServiceLogsParams",
+        "type": "object"
+      },
+      "ServiceParams": {
+        "additionalProperties": false,
+        "properties": {
+          "service": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Service"
+          }
+        },
+        "title": "ServiceParams",
         "type": "object"
       },
       "SessionActivateParams": {
@@ -38799,6 +43227,60 @@
         "title": "SessionStatusResult",
         "type": "object"
       },
+      "SessionTimelineResult": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/TimelineEvent"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "total_duration_seconds": {
+            "title": "Total Duration Seconds",
+            "type": "number"
+          },
+          "tool_calls": {
+            "title": "Tool Calls",
+            "type": "integer"
+          },
+          "input_tokens": {
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "title": "Output Tokens",
+            "type": "integer"
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cost Usd"
+          }
+        },
+        "required": [
+          "session_id",
+          "events",
+          "total_duration_seconds",
+          "tool_calls",
+          "input_tokens",
+          "output_tokens"
+        ],
+        "title": "SessionTimelineResult",
+        "type": "object"
+      },
       "SessionTitleParams": {
         "additionalProperties": false,
         "properties": {
@@ -39611,6 +44093,58 @@
           "cwd"
         ],
         "title": "SessionWorkspaceMoveResult",
+        "type": "object"
+      },
+      "SetPromptParams": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Prompt"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "title": "SetPromptParams",
+        "type": "object"
+      },
+      "SetPromptResult": {
+        "additionalProperties": false,
+        "properties": {
+          "prompt": {
+            "title": "Prompt",
+            "type": "string"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "title": "SetPromptResult",
         "type": "object"
       },
       "SetupBeat": {
@@ -41095,6 +45629,34 @@
         "title": "SkillCommandRef",
         "type": "object"
       },
+      "SkillFileResult": {
+        "additionalProperties": false,
+        "properties": {
+          "skill": {
+            "$ref": "#/components/schemas/OpenModel"
+          },
+          "file_path": {
+            "title": "File Path",
+            "type": "string"
+          },
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "read_only": {
+            "title": "Read Only",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "skill",
+          "file_path",
+          "content",
+          "read_only"
+        ],
+        "title": "SkillFileResult",
+        "type": "object"
+      },
       "SkillHubHit": {
         "additionalProperties": false,
         "properties": {
@@ -41207,6 +45769,37 @@
         ],
         "title": "SkillsAction",
         "type": "string"
+      },
+      "SkillsGetParams": {
+        "additionalProperties": false,
+        "properties": {
+          "skill_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Skill Id"
+          },
+          "file_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "File Path"
+          }
+        },
+        "title": "SkillsGetParams",
+        "type": "object"
       },
       "SkillsManageParams": {
         "additionalProperties": false,
@@ -41482,6 +46075,50 @@
           "result"
         ],
         "title": "SkillsReloadResult",
+        "type": "object"
+      },
+      "SkillsUpdateParams": {
+        "additionalProperties": false,
+        "properties": {
+          "skill_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Skill Id"
+          },
+          "content": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Content"
+          }
+        },
+        "title": "SkillsUpdateParams",
+        "type": "object"
+      },
+      "SkillsUpdateResult": {
+        "additionalProperties": false,
+        "properties": {
+          "skill": {
+            "$ref": "#/components/schemas/OpenModel"
+          }
+        },
+        "required": [
+          "skill"
+        ],
+        "title": "SkillsUpdateResult",
         "type": "object"
       },
       "SkinPayload": {
@@ -43484,6 +48121,42 @@
         "title": "SudoRequestParams",
         "type": "object"
       },
+      "SurfaceCapabilities": {
+        "additionalProperties": false,
+        "description": "Fork (harness): one feature area's RPC method and event names.",
+        "properties": {
+          "methods": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Methods",
+            "type": "array"
+          },
+          "events": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "contract": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Contract"
+          }
+        },
+        "required": [
+          "methods",
+          "events"
+        ],
+        "title": "SurfaceCapabilities",
+        "type": "object"
+      },
       "SystemBatteryParams": {
         "additionalProperties": false,
         "properties": {
@@ -43817,6 +48490,35 @@
         "title": "ThemeValues",
         "type": "object"
       },
+      "TimelineEvent": {
+        "additionalProperties": true,
+        "properties": {
+          "type": {
+            "title": "Type",
+            "type": "string"
+          },
+          "timestamp": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timestamp"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "title": "TimelineEvent",
+        "type": "object"
+      },
       "TipShowPayload": {
         "additionalProperties": false,
         "description": "``tools/tip_tool.py``.",
@@ -43904,6 +48606,44 @@
           "revision"
         ],
         "title": "TodoUpdatedPayload",
+        "type": "object"
+      },
+      "TokenCount": {
+        "additionalProperties": false,
+        "properties": {
+          "token_count": {
+            "title": "Token Count",
+            "type": "integer"
+          },
+          "count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Count"
+          },
+          "message_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Message Count"
+          }
+        },
+        "required": [
+          "token_count"
+        ],
+        "title": "TokenCount",
         "type": "object"
       },
       "ToolCompletePayload": {
@@ -47393,6 +52133,605 @@
         "title": "WakeStopResult",
         "type": "object"
       },
+      "WikiChangesetDiffParams": {
+        "additionalProperties": false,
+        "properties": {
+          "wiki": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Wiki"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Id"
+          }
+        },
+        "title": "WikiChangesetDiffParams",
+        "type": "object"
+      },
+      "WikiChangesetDiffResult": {
+        "additionalProperties": true,
+        "properties": {
+          "diff": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Diff"
+          },
+          "changeset": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OpenModel"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "title": "WikiChangesetDiffResult",
+        "type": "object"
+      },
+      "WikiChangesetsParams": {
+        "additionalProperties": false,
+        "properties": {
+          "wiki": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Wiki"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Page"
+          },
+          "action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Action"
+          },
+          "trigger": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Trigger"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Limit"
+          },
+          "offset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Offset"
+          },
+          "since": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Since"
+          },
+          "until": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Until"
+          }
+        },
+        "title": "WikiChangesetsParams",
+        "type": "object"
+      },
+      "WikiEventsParams": {
+        "additionalProperties": false,
+        "properties": {
+          "wiki": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Wiki"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Kind"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Limit"
+          },
+          "offset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Offset"
+          },
+          "since": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Since"
+          },
+          "until": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Until"
+          }
+        },
+        "title": "WikiEventsParams",
+        "type": "object"
+      },
+      "WikiExpandLinksParams": {
+        "additionalProperties": false,
+        "properties": {
+          "wiki": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Wiki"
+          },
+          "slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Slug"
+          }
+        },
+        "title": "WikiExpandLinksParams",
+        "type": "object"
+      },
+      "WikiGlossaryUpdateParams": {
+        "additionalProperties": false,
+        "properties": {
+          "wiki": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Wiki"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Version"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Mode"
+          },
+          "proper_nouns": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Proper Nouns"
+          },
+          "if_match": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "If Match"
+          }
+        },
+        "title": "WikiGlossaryUpdateParams",
+        "type": "object"
+      },
+      "WikiGraphResult": {
+        "additionalProperties": true,
+        "properties": {
+          "pages": {
+            "items": {
+              "$ref": "#/components/schemas/OpenModel"
+            },
+            "title": "Pages",
+            "type": "array"
+          },
+          "links": {
+            "items": {
+              "$ref": "#/components/schemas/OpenModel"
+            },
+            "title": "Links",
+            "type": "array"
+          }
+        },
+        "required": [
+          "pages",
+          "links"
+        ],
+        "title": "WikiGraphResult",
+        "type": "object"
+      },
+      "WikiListResult": {
+        "additionalProperties": false,
+        "properties": {
+          "wikis": {
+            "items": {
+              "$ref": "#/components/schemas/OpenModel"
+            },
+            "title": "Wikis",
+            "type": "array"
+          }
+        },
+        "required": [
+          "wikis"
+        ],
+        "title": "WikiListResult",
+        "type": "object"
+      },
+      "WikiPageParams": {
+        "additionalProperties": false,
+        "properties": {
+          "wiki": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Wiki"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Path"
+          }
+        },
+        "title": "WikiPageParams",
+        "type": "object"
+      },
+      "WikiParams": {
+        "additionalProperties": false,
+        "properties": {
+          "wiki": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Wiki"
+          }
+        },
+        "title": "WikiParams",
+        "type": "object"
+      },
+      "WikiScanParams": {
+        "additionalProperties": false,
+        "properties": {
+          "wiki": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Wiki"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Path"
+          }
+        },
+        "title": "WikiScanParams",
+        "type": "object"
+      },
+      "WikiTaxonomyResult": {
+        "additionalProperties": false,
+        "properties": {
+          "taxonomy": {
+            "title": "Taxonomy"
+          },
+          "flat_paths": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Flat Paths",
+            "type": "array"
+          }
+        },
+        "required": [
+          "taxonomy",
+          "flat_paths"
+        ],
+        "title": "WikiTaxonomyResult",
+        "type": "object"
+      },
+      "WikiUpdateParams": {
+        "additionalProperties": false,
+        "properties": {
+          "wiki": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Wiki"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Path"
+          },
+          "body": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Body"
+          },
+          "frontmatter": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Frontmatter"
+          },
+          "if_match": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "If Match"
+          },
+          "force": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Force"
+          },
+          "trigger": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Trigger"
+          },
+          "source_events": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Source Events"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Summary"
+          }
+        },
+        "title": "WikiUpdateParams",
+        "type": "object"
+      },
       "WorkerExecution": {
         "additionalProperties": true,
         "description": "A ``worker_executions`` row without its adoption digest.",
@@ -48849,6 +54188,30 @@
       ]
     },
     {
+      "name": "architecture.changed",
+      "summary": "A service's model gained a revision (snapshot) or a check finished.",
+      "params": [
+        {
+          "name": "payload",
+          "schema": {
+            "$ref": "#/components/schemas/ArchitectureChangedPayload"
+          }
+        }
+      ]
+    },
+    {
+      "name": "artifact.changed",
+      "summary": "An artifact was written, acted on or deleted.",
+      "params": [
+        {
+          "name": "payload",
+          "schema": {
+            "$ref": "#/components/schemas/ArtifactChangedPayload"
+          }
+        }
+      ]
+    },
+    {
       "name": "background.complete",
       "summary": "A /background side agent finished.",
       "params": [
@@ -49024,6 +54387,18 @@
           "name": "payload",
           "schema": {
             "$ref": "#/components/schemas/GatewayReadyPayload"
+          }
+        }
+      ]
+    },
+    {
+      "name": "learning.changed",
+      "summary": "A course, deck, progress record or attempt changed.",
+      "params": [
+        {
+          "name": "payload",
+          "schema": {
+            "$ref": "#/components/schemas/LearningChangedPayload"
           }
         }
       ]

@@ -1170,7 +1170,12 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
             # ghost entry if the interpreter cannot start another thread.
             reader.start()
             self._running[session.id] = session
-        self._write_checkpoint()
+        try:
+            self._write_checkpoint(strict=True)
+        except Exception:
+            with self._lock:
+                self._running.pop(session.id, None)
+            raise
 
     def _spawn_local_pty(self, session: ProcessSession, safe_command: str, env_vars: dict) -> ProcessSession:
         """PTY spawn for interactive CLI tools (Codex, Claude Code, REPLs).
@@ -1223,6 +1228,15 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
             except ImportError:
                 logger.warning("ptyprocess not installed, falling back to pipe mode")
             except Exception as e:
+                if session._pty is not None:
+                    # The PTY already runs the command: falling back would execute it twice.
+                    with suppress(Exception):
+                        session._pty.terminate(force=True)
+                    session._pty = None
+                    with self._lock:
+                        self._running.pop(session.id, None)
+                    self._write_checkpoint()
+                    raise
                 logger.warning("PTY spawn failed (%s), falling back to pipe mode", e)
                 if session.systemd_unit:
                     pty_scope_attempted = True
@@ -2484,7 +2498,7 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
                 raise ValueError(f"service process {session_id!r} is not running")
             session.service_health_evidence = dict(health_evidence)
             session.service_lease_state = "active"
-        self._write_checkpoint()
+        self._write_checkpoint(strict=True)
 
     def collect_service_declarations(self, *, probe_health: bool = True) -> list:
         """Live long-running SERVICES for the cron interflow graph.
