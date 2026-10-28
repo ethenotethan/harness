@@ -273,6 +273,7 @@ def:
         `learning` tool the agent uses to build them, and a pre-rendered journey timeline for
         the TUI.
       globs:
+        - "hermes_cli/tools_config.py"
         - "tui_gateway/learning_store.py"
         - "tui_gateway/methods_learning.py"
         - "tools/learning_tool.py"
