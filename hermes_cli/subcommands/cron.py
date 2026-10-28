@@ -197,16 +197,15 @@ def build_cron_parser(subparsers, *, cmd_cron: Callable) -> None:
     cron_notepad.add_argument("key", nargs="?", help="Notepad key (get/set/delete)")
     cron_notepad.add_argument("value", nargs="?", help="Value to store (set)")
 
-    cron_subparsers.add_parser("doctor", help="Check scheduled jobs for common health issues")
+    # Fork (harness): doctor also sweeps the store for dataflow inconsistencies (dangling
+    # cron-output inputs, dependency cycles, malformed resource refs); see cron.cron_doctor.
+    cron_subparsers.add_parser(
+        "doctor",
+        help="Check scheduled jobs for common health issues and the store for dataflow inconsistencies",
+    )
 
     cron_tick = cron_subparsers.add_parser("tick", help="Run due jobs once and exit")
 
-    # cron doctor — store-wide dataflow consistency sweep (CI / drift check)
-    cron_subparsers.add_parser(
-        "doctor",
-        help="Check the cron store for dataflow inconsistencies (dangling "
-        "cron-output inputs, dependency cycles, malformed resource refs)",
-    )
     add_accept_hooks_flag(cron_tick)
     add_accept_hooks_flag(cron_parser)
     cron_parser.set_defaults(func=cmd_cron)
