@@ -82,7 +82,11 @@ def test_generated_file_rpc_kwargs_correlation_and_authority(tmp_path, monkeypat
             assert not (rpc / f"res_{seq:06d}").exists()
         assert seen == [] and counter == [0]
         for name, args in CALLS.items():
-            blocked = {"background", "heartbeat", "pty", "notify", "notify_on_complete", "watch_patterns", "persist_on_release"} if name == "terminal" else set()
+            # Fork (harness): service declarations only apply to tracked background processes,
+            # so the execute_code terminal stub leaves them out like the other background-only params.
+            blocked = {"background", "heartbeat", "pty", "notify", "notify_on_complete", "watch_patterns", "persist_on_release",
+                       "service_name", "service_description", "service_inputs", "service_outputs", "service_side_effects",
+                       "service_relationships", "service_source_files", "service_health", "service_code_control"} if name == "terminal" else set()
             schema_keys = set(registry.get_entry(name).schema["parameters"]["properties"]) - blocked
             assert schema_keys <= set(args), (name, schema_keys - set(args))
             assert namespace[name](**args) == {"name": name, "args": args}

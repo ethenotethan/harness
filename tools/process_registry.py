@@ -1171,7 +1171,7 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
             reader.start()
             self._running[session.id] = session
         try:
-            self._write_checkpoint(strict=True)
+            self._commit_checkpoint()
         except Exception:
             with self._lock:
                 self._running.pop(session.id, None)
@@ -2498,7 +2498,7 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
                 raise ValueError(f"service process {session_id!r} is not running")
             session.service_health_evidence = dict(health_evidence)
             session.service_lease_state = "active"
-        self._write_checkpoint(strict=True)
+        self._commit_checkpoint()
 
     def collect_service_declarations(self, *, probe_health: bool = True) -> list:
         """Live long-running SERVICES for the cron interflow graph.

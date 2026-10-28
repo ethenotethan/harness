@@ -116,7 +116,7 @@ def _parse_labels_to_declaration(
 def _default_runner(args: List[str]) -> str:
     """Run a read-only docker command and return stdout (raises on failure)."""
     return subprocess.check_output(
-        args, text=True, stderr=subprocess.DEVNULL, timeout=5
+        args, text=True, stdin=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5
     )
 
 

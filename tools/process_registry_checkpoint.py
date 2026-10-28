@@ -1,6 +1,7 @@
 """Running-process checkpoint persistence and PID-safe recovery."""
 
 import json
+import threading
 import logging
 import time
 from typing import Any, Dict, List, Optional
@@ -10,6 +11,9 @@ from agent.redact import redact_sensitive_text
 logger = logging.getLogger("tools.process_registry")
 
 
+_STRICT_CHECKPOINT = threading.local()
+
+
 class ProcessCheckpointMixin:
     def _detached_host_fate(self, pid: Optional[int], expected_start: Optional[int]) -> str:
         """Subclass supplies the live PID decision. See ProcessRegistry."""
@@ -17,47 +21,61 @@ class ProcessCheckpointMixin:
 
     # ----- Checkpoint (crash recovery) -----
 
-    def _write_checkpoint(self, extra_entries: Optional[list[dict[str, Any]]] = None, *, strict: bool = False):
-        """Write running process metadata to the checkpoint file atomically. ``strict`` turns a failed
-        write into ``RuntimeError`` so a spawn can roll back instead of running a process the next
-        gateway could never recover (fork: a service lease is only real once it is durable)."""
-        from tools.process_registry import _checkpoint_path, _CHECKPOINT_FIELDS
-
+    def _write_checkpoint(self, extra_entries: Optional[list[dict[str, Any]]] = None):
+        """Write running process metadata to the checkpoint file atomically. A failed write is logged,
+        except inside ``_commit_checkpoint`` where it raises; this stays the one seam tests stub."""
         try:
-            with self._lock:
-                entries = []
-                for s in self._running.values():
-                    if s.exited:
-                        continue
-                    # Backfill the start time so recovery can detect PID recycling
-                    # even for sessions spawned before this field existed.
-                    if s.host_start_time is None and s.pid_scope == "host" and s.pid:
-                        s.host_start_time = self._safe_host_start_time(s.pid)
-                    entry = {"session_id": s.id, **{f: getattr(s, f) for f in _CHECKPOINT_FIELDS}}
-                    # Redact inline credentials before persisting (~/.hermes/processes.json).
-                    # Recovery uses command only for display (adoption re-validates the
-                    # PID, never re-runs it), so masking is lossless.
-                    # See #77484.
-                    entry["command"] = redact_sensitive_text(s.command, code_file=True)
-                    entry["owner_task_id"] = s.owner_task_id or s.task_id
-                    entries.append(entry)
-                if extra_entries:
-                    tracked_ids = {item.get("session_id") for item in entries}
-                    entries.extend(item for item in extra_entries if item.get("session_id") not in tracked_ids)
-                known = {*self._running, *self._finished}
-            from hermes_cli.active_sessions import _FileLock
-            from utils import atomic_json_write
-            path = _checkpoint_path()
-            # Every interpreter of the profile (owner, each managed worker) rewrites this file from
-            # its own table; a worker's output-log handoff is its only path to the next one, so a
-            # writer keeps the handoffs it does not track (read-merge-write under one file lock).
-            with _FileLock(path.with_name(path.name + ".lock")):
-                entries.extend(self._foreign_handoffs(path, known))
-                atomic_json_write(path, entries)
+            self._persist_checkpoint(extra_entries)
         except Exception as e:
             logger.debug("Failed to write checkpoint file: %s", e, exc_info=True)
-            if strict:
+            if getattr(_STRICT_CHECKPOINT, "active", False):
                 raise RuntimeError("process registry checkpoint commit failed") from e
+
+    def _commit_checkpoint(self) -> None:
+        """Fork (harness): the durable half of a spawn. A write that cannot commit raises so the caller
+        rolls the session back instead of running a process the next gateway could never recover
+        (a service lease is only real once it is on disk). Routed through ``_write_checkpoint`` so a
+        test that stubs the writer neutralises the commit too; the strict marker is thread-local
+        because reader threads write the same file concurrently."""
+        _STRICT_CHECKPOINT.active = True
+        try:
+            self._write_checkpoint()
+        finally:
+            _STRICT_CHECKPOINT.active = False
+
+    def _persist_checkpoint(self, extra_entries: Optional[list[dict[str, Any]]]) -> None:
+        from tools.process_registry import _checkpoint_path, _CHECKPOINT_FIELDS
+
+        with self._lock:
+            entries = []
+            for s in self._running.values():
+                if s.exited:
+                    continue
+                # Backfill the start time so recovery can detect PID recycling
+                # even for sessions spawned before this field existed.
+                if s.host_start_time is None and s.pid_scope == "host" and s.pid:
+                    s.host_start_time = self._safe_host_start_time(s.pid)
+                entry = {"session_id": s.id, **{f: getattr(s, f) for f in _CHECKPOINT_FIELDS}}
+                # Redact inline credentials before persisting (~/.hermes/processes.json).
+                # Recovery uses command only for display (adoption re-validates the
+                # PID, never re-runs it), so masking is lossless.
+                # See #77484.
+                entry["command"] = redact_sensitive_text(s.command, code_file=True)
+                entry["owner_task_id"] = s.owner_task_id or s.task_id
+                entries.append(entry)
+            if extra_entries:
+                tracked_ids = {item.get("session_id") for item in entries}
+                entries.extend(item for item in extra_entries if item.get("session_id") not in tracked_ids)
+            known = {*self._running, *self._finished}
+        from hermes_cli.active_sessions import _FileLock
+        from utils import atomic_json_write
+        path = _checkpoint_path()
+        # Every interpreter of the profile (owner, each managed worker) rewrites this file from
+        # its own table; a worker's output-log handoff is its only path to the next one, so a
+        # writer keeps the handoffs it does not track (read-merge-write under one file lock).
+        with _FileLock(path.with_name(path.name + ".lock")):
+            entries.extend(self._foreign_handoffs(path, known))
+            atomic_json_write(path, entries)
 
     def _foreign_handoffs(self, path, known) -> list[dict[str, Any]]:
         """On-disk worker handoffs this registry never tracked whose log still decides an outcome:

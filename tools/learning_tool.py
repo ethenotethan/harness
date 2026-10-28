@@ -263,8 +263,8 @@ def _emit_changed(entity: str, payload: dict) -> None:
 LEARNING_SCHEMA = {
     "name": "learning",
     "description": (
-        "Build and maintain the user's LEARNING LIBRARY: courses (modules of "
-        "lessons and quizzes) and flashcard decks, persisted on the gateway "
+        "Build and maintain the user's learning library of courses and flashcard decks. "
+        "Courses are modules of lessons and quizzes; everything is persisted on the gateway "
         "and streamed live to the user's client. Use this whenever the user "
         "wants to be TAUGHT a subject (\"teach me X\", \"build me a course on "
         "X\") or wants flashcards.\n\n"
