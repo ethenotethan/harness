@@ -1800,6 +1800,20 @@ class TestEndpointAuth:
             )
             assert resp.status == 401
 
+    def test_websocket_auth_accepts_query_fallback(self, auth_adapter):
+        request = MagicMock()
+        request.query = {"api_key": "sk-secret"}
+        request.headers = {}
+        assert auth_adapter._check_ws_auth(request) is None
+
+    def test_websocket_auth_rejects_wrong_query_key(self, auth_adapter):
+        request = MagicMock()
+        request.query = {"api_key": "wrong"}
+        request.headers = {}
+        response = auth_adapter._check_ws_auth(request)
+        assert response is not None
+        assert response.status == 401
+
 
 # ---------------------------------------------------------------------------
 # Config integration
