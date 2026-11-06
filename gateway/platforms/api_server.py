@@ -1855,6 +1855,16 @@ class APIServerAdapter(BasePlatformAdapter):
             status=401,
         )
 
+    def _check_ws_auth(self, request: "web.Request") -> Optional["web.Response"]:
+        """Authenticate a WebSocket upgrade with an Apple-client fallback."""
+        expected_key = self._expected_api_key()
+        query_key = request.query.get("api_key", "")
+        if expected_key and query_key and hmac.compare_digest(
+            query_key.encode(), expected_key.encode()
+        ):
+            return None
+        return self._check_auth(request)
+
     @staticmethod
     def _normalize_callback_platform(value: str) -> str:
         normalized = (value or "").strip().lower().replace("-", "_")
@@ -7116,8 +7126,9 @@ class APIServerAdapter(BasePlatformAdapter):
 
         # Auth check must happen BEFORE ws.prepare() so we can return a normal
         # HTTP response on failure. Once prepare() is called the connection is
-        # upgraded and we can only close the socket.
-        auth_err = self._check_auth(request)
+        # upgraded and we can only close the socket. Apple native WebSocket
+        # clients may omit Authorization, so this path also supports api_key.
+        auth_err = self._check_ws_auth(request)
         if auth_err:
             return auth_err
 
