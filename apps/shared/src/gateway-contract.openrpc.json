@@ -241,6 +241,24 @@
       }
     },
     {
+      "name": "artifact.categorize",
+      "summary": "File an artifact under a category (empty = uncategorized); metadata only, no revision.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ArtifactCategorizeParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ArtifactResult"
+        }
+      }
+    },
+    {
       "name": "artifact.delete",
       "summary": "Remove an artifact and its revisions; emits artifact.changed with deleted=true.",
       "params": [
@@ -7208,6 +7226,37 @@
         "title": "ArtifactActionResult",
         "type": "object"
       },
+      "ArtifactCategorizeParams": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Id"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Category"
+          }
+        },
+        "title": "ArtifactCategorizeParams",
+        "type": "object"
+      },
       "ArtifactChangedPayload": {
         "additionalProperties": false,
         "properties": {
@@ -7286,6 +7335,18 @@
             ],
             "default": null,
             "title": "Deleted"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Category"
           }
         },
         "required": [
@@ -7689,6 +7750,18 @@
             ],
             "default": null,
             "title": "Queries"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Category"
           }
         },
         "title": "ArtifactSetParams",
@@ -54201,7 +54274,7 @@
     },
     {
       "name": "artifact.changed",
-      "summary": "An artifact was written, acted on or deleted.",
+      "summary": "An artifact was written, acted on, filed or deleted.",
       "params": [
         {
           "name": "payload",

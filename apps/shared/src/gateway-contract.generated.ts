@@ -2066,12 +2066,17 @@ export interface ArtifactSetParams {
   replace?: boolean | null
   actions?: unknown[] | null
   queries?: unknown[] | null
+  category?: string | null
 }
 export interface ArtifactResult {
   artifact: OpenModel
 }
 export interface ArtifactIdParams {
   id?: string | null
+}
+export interface ArtifactCategorizeParams {
+  id?: string | null
+  category?: string | null
 }
 export interface ArtifactListResult {
   artifacts: OpenModel[]
@@ -6544,6 +6549,7 @@ export interface ArtifactChangedPayload {
   updated_at?: string | null
   updated_by?: string | null
   deleted?: boolean | null
+  category?: string | null
 }
 export interface LearningChangedPayload {
   entity: string
@@ -6583,6 +6589,8 @@ export interface RpcMethods {
   'artifact.action.invoke': { params: ArtifactActionInvokeParams; result: ArtifactActionResult }
   /** The invocation ledger for an artifact, newest first. */
   'artifact.action.log': { params: ArtifactActionLogParams; result: ArtifactActionLogResult }
+  /** File an artifact under a category (empty = uncategorized); metadata only, no revision. */
+  'artifact.categorize': { params: ArtifactCategorizeParams; result: ArtifactResult }
   /** Remove an artifact and its revisions; emits artifact.changed with deleted=true. */
   'artifact.delete': { params: ArtifactIdParams; result: ArtifactDeletedResult }
   /** One artifact with content. */
@@ -7225,6 +7233,7 @@ export const RPC_METHODS = [
   'artifact.action.confirm',
   'artifact.action.invoke',
   'artifact.action.log',
+  'artifact.categorize',
   'artifact.delete',
   'artifact.get',
   'artifact.list',
@@ -7738,7 +7747,7 @@ export interface BackendGatewayEventMap {
   'approval.cancelled': ApprovalCancelledPayload
   /** A service's model gained a revision (snapshot) or a check finished. */
   'architecture.changed': ArchitectureChangedPayload
-  /** An artifact was written, acted on or deleted. */
+  /** An artifact was written, acted on, filed or deleted. */
   'artifact.changed': ArtifactChangedPayload
   /** A /background side agent finished. */
   'background.complete': SideAgentCompletePayload

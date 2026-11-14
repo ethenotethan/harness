@@ -10,9 +10,14 @@ Storage:
   ~/.hermes/artifacts/revisions/<id>.json revision history per artifact
 
 Surface (see server.py):
-  artifact.set / get / list / delete / revisions / revision RPCs, plus an
-  `artifact.changed` gateway event on every mutation so clients stream
-  updates without polling.
+  artifact.set / get / list / delete / revisions / revision / categorize
+  RPCs, plus an `artifact.changed` gateway event on every mutation so
+  clients stream updates without polling.
+
+Categories: an artifact may carry one `category` — the folder a client
+files it under. It is metadata, not content: filing an artifact never
+appends a revision, bumps `rev`, or touches `updated_at`, so the history
+stays an audit of what the artifact SAID rather than where it sat.
 
 Merge semantics live HERE (server-side) so every writer converges the same
 way: `map` artifacts union markers by label (incoming wins conflicts);
@@ -35,6 +40,7 @@ from hermes_constants import get_hermes_home
 MAX_ARTIFACTS = 200
 MAX_CONTENT_BYTES = 512 * 1024
 MAX_REVISIONS = 50
+MAX_CATEGORY_CHARS = 64
 _ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$")
 
 _lock = threading.Lock()
@@ -80,6 +86,41 @@ def _write_json(path: Path, payload) -> None:
         except OSError:
             pass
         raise
+
+
+# ── Categories ───────────────────────────────────────────────────────────
+
+
+def normalize_category(value) -> str:
+    """The stored form of a category name: surrounding whitespace dropped,
+    inner runs collapsed to one space. "" means uncategorized. Raises
+    ValueError for a name no client could show as a folder label."""
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ValueError("category must be a string")
+    name = " ".join(value.split())
+    if len(name) > MAX_CATEGORY_CHARS:
+        raise ValueError(f"category exceeds {MAX_CATEGORY_CHARS} chars")
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in name):
+        raise ValueError("category must not contain control characters")
+    return name
+
+
+def _resolve_category(index: dict, value, skip_id: str = "") -> str:
+    """Normalize, then adopt the spelling an existing folder already uses, so
+    "research" files next to "Research" instead of beside it."""
+    name = normalize_category(value)
+    if not name:
+        return ""
+    folded = name.casefold()
+    for other_id, artifact in index.items():
+        if other_id == skip_id:
+            continue
+        existing = artifact.get("category") or ""
+        if existing and existing.casefold() == folded:
+            return existing
+    return name
 
 
 # ── Merge ────────────────────────────────────────────────────────────────
@@ -257,6 +298,7 @@ def set_artifact(
     replace: bool = False,
     actions: Optional[list] = None,
     queries: Optional[list] = None,
+    category: Optional[str] = None,
 ) -> dict:
     """Upsert an artifact, merging per kind unless replace=True; appends a
     revision. Returns the stored artifact dict (the merged state).
@@ -271,6 +313,9 @@ def set_artifact(
     Shape-checked here so a declaration that can never resolve is refused at
     write time rather than dead-buttoning the page; carried forward like
     ``actions``.
+
+    ``category`` files the artifact in a folder: None carries the stored
+    category forward, "" clears it.
     """
     artifact_id = (artifact_id or "").strip()
     kind = (kind or "").strip().lower()
@@ -298,6 +343,10 @@ def set_artifact(
         # Carry existing actions forward when the caller doesn't supply new ones.
         stored_actions = actions if actions is not None else (existing or {}).get("actions")
         stored_queries = queries if queries is not None else (existing or {}).get("queries")
+        if category is None:
+            stored_category = (existing or {}).get("category") or ""
+        else:
+            stored_category = _resolve_category(index, category, skip_id=artifact_id)
 
         revisions = _read_json(_revisions_file(artifact_id), [])
         rev = (revisions[-1]["rev"] + 1) if revisions else 1
@@ -315,6 +364,8 @@ def set_artifact(
             stored["actions"] = stored_actions
         if stored_queries is not None:
             stored["queries"] = stored_queries
+        if stored_category:
+            stored["category"] = stored_category
 
         index[artifact_id] = stored
         _write_json(_index_file(), index)
@@ -331,6 +382,45 @@ def set_artifact(
             revisions = revisions[-MAX_REVISIONS:]
         _write_json(_revisions_file(artifact_id), revisions)
         return stored
+
+
+def set_category(artifact_id: str, category: Optional[str]) -> Optional[dict]:
+    """File an artifact under ``category`` ("" or None = uncategorized).
+
+    Metadata only — no revision, no ``rev`` bump, ``updated_at`` untouched.
+    Returns the stored artifact, or None when the id is unknown. Raises
+    ValueError on an invalid category name.
+    """
+    artifact_id = (artifact_id or "").strip()
+    with _lock:
+        index = _read_json(_index_file(), {})
+        stored = index.get(artifact_id)
+        if stored is None:
+            return None
+        name = _resolve_category(index, category, skip_id=artifact_id)
+        if (stored.get("category") or "") == name:
+            return stored
+        if name:
+            stored["category"] = name
+        else:
+            stored.pop("category", None)
+        _write_json(_index_file(), index)
+        return stored
+
+
+def list_categories() -> list[dict]:
+    """Every category in use with its artifact count, sorted by name."""
+    with _lock:
+        index = _read_json(_index_file(), {})
+    counts: dict[str, int] = {}
+    for artifact in index.values():
+        name = artifact.get("category") or ""
+        if name:
+            counts[name] = counts.get(name, 0) + 1
+    return [
+        {"name": name, "count": counts[name]}
+        for name in sorted(counts, key=str.casefold)
+    ]
 
 
 def get_artifact(artifact_id: str) -> Optional[dict]:

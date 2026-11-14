@@ -284,6 +284,7 @@ class ArtifactSetParams(ArtifactIdParams):
     replace: bool | None = None
     actions: list[JsonValue] | None = None
     queries: list[JsonValue] | None = None
+    category: str | None = None
 
 
 class ArtifactResult(Result):
@@ -293,6 +294,14 @@ class ArtifactResult(Result):
 method("artifact.set", params=ArtifactSetParams, result=ArtifactResult,
        doc="Upsert a living artifact; appends a revision and emits artifact.changed.")
 method("artifact.get", params=ArtifactIdParams, result=ArtifactResult, doc="One artifact with content.")
+
+
+class ArtifactCategorizeParams(ArtifactIdParams):
+    category: str | None = None
+
+
+method("artifact.categorize", params=ArtifactCategorizeParams, result=ArtifactResult,
+       doc="File an artifact under a category (empty = uncategorized); metadata only, no revision.")
 
 
 class ArtifactListResult(Result):
@@ -847,9 +856,12 @@ class ArtifactChangedPayload(Payload):
     updated_at: str | None = None
     updated_by: str | None = None
     deleted: bool | None = None
+    # The folder the artifact is filed under ("" = uncategorized). Filing does
+    # not move `rev`, so a client reads the new category from here.
+    category: str | None = None
 
 
-event("artifact.changed", ArtifactChangedPayload, doc="An artifact was written, acted on or deleted.")
+event("artifact.changed", ArtifactChangedPayload, doc="An artifact was written, acted on, filed or deleted.")
 
 
 class LearningChangedPayload(Payload):

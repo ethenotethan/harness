@@ -16,13 +16,15 @@ the prior state and overwriting history.
 Actions:
   list                       -> id/kind/title/updated summaries
   get    {id}                -> full artifact incl. content
-  set    {id, kind, content, title?, replace?} -> upsert (merge per kind)
+  set    {id, kind, content, title?, replace?, category?} -> upsert (merge per kind)
+  categorize {id, category}  -> file under a folder ("" = unfile); no revision
   delete {id}
   revisions {id}             -> audit trail (who/when/rev)
 """
 
 import json
 import logging
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +41,7 @@ def artifact_tool(
     actions: str = "",
     queries: str = "",
     session_id: str = "",
+    category: Optional[str] = None,
 ) -> str:
     """Execute an artifact action against the shared store.
 
@@ -51,7 +54,7 @@ def artifact_tool(
         _artifact_tool_impl(
             action, id=id, kind=kind, content=content,
             title=title, replace=replace, actions=actions,
-            queries=queries, session_id=session_id,
+            queries=queries, session_id=session_id, category=category,
         ),
         ensure_ascii=False,
         default=str,
@@ -68,6 +71,7 @@ def _artifact_tool_impl(
     actions: str = "",
     queries: str = "",
     session_id: str = "",
+    category: Optional[str] = None,
 ) -> dict:
     from tui_gateway import artifact_store
 
@@ -133,8 +137,17 @@ def _artifact_tool_impl(
                 replace=bool(replace),
                 actions=parsed_actions,
                 queries=parsed_queries,
+                category=category,
             )
             _emit_changed(stored)
+            summary = {k: v for k, v in stored.items() if k != "content"}
+            return {"success": True, "artifact": summary}
+
+        if action == "categorize":
+            stored = artifact_store.set_category(id, category or "")
+            if stored is None:
+                return {"success": False, "error": f"artifact not found: {id!r}"}
+            _emit_changed({**stored, "category": stored.get("category", "")})
             summary = {k: v for k, v in stored.items() if k != "content"}
             return {"success": True, "artifact": summary}
 
@@ -166,7 +179,7 @@ def _emit_changed(payload: dict) -> None:
 
         event = {
             key: payload[key]
-            for key in ("id", "kind", "title", "rev", "updated_at", "updated_by", "deleted")
+            for key in ("id", "kind", "title", "rev", "updated_at", "updated_by", "deleted", "category")
             if key in payload
         }
         _emit("artifact.changed", "", event)
@@ -192,7 +205,12 @@ ARTIFACT_SCHEMA = {
         "by label and `dataset` kind merges rows by the declared key field, so "
         "for those you may set only new/changed entries; every other kind "
         "replaces content wholesale, so write back the complete updated body. "
-        "Use `list` to discover what exists. `model` kind is the ensemble "
+        "Use `list` to discover what exists. Artifacts may be filed under a "
+        "`category` — the folder the user browses them by in their client. "
+        "`list` shows each artifact's category; when creating an artifact that "
+        "belongs with existing ones, reuse that exact category rather than "
+        "coining a near-duplicate, and use `categorize` to file or move one "
+        "without rewriting it (it adds no revision). `model` kind is the ensemble "
         "artifact: named entity sets ({\"entities\": {name: {\"key\", \"items\"}}}), "
         "relations ([{\"from\": \"set/key\", \"to\": \"set/key\", \"type\"}]), and "
         "stacked views (map/table/graph/chart/stats/markdown/kanban) the client "
@@ -222,7 +240,7 @@ ARTIFACT_SCHEMA = {
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["list", "get", "set", "delete", "revisions"],
+                "enum": ["list", "get", "set", "categorize", "delete", "revisions"],
             },
             "id": {
                 "type": "string",
@@ -238,6 +256,15 @@ ARTIFACT_SCHEMA = {
                 "description": "The artifact body — same format as the fenced block of that kind",
             },
             "title": {"type": "string", "description": "Human display name"},
+            "category": {
+                "type": "string",
+                "description": (
+                    "Folder the artifact is filed under in the user's client, "
+                    "e.g. 'Research', 'Travel' (max 64 chars). On `set`, omit "
+                    "to keep the current category; on `categorize`, an empty "
+                    "string unfiles it."
+                ),
+            },
             "replace": {
                 "type": "boolean",
                 "description": "Skip per-kind merge and overwrite outright (default false)",
@@ -305,6 +332,8 @@ registry.register(
         actions=str(args.get("actions", "") or ""),
         queries=str(args.get("queries", "") or ""),
         session_id=str(kw.get("session_id", "") or ""),
+        # None (omitted) keeps the stored category; "" is a deliberate unfile.
+        category=args.get("category") if isinstance(args.get("category"), str) else None,
     ),
     emoji="🗂️",
 )
