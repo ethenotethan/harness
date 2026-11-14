@@ -234,6 +234,10 @@ def:
         merge; plus *intents* — actions a rendered artifact can invoke on the backend.
       sub:
         - title: "Artifact store and tool"
+          description: |
+            Each artifact may carry one `category`, the folder clients group it under.
+            `artifact.categorize` (and the tool's `categorize` action) files it as metadata:
+            no revision, `rev` and `updated_at` unchanged.
           globs:
             - "tui_gateway/artifact_store.py"
             - "tools/artifact_tool.py"
