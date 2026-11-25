@@ -387,6 +387,7 @@ def:
         holds every other request on the socket.
       globs:
         - "gateway/platforms/api_server.py"
+        - "tests/gateway/test_api_server.py"
         - "tests/gateway/test_api_server_ws_concurrency.py"
         - "website/docs/developer-guide/api/websocket.md"
     - title: "Agent guidance and prompt assembly"
