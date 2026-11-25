@@ -2119,6 +2119,40 @@ export interface ArtifactActionLogParams {
 export interface ArtifactActionLogResult {
   records: OpenModel[]
 }
+export interface ArtifactCommentAddParams {
+  artifact_id?: string | null
+  body?: string | null
+  author?: string | null
+  anchor?: ArtifactCommentAnchor | null
+  artifact_rev?: number | null
+}
+/** Where a pin sits on the rendered artifact. */
+export interface ArtifactCommentAnchor {
+  selector?: string | null
+  x?: number | null
+  y?: number | null
+  text?: string | null
+}
+export interface ArtifactCommentResult {
+  comment: OpenModel
+}
+export interface ArtifactCommentListParams {
+  artifact_id?: string | null
+  include_resolved?: boolean | null
+}
+export interface ArtifactCommentListResult {
+  comments: OpenModel[]
+}
+export interface ArtifactCommentResolveParams {
+  artifact_id?: string | null
+  comment_id?: string | null
+  resolved?: boolean | null
+  resolved_by?: string | null
+}
+export interface ArtifactCommentDeleteParams {
+  artifact_id?: string | null
+  comment_id?: string | null
+}
 export interface ArtifactQueryInvokeParams {
   artifact_id?: string | null
   artifact_rev?: number | null
@@ -6551,6 +6585,12 @@ export interface ArtifactChangedPayload {
   deleted?: boolean | null
   category?: string | null
 }
+export interface ArtifactCommentChangedPayload {
+  artifact_id: string
+  comment_id: string
+  change: string
+  open: number
+}
 export interface LearningChangedPayload {
   entity: string
   id?: string | null
@@ -6591,6 +6631,14 @@ export interface RpcMethods {
   'artifact.action.log': { params: ArtifactActionLogParams; result: ArtifactActionLogResult }
   /** File an artifact under a category (empty = uncategorized); metadata only, no revision. */
   'artifact.categorize': { params: ArtifactCategorizeParams; result: ArtifactResult }
+  /** Pin a reader's comment to an artifact; metadata only, no revision. */
+  'artifact.comment.add': { params: ArtifactCommentAddParams; result: ArtifactCommentResult }
+  /** Remove one comment for good. */
+  'artifact.comment.delete': { params: ArtifactCommentDeleteParams; result: ArtifactDeletedResult }
+  /** An artifact's comments, oldest first. */
+  'artifact.comment.list': { params: ArtifactCommentListParams; result: ArtifactCommentListResult }
+  /** Mark a comment addressed, or reopen it with resolved=false. */
+  'artifact.comment.resolve': { params: ArtifactCommentResolveParams; result: ArtifactCommentResult }
   /** Remove an artifact and its revisions; emits artifact.changed with deleted=true. */
   'artifact.delete': { params: ArtifactIdParams; result: ArtifactDeletedResult }
   /** One artifact with content. */
@@ -7234,6 +7282,10 @@ export const RPC_METHODS = [
   'artifact.action.invoke',
   'artifact.action.log',
   'artifact.categorize',
+  'artifact.comment.add',
+  'artifact.comment.delete',
+  'artifact.comment.list',
+  'artifact.comment.resolve',
   'artifact.delete',
   'artifact.get',
   'artifact.list',
@@ -7749,6 +7801,8 @@ export interface BackendGatewayEventMap {
   'architecture.changed': ArchitectureChangedPayload
   /** An artifact was written, acted on, filed or deleted. */
   'artifact.changed': ArtifactChangedPayload
+  /** A comment on an artifact was added, resolved, reopened or deleted. */
+  'artifact.comment.changed': ArtifactCommentChangedPayload
   /** A /background side agent finished. */
   'background.complete': SideAgentCompletePayload
   /** Device-flow URL + code for the billing scope step-up; the client opens the browser. */
@@ -7909,6 +7963,7 @@ export const GATEWAY_EVENT_TYPES = [
   'approval.cancelled',
   'architecture.changed',
   'artifact.changed',
+  'artifact.comment.changed',
   'background.complete',
   'billing.step_up.verification',
   'bot_relay.outbox.pending',

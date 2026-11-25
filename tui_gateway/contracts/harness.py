@@ -380,6 +380,68 @@ method("artifact.action.log", params=ArtifactActionLogParams, result=ArtifactAct
        doc="The invocation ledger for an artifact, newest first.")
 
 
+class ArtifactCommentAnchor(Params):
+    """Where a pin sits on the rendered artifact."""
+
+    # CSS path to the element the reader pinned.
+    selector: str | None = None
+    # The pin's position as fractions (0-1) of that element's box.
+    x: float | None = None
+    y: float | None = None
+    # What the element showed, so the pin can be found again after an edit.
+    text: str | None = None
+
+
+class ArtifactCommentAddParams(Params):
+    artifact_id: str | None = None
+    body: str | None = None
+    author: str | None = None
+    anchor: ArtifactCommentAnchor | None = None
+    # The revision the reader was looking at; omitted = the current one.
+    artifact_rev: int | None = None
+
+
+class ArtifactCommentResult(Result):
+    comment: OpenModel
+
+
+method("artifact.comment.add", params=ArtifactCommentAddParams, result=ArtifactCommentResult,
+       doc="Pin a reader's comment to an artifact; metadata only, no revision.")
+
+
+class ArtifactCommentListParams(Params):
+    artifact_id: str | None = None
+    include_resolved: bool | None = None
+
+
+class ArtifactCommentListResult(Result):
+    comments: list[OpenModel]
+
+
+method("artifact.comment.list", params=ArtifactCommentListParams, result=ArtifactCommentListResult,
+       doc="An artifact's comments, oldest first.")
+
+
+class ArtifactCommentResolveParams(Params):
+    artifact_id: str | None = None
+    comment_id: str | None = None
+    resolved: bool | None = None
+    resolved_by: str | None = None
+
+
+method("artifact.comment.resolve", params=ArtifactCommentResolveParams, result=ArtifactCommentResult,
+       doc="Mark a comment addressed, or reopen it with resolved=false.")
+
+
+class ArtifactCommentDeleteParams(Params):
+    artifact_id: str | None = None
+    comment_id: str | None = None
+
+
+method("artifact.comment.delete", params=ArtifactCommentDeleteParams, result=ArtifactDeletedResult,
+       doc="Remove one comment for good.")
+
+
 class ArtifactQueryParams(Params):
     artifact_id: str | None = None
     artifact_rev: int | None = None
@@ -862,6 +924,19 @@ class ArtifactChangedPayload(Payload):
 
 
 event("artifact.changed", ArtifactChangedPayload, doc="An artifact was written, acted on, filed or deleted.")
+
+
+class ArtifactCommentChangedPayload(Payload):
+    artifact_id: str
+    comment_id: str
+    # added | resolved | reopened | deleted
+    change: str
+    # Open comments left on the artifact after the change.
+    open: int
+
+
+event("artifact.comment.changed", ArtifactCommentChangedPayload,
+      doc="A comment on an artifact was added, resolved, reopened or deleted.")
 
 
 class LearningChangedPayload(Payload):
