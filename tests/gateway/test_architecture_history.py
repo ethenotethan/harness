@@ -262,5 +262,5 @@ def test_capabilities_and_pool_advertise_diff():
     assert capabilities.count('"architecture.diff"') == 2, "the methods list and capability_names"
     server = open("tui_gateway/server.py", encoding="utf-8").read()
     assert '"architecture.diff",' in server
-    docs = open("docs/api/architecture.md", encoding="utf-8").read()
+    docs = open("website/docs/developer-guide/api/architecture.md", encoding="utf-8").read()
     assert "`architecture.diff`" in docs and "## Revision history" in docs

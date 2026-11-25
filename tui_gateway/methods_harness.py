@@ -42,7 +42,7 @@ def _find_local_skill_md(skill_name: str) -> Optional[Path]:
     frontmatter ``name`` field matches *skill_name*.  Returns the
     absolute Path or None.
     """
-    import yaml
+    from hermes_yaml import safe_load
 
     skills_dir = Path(get_hermes_home()) / "skills"
     if not skills_dir.is_dir():
@@ -59,7 +59,7 @@ def _find_local_skill_md(skill_name: str) -> Optional[Path]:
         if end == -1:
             continue
         try:
-            fm = yaml.safe_load(raw[3:end])
+            fm = safe_load(raw[3:end])
         except Exception:
             continue
         if isinstance(fm, dict) and fm.get("name") == skill_name:
@@ -69,7 +69,7 @@ def _find_local_skill_md(skill_name: str) -> Optional[Path]:
 
 def _parse_skill_frontmatter(content: str) -> dict[str, Any]:
     """Parse YAML frontmatter from a SKILL.md string."""
-    import yaml
+    from hermes_yaml import safe_load
 
     if not content.startswith("---"):
         return {}
@@ -77,7 +77,7 @@ def _parse_skill_frontmatter(content: str) -> dict[str, Any]:
     if end == -1:
         return {}
     try:
-        return yaml.safe_load(content[3:end]) or {}
+        return safe_load(content[3:end]) or {}
     except Exception:
         return {}
 
@@ -759,6 +759,7 @@ def _(rid, params: dict) -> dict:
             replace=bool(params.get("replace", False)),
             actions=actions,
             queries=queries,
+            category=params.get("category"),
         )
         # A new revision may have changed what the page's queries mean; let
         # subscribed slots re-run now rather than at their next tick.
@@ -769,12 +770,41 @@ def _(rid, params: dict) -> dict:
             "title": stored["title"], "rev": stored["rev"],
             "updated_at": stored["updated_at"],
             "updated_by": stored["updated_by"],
+            "category": stored.get("category", ""),
         })
         return _ok(rid, {"artifact": stored})
     except ValueError as e:
         return _err(rid, 4001, str(e))
     except Exception as e:
         logger.exception("artifact.set failed")
+        return _err(rid, 5210, str(e))
+
+@method("artifact.categorize")
+def _(rid, params: dict) -> dict:
+    """File an artifact under a category — the folder clients group it in
+    (empty/omitted = uncategorized). Metadata only: no revision is appended
+    and `rev` does not move, so `artifact.changed` carries the category
+    itself for clients whose rev guard would otherwise skip the refetch."""
+    try:
+        from tui_gateway.artifact_store import set_category
+
+        stored = set_category(str(params.get("id", "")), params.get("category"))
+        if stored is None:
+            return _err(rid, 4004, "artifact not found")
+        _emit("artifact.changed", "", {
+            "id": stored["id"], "kind": stored.get("kind", ""),
+            "title": stored.get("title", ""), "rev": stored.get("rev", 0),
+            "updated_at": stored.get("updated_at", ""),
+            "updated_by": stored.get("updated_by", ""),
+            "category": stored.get("category", ""),
+        })
+        return _ok(rid, {
+            "artifact": {key: value for key, value in stored.items() if key != "content"}
+        })
+    except ValueError as e:
+        return _err(rid, 4001, str(e))
+    except Exception as e:
+        logger.exception("artifact.categorize failed")
         return _err(rid, 5210, str(e))
 
 @method("artifact.get")
@@ -1116,8 +1146,10 @@ def _(rid, params: dict) -> dict:
     # client can decode a served document knowing its major (additive, not a
     # reshape of capability_names).
     from tui_gateway.architecture_contract import describe_contract
+    from hermes_cli.active_sessions import PER_SESSION_EXCLUSIVE_SUBMIT
 
     return _ok(rid, {
+        "per_session_exclusive_submit": bool(PER_SESSION_EXCLUSIVE_SUBMIT),
         "gateway_version": version,
         "architecture": {
             "methods": ["architecture.list", "architecture.describe", "architecture.check", "architecture.history", "architecture.diff"],
@@ -1125,7 +1157,7 @@ def _(rid, params: dict) -> dict:
             "contract": describe_contract(),
         },
         # Logs are a property of the running service (any graph service id), not of
-        # its architecture: their own namespace. See docs/api/service-logs.md.
+        # its architecture: their own namespace. See website/docs/developer-guide/api/service-logs.md.
         "service": {
             "methods": ["service.logs", "service.logs.follow", "service.deployments", "service.deployments.probe"],
             "events": ["service.log"],
@@ -1137,6 +1169,7 @@ def _(rid, params: dict) -> dict:
             "artifact.delete",
             "artifact.revisions",
             "artifact.revision",
+            "artifact.categorize",
             "artifact.action",
             "artifact.action.invoke",
             "artifact.action.confirm",

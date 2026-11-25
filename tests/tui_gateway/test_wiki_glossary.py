@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 import pytest
-import yaml
+from hermes_yaml import safe_dump
 
 from tui_gateway import server, wiki_glossary as glossary_module
 from tui_gateway.wiki_glossary import (
@@ -30,7 +30,7 @@ def _configure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, P
     other.mkdir()
     home.mkdir()
     (home / "wikis.yaml").write_text(
-        yaml.safe_dump(
+        safe_dump(
             {
                 "default": "primary",
                 "wikis": {"primary": str(primary), "other": str(other)},
@@ -159,7 +159,7 @@ def test_normalize_glossary_enforces_resource_bounds(
 def test_malformed_or_ambiguous_present_glossary_fails_closed(
     tmp_path: Path, payload: dict
 ) -> None:
-    (tmp_path / "glossary.yaml").write_text(yaml.safe_dump(payload), encoding="utf-8")
+    (tmp_path / "glossary.yaml").write_text(safe_dump(payload), encoding="utf-8")
     with pytest.raises(GlossaryValidationError):
         load_glossary(tmp_path)
 
@@ -322,7 +322,7 @@ def test_rpc_rejects_missing_default_without_fallback(
     _configure(monkeypatch, tmp_path)
     home = Path(str(tmp_path / "home"))
     (home / "wikis.yaml").write_text(
-        yaml.safe_dump({"wikis": {"primary": str(tmp_path / "primary")}}),
+        safe_dump({"wikis": {"primary": str(tmp_path / "primary")}}),
         encoding="utf-8",
     )
     monkeypatch.setenv("WIKI_PATH", str(tmp_path / "forbidden-fallback"))

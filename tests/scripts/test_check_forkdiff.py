@@ -8,12 +8,13 @@ network or on this checkout's history.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
-import yaml
+from hermes_yaml import safe_dump
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 
@@ -65,7 +66,7 @@ def _write_fork_yaml(repo: Path, base: str, globs: list[str], ignore: list[str] 
         "def": {"title": "f", "sub": [{"title": "wiki", "globs": globs}]},
         "ignore": ignore or ["fork.yaml"],
     }
-    (repo / "fork.yaml").write_text(yaml.safe_dump(spec), encoding="utf-8")
+    (repo / "fork.yaml").write_text(safe_dump(spec), encoding="utf-8")
 
 
 class TestGlobs:
@@ -135,7 +136,7 @@ class TestEndToEnd:
         out = capsys.readouterr().out
         assert rc == 1
         assert "tests/test_wiki.py" in out
-        payload = yaml.safe_load(status.read_text())
+        payload = json.loads(status.read_text())
         assert payload[0]["results"][0]["kind"] == "action_required"
         assert "tests/test_wiki.py" in payload[0]["results"][0]["detail"]
 

@@ -66,8 +66,8 @@ def check_feed_requirements() -> bool:
 FEED_PUBLISH_SCHEMA = {
     "name": "feed_publish",
     "description": (
-        "Publish curated articles to the user's news feed (the feed the "
-        "HermesNative app shows). Use this to deliver a recurring topic digest "
+        "Publish curated articles to the user's news feed. "
+        "The feed is what the HermesNative app shows; use this to deliver a recurring topic digest "
         "as a browsable, deduped feed instead of a one-off chat message — it is "
         "the write side of the feed the client reads.\n\n"
         "Articles are deduped against what was already published for the same "

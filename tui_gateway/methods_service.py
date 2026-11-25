@@ -5,11 +5,11 @@ Its logs: ``service.logs`` tails or continues one of a service's log sinks and
 ``service`` param is a graph service id (``arch:<id>``, ``deploy:<id>/<env>``,
 ``launchd:<label>``, ``docker:<12>``, ``nomad:<job>``, ``proc_<id>``); sinks
 resolve per provider in ``tui_gateway/service_logs.py``, and only those paths
-and declared commands are ever read or run. Docs: docs/api/service-logs.md.
+and declared commands are ever read or run. Docs: website/docs/developer-guide/api/service-logs.md.
 
 Its deployments: ``service.deployments`` lists a manifest's declared deployments
 with their last known health and revision; ``service.deployments.probe`` runs
-the declared probes now. Docs: docs/api/architecture.md (Deployments).
+the declared probes now. Docs: website/docs/developer-guide/api/architecture.md (Deployments).
 """
 from __future__ import annotations
 

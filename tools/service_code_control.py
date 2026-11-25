@@ -61,6 +61,7 @@ def _run_git(source_root: Path, *args: str) -> str:
         return subprocess.check_output(
             ["git", "-C", str(source_root), *args],
             text=True,
+            stdin=subprocess.DEVNULL,
             stderr=subprocess.STDOUT,
             timeout=30,
         ).strip()
@@ -121,6 +122,7 @@ def verify_service_code_control(
                 policy["revision"], "FETCH_HEAD",
             ],
             check=True,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             text=True,

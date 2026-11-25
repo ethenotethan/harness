@@ -93,15 +93,11 @@ class TestServiceDeclarationSurvivesRestart:
         pty_module = MagicMock()
         pty_module.PtyProcess.spawn.return_value = pty_process
 
-        def checkpoint(*, strict=False):
-            if strict:
-                raise RuntimeError("checkpoint failed")
-
         with (
             patch.dict("sys.modules", {"ptyprocess": pty_module}),
             patch("tools.process_registry._find_shell", return_value="/bin/bash"),
             patch("subprocess.Popen") as pipe_spawn,
-            patch.object(registry, "_write_checkpoint", side_effect=checkpoint),
+            patch.object(registry, "_commit_checkpoint", side_effect=RuntimeError("checkpoint failed")),
         ):
             with pytest.raises(RuntimeError, match="checkpoint failed"):
                 registry.spawn_local("side-effecting-command", use_pty=True)

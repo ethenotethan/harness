@@ -377,3 +377,82 @@ def test_model_merge_entity_sets_relations_tombstones(artifact_home):
     rels = body["relations"]
     assert len(rels) == 2                            # triple-deduped
     assert any(r.get("note") == "8 min" for r in rels)  # incoming wins field-wise
+
+
+def test_category_is_carried_forward_and_cleared(artifact_home):
+    from tui_gateway import artifact_store as store
+
+    first = store.set_artifact("notes", "markdown", "# v1", category="  Deep   Research ")
+    assert first["category"] == "Deep Research"  # whitespace normalized
+
+    second = store.set_artifact("notes", "markdown", "# v2")
+    assert second["category"] == "Deep Research"  # omitted = carried forward
+
+    cleared = store.set_artifact("notes", "markdown", "# v3", category="")
+    assert "category" not in cleared
+
+    summaries = store.list_artifacts()
+    assert "category" not in summaries[0]
+
+
+def test_categorize_is_metadata_only(artifact_home):
+    from tui_gateway import artifact_store as store
+
+    created = store.set_artifact("trip", "markdown", "# Lisbon")
+    filed = store.set_category("trip", "Travel")
+    assert filed["category"] == "Travel"
+    assert filed["rev"] == created["rev"]
+    assert filed["updated_at"] == created["updated_at"]
+    assert [r["rev"] for r in store.list_revisions("trip")] == [1]  # no new revision
+    assert store.list_artifacts()[0]["category"] == "Travel"  # list summaries carry it
+
+    unfiled = store.set_category("trip", "")
+    assert "category" not in unfiled
+    assert store.set_category("missing", "Travel") is None
+
+
+def test_category_adopts_existing_spelling_and_validates(artifact_home):
+    from tui_gateway import artifact_store as store
+
+    store.set_artifact("a", "markdown", "a", category="Research")
+    store.set_artifact("b", "markdown", "b", category="research")
+    store.set_artifact("c", "markdown", "c")
+    store.set_category("c", "RESEARCH")
+    assert store.list_categories() == [{"name": "Research", "count": 3}]
+
+    # The only member of a folder may respell it.
+    store.set_artifact("solo", "markdown", "s", category="travel")
+    assert store.set_category("solo", "Travel")["category"] == "Travel"
+
+    with pytest.raises(ValueError):
+        store.set_category("a", "x" * 65)
+    with pytest.raises(ValueError):
+        store.set_category("a", "bad\x07name")
+    with pytest.raises(ValueError):
+        store.set_artifact("a", "markdown", "a", category=7)
+
+
+def test_agent_tool_category_surface(artifact_home):
+    from tools.artifact_tool import artifact_tool
+
+    made = json.loads(artifact_tool(
+        "set", id="plan", kind="markdown", content="# plan", category="Work"
+    ))
+    assert made["artifact"]["category"] == "Work"
+
+    kept = json.loads(artifact_tool("set", id="plan", kind="markdown", content="# plan v2"))
+    assert kept["artifact"]["category"] == "Work"
+
+    moved = json.loads(artifact_tool("categorize", id="plan", category="Personal"))
+    assert moved["success"] and moved["artifact"]["category"] == "Personal"
+    assert moved["artifact"]["rev"] == kept["artifact"]["rev"]
+    assert "content" not in moved["artifact"]
+
+    listed = json.loads(artifact_tool("list"))
+    assert listed["artifacts"][0]["category"] == "Personal"
+
+    unfiled = json.loads(artifact_tool("categorize", id="plan", category=""))
+    assert "category" not in unfiled["artifact"]
+
+    missing = json.loads(artifact_tool("categorize", id="nope", category="Work"))
+    assert missing["success"] is False
