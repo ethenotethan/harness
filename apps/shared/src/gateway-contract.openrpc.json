@@ -259,6 +259,78 @@
       }
     },
     {
+      "name": "artifact.comment.add",
+      "summary": "Pin a reader's comment to an artifact; metadata only, no revision.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ArtifactCommentAddParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ArtifactCommentResult"
+        }
+      }
+    },
+    {
+      "name": "artifact.comment.delete",
+      "summary": "Remove one comment for good.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ArtifactCommentDeleteParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ArtifactDeletedResult"
+        }
+      }
+    },
+    {
+      "name": "artifact.comment.list",
+      "summary": "An artifact's comments, oldest first.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ArtifactCommentListParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ArtifactCommentListResult"
+        }
+      }
+    },
+    {
+      "name": "artifact.comment.resolve",
+      "summary": "Mark a comment addressed, or reopen it with resolved=false.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ArtifactCommentResolveParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ArtifactCommentResult"
+        }
+      }
+    },
+    {
       "name": "artifact.delete",
       "summary": "Remove an artifact and its revisions; emits artifact.changed with deleted=true.",
       "params": [
@@ -7353,6 +7425,304 @@
           "id"
         ],
         "title": "ArtifactChangedPayload",
+        "type": "object"
+      },
+      "ArtifactCommentAddParams": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Artifact Id"
+          },
+          "body": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Body"
+          },
+          "author": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Author"
+          },
+          "anchor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ArtifactCommentAnchor"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "artifact_rev": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Artifact Rev"
+          }
+        },
+        "title": "ArtifactCommentAddParams",
+        "type": "object"
+      },
+      "ArtifactCommentAnchor": {
+        "additionalProperties": false,
+        "description": "Where a pin sits on the rendered artifact.",
+        "properties": {
+          "selector": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Selector"
+          },
+          "x": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "X"
+          },
+          "y": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Y"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Text"
+          }
+        },
+        "title": "ArtifactCommentAnchor",
+        "type": "object"
+      },
+      "ArtifactCommentChangedPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_id": {
+            "title": "Artifact Id",
+            "type": "string"
+          },
+          "comment_id": {
+            "title": "Comment Id",
+            "type": "string"
+          },
+          "change": {
+            "title": "Change",
+            "type": "string"
+          },
+          "open": {
+            "title": "Open",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "artifact_id",
+          "comment_id",
+          "change",
+          "open"
+        ],
+        "title": "ArtifactCommentChangedPayload",
+        "type": "object"
+      },
+      "ArtifactCommentDeleteParams": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Artifact Id"
+          },
+          "comment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Comment Id"
+          }
+        },
+        "title": "ArtifactCommentDeleteParams",
+        "type": "object"
+      },
+      "ArtifactCommentListParams": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Artifact Id"
+          },
+          "include_resolved": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Include Resolved"
+          }
+        },
+        "title": "ArtifactCommentListParams",
+        "type": "object"
+      },
+      "ArtifactCommentListResult": {
+        "additionalProperties": false,
+        "properties": {
+          "comments": {
+            "items": {
+              "$ref": "#/components/schemas/OpenModel"
+            },
+            "title": "Comments",
+            "type": "array"
+          }
+        },
+        "required": [
+          "comments"
+        ],
+        "title": "ArtifactCommentListResult",
+        "type": "object"
+      },
+      "ArtifactCommentResolveParams": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Artifact Id"
+          },
+          "comment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Comment Id"
+          },
+          "resolved": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Resolved"
+          },
+          "resolved_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Resolved By"
+          }
+        },
+        "title": "ArtifactCommentResolveParams",
+        "type": "object"
+      },
+      "ArtifactCommentResult": {
+        "additionalProperties": false,
+        "properties": {
+          "comment": {
+            "$ref": "#/components/schemas/OpenModel"
+          }
+        },
+        "required": [
+          "comment"
+        ],
+        "title": "ArtifactCommentResult",
         "type": "object"
       },
       "ArtifactDeletedResult": {
@@ -54280,6 +54650,18 @@
           "name": "payload",
           "schema": {
             "$ref": "#/components/schemas/ArtifactChangedPayload"
+          }
+        }
+      ]
+    },
+    {
+      "name": "artifact.comment.changed",
+      "summary": "A comment on an artifact was added, resolved, reopened or deleted.",
+      "params": [
+        {
+          "name": "payload",
+          "schema": {
+            "$ref": "#/components/schemas/ArtifactCommentChangedPayload"
           }
         }
       ]

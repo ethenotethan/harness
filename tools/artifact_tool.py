@@ -42,6 +42,7 @@ def artifact_tool(
     queries: str = "",
     session_id: str = "",
     category: Optional[str] = None,
+    comment_id: str = "",
 ) -> str:
     """Execute an artifact action against the shared store.
 
@@ -55,6 +56,7 @@ def artifact_tool(
             action, id=id, kind=kind, content=content,
             title=title, replace=replace, actions=actions,
             queries=queries, session_id=session_id, category=category,
+            comment_id=comment_id,
         ),
         ensure_ascii=False,
         default=str,
@@ -72,8 +74,9 @@ def _artifact_tool_impl(
     queries: str = "",
     session_id: str = "",
     category: Optional[str] = None,
+    comment_id: str = "",
 ) -> dict:
-    from tui_gateway import artifact_store
+    from tui_gateway import artifact_comments, artifact_store
 
     action = (action or "").strip().lower()
     try:
@@ -84,7 +87,31 @@ def _artifact_tool_impl(
             artifact = artifact_store.get_artifact(id)
             if artifact is None:
                 return {"success": False, "error": f"artifact not found: {id!r}"}
-            return {"success": True, "artifact": artifact}
+            result = {"success": True, "artifact": artifact}
+            # Surfaced on the read every write starts with, so the user's
+            # notes are seen before the content they are about is replaced.
+            open_comments = artifact_comments.open_comment_count(id)
+            if open_comments:
+                result["open_comments"] = open_comments
+            return result
+
+        if action == "comments":
+            if artifact_store.get_artifact(id) is None:
+                return {"success": False, "error": f"artifact not found: {id!r}"}
+            return {
+                "success": True,
+                "comments": artifact_comments.list_comments(id, include_resolved=False),
+            }
+
+        if action == "resolve_comment":
+            comment = artifact_comments.resolve_comment(
+                id, comment_id,
+                resolved_by=f"agent:{session_id}" if session_id else "agent",
+            )
+            if comment is None:
+                return {"success": False, "error": f"comment not found: {comment_id!r}"}
+            _emit_comment_changed(id, comment_id, "resolved")
+            return {"success": True, "comment": comment}
 
         if action == "set":
             normalized_kind = (kind or "").strip().lower()
@@ -187,6 +214,20 @@ def _emit_changed(payload: dict) -> None:
         pass
 
 
+def _emit_comment_changed(artifact_id: str, comment_id: str, change: str) -> None:
+    """Best-effort, for the same reason as _emit_changed."""
+    try:
+        from tui_gateway.artifact_comments import open_comment_count
+        from tui_gateway.server import _emit
+
+        _emit("artifact.comment.changed", "", {
+            "artifact_id": artifact_id, "comment_id": comment_id,
+            "change": change, "open": open_comment_count(artifact_id),
+        })
+    except Exception:
+        pass
+
+
 # =============================================================================
 # OpenAI Function-Calling Schema
 # =============================================================================
@@ -233,14 +274,21 @@ ARTIFACT_SCHEMA = {
         "(e.g. rows with \"status\": \"going\", markers with \"reached_out\": "
         "true). Entries with `_deleted: true` are tombstones the user removed: "
         "the merge preserves them even if you re-emit the entry — NEVER strip "
-        "or set `_deleted` yourself unless the user explicitly asks."
+        "or set `_deleted` yourself unless the user explicitly asks.\n\n"
+        "USER COMMENTS: the user can pin comments anywhere on a rendered "
+        "artifact. `get` reports `open_comments` when there are any; "
+        "`comments` returns them, each with its `body`, the `anchor` it was "
+        "pinned to (a CSS `selector` and the `text` that element showed) and "
+        "the `rev` it was written against. Read them before editing, treat "
+        "each as the user's guidance about that spot, and call "
+        "`resolve_comment` with its `comment_id` once the artifact reflects it."
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["list", "get", "set", "categorize", "delete", "revisions"],
+                "enum": ["list", "get", "set", "categorize", "delete", "revisions", "comments", "resolve_comment"],
             },
             "id": {
                 "type": "string",
@@ -256,6 +304,10 @@ ARTIFACT_SCHEMA = {
                 "description": "The artifact body — same format as the fenced block of that kind",
             },
             "title": {"type": "string", "description": "Human display name"},
+            "comment_id": {
+                "type": "string",
+                "description": "Id of the user comment to mark addressed (resolve_comment)",
+            },
             "category": {
                 "type": "string",
                 "description": (
@@ -334,6 +386,7 @@ registry.register(
         session_id=str(kw.get("session_id", "") or ""),
         # None (omitted) keeps the stored category; "" is a deliberate unfile.
         category=args.get("category") if isinstance(args.get("category"), str) else None,
+        comment_id=str(args.get("comment_id", "") or ""),
     ),
     emoji="🗂️",
 )
