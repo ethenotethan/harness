@@ -1461,6 +1461,16 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         logger.warning("API server rejected invalid API key: %s", self._request_audit_log_suffix(request))
         return self._auth_failed_response()
 
+    def _check_ws_auth(self, request: "web.Request") -> Optional["web.Response"]:
+        """Authenticate a WebSocket upgrade with an Apple-client fallback."""
+        expected_key = self._expected_api_key()
+        query_key = request.query.get("api_key", "")
+        if expected_key and query_key and hmac.compare_digest(
+            query_key.encode(), expected_key.encode()
+        ):
+            return None
+        return self._check_auth(request)
+
     @staticmethod
     def _normalize_callback_platform(value: str) -> str:
         normalized = (value or "").strip().lower().replace("-", "_")
@@ -3939,10 +3949,11 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         if WebSocketResponse is None or WSMsgType is None:
             raise web.HTTPNotImplemented(text="WebSocket support unavailable")
 
-        # Auth check must happen BEFORE ws.prepare() so we can return a normal HTTP
-        # response on failure. Once prepare() is called the connection is upgraded and
-        # we can only close the socket.
-        auth_err = self._check_auth(request)
+        # Auth check must happen BEFORE ws.prepare() so we can return a normal
+        # HTTP response on failure. Once prepare() is called the connection is
+        # upgraded and we can only close the socket. Apple native WebSocket
+        # clients may omit Authorization, so this path also supports api_key.
+        auth_err = self._check_ws_auth(request)
         if auth_err:
             return auth_err
 
