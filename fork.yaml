@@ -272,6 +272,19 @@ def:
             - "website/docs/developer-guide/plugins/postgres_queries/postgres_queries.py"
             - "website/docs/developer-guide/plugins/postgres_queries/statements/orders.open.sql"
             - "website/docs/developer-guide/api/artifact-queries.md"
+        - title: "Comments: notes a reader pins to an artifact"
+          description: |
+            A reader pins a comment to a spot on a rendered artifact; the agent reads the open
+            ones through the `artifact` tool (`comments`, and `open_comments` on `get`) and marks
+            them addressed with `resolve_comment`. Comments are stored beside the artifact
+            (`artifacts/comments/<id>.json`), each with the anchor it was pinned to and the `rev`
+            it was written against, so replacing an `html` document never erases them and
+            commenting never appends a revision. `artifact.comment.add` / `list` / `resolve` /
+            `delete` are the client surface and `artifact.comment.changed` the event.
+          globs:
+            - "tui_gateway/artifact_comments.py"
+            - "tests/gateway/test_artifact_comments.py"
+            - "website/docs/developer-guide/api/artifact-comments.md"
     - title: "Learning surface"
       description: |
         Courses, flashcard decks and progress as gateway state (`learning.*` RPCs) with a

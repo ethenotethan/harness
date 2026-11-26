@@ -95,7 +95,15 @@ ARTIFACT_GUIDANCE = (
     "actions) — no gateway restart needed. You author the declaration (data); "
     "only filesystem-authored plugins register handlers (behavior), so an "
     "artifact can never smuggle executable code. Full authoring guide: "
-    "docs/plugins/actions.md."
+    "docs/plugins/actions.md.\n"
+    "\n"
+    "User comments — the user can pin a comment to any spot of a rendered "
+    "artifact in the app. `artifact get` reports `open_comments` when there "
+    "are any and `artifact comments` returns them with the element each was "
+    "pinned to. They are the user's notes about that spot: read them before "
+    "you edit, act on them, and `resolve_comment` each one the new content "
+    "addresses. Comments are stored beside the artifact, never inside its "
+    "content, so do not copy them into the document."
 )
 
 

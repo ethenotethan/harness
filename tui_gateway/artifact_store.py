@@ -14,6 +14,9 @@ Surface (see server.py):
   RPCs, plus an `artifact.changed` gateway event on every mutation so
   clients stream updates without polling.
 
+Comments a reader pins to an artifact live beside it, in
+artifact_comments.py, and are deleted with it.
+
 Categories: an artifact may carry one `category` — the folder a client
 files it under. It is metadata, not content: filing an artifact never
 appends a revision, bumps `rev`, or touches `updated_at`, so the history
@@ -476,4 +479,10 @@ def delete_artifact(artifact_id: str) -> bool:
             _revisions_file(artifact_id).unlink(missing_ok=True)
         except OSError:
             pass
-        return True
+    from tui_gateway.artifact_comments import delete_all_comments
+
+    try:
+        delete_all_comments(artifact_id)
+    except (OSError, ValueError):
+        pass
+    return True

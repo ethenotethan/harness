@@ -982,6 +982,99 @@ def _(rid, params: dict) -> dict:
         logger.exception("artifact.action.log failed")
         return _err(rid, 5219, str(e))
 
+@method("artifact.comment.add")
+def _(rid, params: dict) -> dict:
+    """Pin a reader's comment to an artifact. Metadata beside the artifact:
+    no revision is appended and `rev` does not move."""
+    try:
+        from tui_gateway.artifact_comments import add_comment, open_comment_count
+
+        artifact_id = str(params.get("artifact_id", ""))
+        comment = add_comment(
+            artifact_id,
+            params.get("body", ""),
+            author=params.get("author") or "",
+            anchor=params.get("anchor"),
+            rev=params.get("artifact_rev"),
+        )
+        if comment is None:
+            return _err(rid, 4004, "artifact not found")
+        _emit("artifact.comment.changed", "", {
+            "artifact_id": artifact_id, "comment_id": comment["id"],
+            "change": "added", "open": open_comment_count(artifact_id),
+        })
+        return _ok(rid, {"comment": comment})
+    except ValueError as e:
+        return _err(rid, 4001, str(e))
+    except Exception as e:
+        logger.exception("artifact.comment.add failed")
+        return _err(rid, 5224, str(e))
+
+@method("artifact.comment.list")
+def _(rid, params: dict) -> dict:
+    """An artifact's comments, oldest first; `include_resolved: false` keeps
+    only the open ones."""
+    try:
+        from tui_gateway.artifact_comments import list_comments
+        from tui_gateway.artifact_store import get_artifact
+
+        artifact_id = str(params.get("artifact_id", ""))
+        if get_artifact(artifact_id) is None:
+            return _err(rid, 4004, "artifact not found")
+        include_resolved = params.get("include_resolved") is not False
+        return _ok(rid, {"comments": list_comments(artifact_id, include_resolved=include_resolved)})
+    except ValueError as e:
+        return _err(rid, 4001, str(e))
+    except Exception as e:
+        logger.exception("artifact.comment.list failed")
+        return _err(rid, 5225, str(e))
+
+@method("artifact.comment.resolve")
+def _(rid, params: dict) -> dict:
+    """Mark a comment addressed, or reopen it with `resolved: false`."""
+    try:
+        from tui_gateway.artifact_comments import open_comment_count, resolve_comment
+
+        artifact_id = str(params.get("artifact_id", ""))
+        resolved = params.get("resolved") is not False
+        comment = resolve_comment(
+            artifact_id, str(params.get("comment_id", "")),
+            resolved=resolved, resolved_by=params.get("resolved_by") or "",
+        )
+        if comment is None:
+            return _err(rid, 4004, "comment not found")
+        _emit("artifact.comment.changed", "", {
+            "artifact_id": artifact_id, "comment_id": comment["id"],
+            "change": "resolved" if resolved else "reopened", "open": open_comment_count(artifact_id),
+        })
+        return _ok(rid, {"comment": comment})
+    except ValueError as e:
+        return _err(rid, 4001, str(e))
+    except Exception as e:
+        logger.exception("artifact.comment.resolve failed")
+        return _err(rid, 5226, str(e))
+
+@method("artifact.comment.delete")
+def _(rid, params: dict) -> dict:
+    """Remove one comment for good."""
+    try:
+        from tui_gateway.artifact_comments import delete_comment, open_comment_count
+
+        artifact_id = str(params.get("artifact_id", ""))
+        comment_id = str(params.get("comment_id", ""))
+        if not delete_comment(artifact_id, comment_id):
+            return _err(rid, 4004, "comment not found")
+        _emit("artifact.comment.changed", "", {
+            "artifact_id": artifact_id, "comment_id": comment_id,
+            "change": "deleted", "open": open_comment_count(artifact_id),
+        })
+        return _ok(rid, {"deleted": comment_id})
+    except ValueError as e:
+        return _err(rid, 4001, str(e))
+    except Exception as e:
+        logger.exception("artifact.comment.delete failed")
+        return _err(rid, 5227, str(e))
+
 @method("artifact.query.invoke")
 def _(rid, params: dict) -> dict:
     """Run a query the artifact declares, with page-supplied parameters.
@@ -1175,6 +1268,11 @@ def _(rid, params: dict) -> dict:
             "artifact.action.confirm",
             "artifact.action.reload",
             "artifact.action.log",
+            "artifact.comment",
+            "artifact.comment.add",
+            "artifact.comment.list",
+            "artifact.comment.resolve",
+            "artifact.comment.delete",
             "artifact.query",
             "artifact.query.invoke",
             "artifact.query.subscribe",
